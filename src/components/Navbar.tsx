@@ -249,7 +249,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Help Tutorial */}
         <button
           onClick={onOpenTutorial}
-          title="Gesture & Control Tutorial"
+          title="Panduan Penggunaan NetLab"
           className="flex-shrink-0 p-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
         >
           <HelpCircle className="w-4 h-4 text-cyan-400" />

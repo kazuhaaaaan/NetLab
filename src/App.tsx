@@ -188,9 +188,11 @@ export default function App() {
 
   // Check tutorial on first visit (only for touch devices)
   useEffect(() => {
-    if ('ontouchstart' in window && !StorageEngine.hasSeenTutorial()) {
+    // Panduan muncul otomatis saat pertama kali membuka (semua perangkat),
+    // lalu ditandai sudah dilihat supaya tidak muncul lagi saat reload
+    if (!StorageEngine.hasSeenTutorial()) {
       setIsTutorialOpen(true);
-      StorageEngine.setTutorialSeen(true); // jangan muncul lagi saat reload
+      StorageEngine.setTutorialSeen(true);
     }
 
     // Load saved project from IndexedDB if present
