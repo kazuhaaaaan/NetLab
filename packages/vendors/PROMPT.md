@@ -1,0 +1,4 @@
+# AI Prompt Directives for @mikrolab/vendors
+
+- Do not break the clean contracts defined in CONTRACT.md.
+- Maintain zero external server dependencies.

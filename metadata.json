@@ -1,0 +1,6 @@
+{
+  "name": "MikroLab",
+  "description": "Browser-based enterprise networking laboratory and simulation platform featuring multi-vendor architecture and gesture-enabled canvas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

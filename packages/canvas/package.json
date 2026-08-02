@@ -1,0 +1,13 @@
+{
+  "name": "@mikrolab/canvas",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@mikrolab/shared": "workspace:*",
+    "@mikrolab/core": "workspace:*",
+    "react": "^19.0.1"
+  }
+}

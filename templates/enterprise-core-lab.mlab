@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "name": "Enterprise Multi-Vendor Core Lab",
+    "author": "MikroLab Architect",
+    "description": "Multi-vendor topology featuring MikroTik, Cisco, Juniper, and Huawei edge devices."
+  },
+  "nodes": [
+    {
+      "id": "node-1",
+      "name": "MikroTik-Edge-R1",
+      "vendor": "mikrotik",
+      "model": "CCR2116-12G-4S+",
+      "position": { "x": 200, "y": 150 }
+    },
+    {
+      "id": "node-2",
+      "name": "Cisco-Core-SW",
+      "vendor": "cisco_nxos",
+      "model": "Nexus 9000",
+      "position": { "x": 500, "y": 150 }
+    },
+    {
+      "id": "node-3",
+      "name": "Juniper-MX240",
+      "vendor": "juniper",
+      "model": "MX240",
+      "position": { "x": 800, "y": 150 }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "sourceNodeId": "node-1",
+      "sourcePortId": "sfp-sfpplus1",
+      "targetNodeId": "node-2",
+      "targetPortId": "Ethernet1/1",
+      "cableType": "fiber"
+    },
+    {
+      "id": "edge-2",
+      "sourceNodeId": "node-2",
+      "sourcePortId": "Ethernet1/2",
+      "targetNodeId": "node-3",
+      "targetPortId": "ge-0/0/0",
+      "cableType": "fiber"
+    }
+  ]
+}

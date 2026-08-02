@@ -1,0 +1,19 @@
+netlab
+network simulator
+mikrotik simulator
+packet tracer alternative
+router simulator
+network topology
+routing simulation
+switch simulation
+dhcp simulator
+static routing
+ospf
+bgp
+vlan
+nat
+network engineering
+react
+typescript
+vite
+tailwindcss
