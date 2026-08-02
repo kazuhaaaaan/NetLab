@@ -165,6 +165,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const handleGestureRef = useRef<(gesture: GestureDetail) => void>(() => {});
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [cableWizard, setCableWizard] = useState<{
     sourceNodeId: string;
     sourcePortId: string | null;
@@ -438,6 +439,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             cy2 = y2;
           }
           const isSelected = edge.id === selectedEdgeId;
+          const isHoveredEdge = hoveredEdgeId === edge.id;
           const isHoverConnected =
             hoverNodeId !== null &&
             (edge.sourceNodeId === hoverNodeId || edge.targetNodeId === hoverNodeId);
@@ -447,7 +449,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
           if (isWireless) {
             // Draw animated dashed Bezier curve with Wifi icon at center
-            const arcColor = isSelected ? '#ef4444' : '#22d3ee';
+            const arcColor = isSelected ? '#ef4444' : isHoveredEdge ? '#fbbf24' : '#22d3ee';
             // Calculate bezier midpoint (t = 0.5)
             const t = 0.5;
             const mt1 = 1 - t;
@@ -456,6 +458,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
             return (
               <g key={edge.id} data-edge-id={edge.id} className="cursor-pointer pointer-events-auto"
+                onMouseEnter={() => setHoveredEdgeId(edge.id)}
+                onMouseLeave={() => setHoveredEdgeId((cur) => (cur === edge.id ? null : cur))}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -475,10 +479,10 @@ export const Canvas: React.FC<CanvasProps> = ({
                   d={`M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`}
                   fill="none"
                   stroke={arcColor}
-                  strokeWidth={isSelected ? "4" : isHoverConnected ? "4" : "2.5"}
+                  strokeWidth={isSelected ? "4" : isHoveredEdge || isHoverConnected ? "4" : "2.5"}
                   strokeDasharray="8 8"
                   className="transition-all"
-                  style={isHoverConnected ? { filter: "drop-shadow(0 0 5px rgba(34,211,238,0.8))" } : undefined}
+                  style={isHoveredEdge || isHoverConnected ? { filter: "drop-shadow(0 0 5px rgba(34,211,238,0.8))" } : undefined}
                 >
                   <animate
                     attributeName="stroke-dashoffset"
@@ -505,6 +509,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
           return (
             <g key={edge.id} data-edge-id={edge.id} className="cursor-pointer pointer-events-auto"
+              onMouseEnter={() => setHoveredEdgeId(edge.id)}
+              onMouseLeave={() => setHoveredEdgeId((cur) => (cur === edge.id ? null : cur))}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -518,20 +524,22 @@ export const Canvas: React.FC<CanvasProps> = ({
                 stroke={
                   isSelected 
                     ? "#ef4444" 
-                    : edge.cableType === "fiber"
-                      ? "#f97316"
-                      : edge.cableType === "serial"
-                        ? "#f43f5e"
-                        : edge.cableType === "copper_cross"
-                          ? "#eab308"
-                          : "#3b82f6"
+                    : isHoveredEdge
+                      ? "#fbbf24"
+                      : edge.cableType === "fiber"
+                        ? "#f97316"
+                        : edge.cableType === "serial"
+                          ? "#f43f5e"
+                          : edge.cableType === "copper_cross"
+                            ? "#eab308"
+                            : "#3b82f6"
                 }
-                strokeWidth={isSelected ? "5" : isHoverConnected ? "4.5" : "3"}
+                strokeWidth={isSelected ? "5" : isHoveredEdge || isHoverConnected ? "4.5" : "3"}
                 strokeDasharray={
                   edge.cableType === "copper_cross" ? "6,6" : edge.cableType === "serial" ? "2,4" : "none"
                 }
                 className="transition-all hover:stroke-[4px]"
-                style={isHoverConnected && !isSelected ? { filter: "drop-shadow(0 0 5px currentColor)" } : undefined}
+                style={isHoveredEdge || (isHoverConnected && !isSelected) ? { filter: "drop-shadow(0 0 5px currentColor)" } : undefined}
               />
               <path
                 data-edge-id={edge.id}
@@ -645,6 +653,70 @@ export const Canvas: React.FC<CanvasProps> = ({
           );
         })()}
       </svg>
+
+      {/* Cable hover tooltip: tampilkan perangkat & port yang dihubungkan kabel */}
+      {(() => {
+        if (!hoveredEdgeId) return null;
+        const edge = edges.find((e) => e.id === hoveredEdgeId);
+        if (!edge) return null;
+        const sNode = nodes.find((n) => n.id === edge.sourceNodeId);
+        const tNode = nodes.find((n) => n.id === edge.targetNodeId);
+        if (!sNode || !tNode) return null;
+        const { x: ax, y: ay } = getPortAnchor(sNode, edge.sourcePortId);
+        const { x: bx, y: by } = getPortAnchor(tNode, edge.targetPortId);
+        const adx = bx - ax;
+        const ady = by - ay;
+        let acx1, acy1, acx2, acy2;
+        if (Math.abs(ady) > Math.abs(adx)) {
+          const bulge = Math.max(50, Math.abs(ady) * 0.3);
+          const direction = ax > 200 ? 1 : -1;
+          acx1 = ax + bulge;
+          acy1 = ay + ady * 0.25;
+          acx2 = bx + bulge;
+          acy2 = by - ady * 0.25;
+        } else {
+          acx1 = ax + adx * 0.5;
+          acy1 = ay;
+          acx2 = ax + adx * 0.5;
+          acy2 = by;
+        }
+        const mx = (ax + 3 * acx1 + 3 * acx2 + bx) / 8;
+        const my = (ay + 3 * acy1 + 3 * acy2 + by) / 8;
+        const sPort = sNode.ports.find((p) => p.id === edge.sourcePortId);
+        const tPort = tNode.ports.find((p) => p.id === edge.targetPortId);
+        const portLabel = (name: string, port?: { name: string }) => port ? `${name}:${port.name}` : `${name}:${edge.sourcePortId}`;
+        const cableLabel = edge.cableType === 'copper_straight' ? 'Copper Straight'
+          : edge.cableType === 'copper_cross' ? 'Copper Crossover'
+          : edge.cableType === 'fiber' ? 'Fiber Optic' : 'Serial';
+        const cw = containerRef.current?.clientWidth ?? 800;
+        const sx = mx * viewport.zoom + viewport.x;
+        const sy = my * viewport.zoom + viewport.y;
+        return (
+          <div
+            className="pointer-events-none absolute z-40"
+            style={{
+              left: Math.min(Math.max(sx, 70), cw - 70),
+              top: Math.max(sy, 16),
+              transform: 'translate(-50%, calc(-100% - 12px))',
+            }}
+          >
+            <div className="bg-[#0F1015]/95 backdrop-blur-md border border-amber-400/40 rounded-lg shadow-2xl px-3 py-2 text-[11px] font-mono whitespace-nowrap">
+              <div className="flex items-center gap-1.5 text-slate-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                <span className="truncate max-w-[180px]">{portLabel(sNode.name, sPort)}</span>
+                <span className="text-amber-400">↔</span>
+                <span className="truncate max-w-[180px]">{portLabel(tNode.name, tPort)}</span>
+              </div>
+              <div className="mt-1 text-[9px] text-slate-400 flex items-center gap-2">
+                <span className="px-1.5 py-0.5 rounded bg-amber-400/10 border border-amber-400/30 text-amber-300">
+                  {cableLabel}
+                </span>
+                <span>{edge.sourcePortId.slice(0, 8)} ↔ {edge.targetPortId.slice(0, 8)}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Node Layer */}
       <div
