@@ -114,6 +114,32 @@ interface CanvasProps {
   onToggleViewPorts?: () => void;
 }
 
+/** Popover interaktif di atas canvas — blokir gesture engine (preventDefault + TAP) agar klik asli & dropdown tetap berfungsi. */
+const WizardPopover: React.FC<{
+  children: React.ReactNode;
+  className?: string;
+}> = ({ children, className }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const stop = (e: PointerEvent) => e.stopPropagation();
+    el.addEventListener("pointerdown", stop);
+    el.addEventListener("pointerup", stop);
+    el.addEventListener("pointercancel", stop);
+    return () => {
+      el.removeEventListener("pointerdown", stop);
+      el.removeEventListener("pointerup", stop);
+      el.removeEventListener("pointercancel", stop);
+    };
+  }, []);
+  return (
+    <div ref={ref} className={className} onClick={(e) => e.stopPropagation()}>
+      {children}
+    </div>
+  );
+};
+
 export const Canvas: React.FC<CanvasProps> = ({
   nodes,
   edges,
@@ -798,10 +824,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Wizard Kabel — langkah 1: pilih tipe kabel (wajib) lalu port sumber */}
               {isWizardSource && !isWizardTarget && (
-                <div
-                  className="absolute left-[calc(100%+12px)] top-0 z-50 w-44 bg-[#0F1015]/95 backdrop-blur-md border border-blue-500/30 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
-                  onClick={(e) => e.stopPropagation()}
-                >
+                <WizardPopover className="absolute left-[calc(100%+12px)] top-0 z-50 w-44 bg-[#0F1015]/95 backdrop-blur-md border border-blue-500/30 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100">
                   <div className="px-2.5 py-2 border-b border-[#2B2D31] flex items-center justify-between bg-[#1A1D24]/80">
                     <span className="text-[10px] font-semibold text-slate-200">Sambungkan Kabel</span>
                     <button onClick={() => setCableWizard(null)} className="text-slate-500 hover:text-white transition-colors">
@@ -871,15 +894,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                         : 'Tarik kabel mengikuti cursor → klik perangkat tujuan'}
                     </div>
                   </div>
-                </div>
+                </WizardPopover>
               )}
 
               {/* Wizard Kabel — langkah 2: pilih port tujuan */}
               {isWizardTarget && (
-                <div
-                  className="absolute left-[calc(100%+12px)] top-0 z-50 w-44 bg-[#0F1015]/95 backdrop-blur-md border border-cyan-500/30 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
-                  onClick={(e) => e.stopPropagation()}
-                >
+                <WizardPopover className="absolute left-[calc(100%+12px)] top-0 z-50 w-44 bg-[#0F1015]/95 backdrop-blur-md border border-cyan-500/30 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100">
                   <div className="px-2.5 py-2 border-b border-[#2B2D31] flex items-center justify-between bg-[#1A1D24]/80">
                     <span className="text-[10px] font-semibold text-slate-200">
                       Pilih Port Tujuan — {node.name}
@@ -949,7 +969,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                       })}
                     </div>
                   </div>
-                </div>
+                </WizardPopover>
               )}
             </div>
           );
