@@ -95,7 +95,8 @@ interface CanvasProps {
   onPortClick: (nodeId: string, portId: string) => void;
   onCableConnect: (
     source: { nodeId: string; portId: string },
-    target: { nodeId: string; portId?: string }
+    target: { nodeId: string; portId?: string },
+    cableType?: string
   ) => void;
   cableStart: { nodeId: string; portId: string } | null;
   activeTool: ActiveTool;
@@ -137,8 +138,14 @@ export const Canvas: React.FC<CanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const handleGestureRef = useRef<(gesture: GestureDetail) => void>(() => {});
-  const [connectingNode, setConnectingNode] = useState<string | null>(null);
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  const [cableWizard, setCableWizard] = useState<{
+    sourceNodeId: string;
+    sourcePortId: string | null;
+    cableType: string | null;
+    targetNodeId: string | null;
+  } | null>(null);
+  const [pointerWorld, setPointerWorld] = useState<{ x: number; y: number } | null>(null);
   const [cableDrag, setCableDrag] = useState<{
     x1: number;
     y1: number;
@@ -226,8 +233,17 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (gesture.targetType === "port" && gesture.nodeId && gesture.portId) {
         onPortClick(gesture.nodeId, gesture.portId);
       } else if (gesture.targetType === "node" && gesture.nodeId) {
-        if (activeTool === 'cable') {
-          setConnectingNode(gesture.nodeId);
+        if (cableWizard) {
+          // Alur sambung kabel (ala Packet Tracer): klik perangkat lain sebagai tujuan
+          if (cableWizard.sourceNodeId === gesture.nodeId) {
+            setCableWizard(null); // klik sumber lagi = batal
+          } else if (!cableWizard.targetNodeId && cableWizard.cableType && cableWizard.sourcePortId) {
+            setCableWizard({ ...cableWizard, targetNodeId: gesture.nodeId });
+          } else if (cableWizard.targetNodeId === gesture.nodeId) {
+            setCableWizard(null);
+          }
+        } else if (activeTool === 'cable') {
+          setCableWizard({ sourceNodeId: gesture.nodeId, sourcePortId: null, cableType: null, targetNodeId: null });
         } else {
           onSelectNode(gesture.nodeId);
           onSelectEdge(null);
@@ -236,6 +252,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         onSelectEdge(gesture.targetId);
         onSelectNode(null);
       } else if (gesture.targetType === "canvas") {
+        setCableWizard(null);
         onSelectNode(null);
         onSelectEdge(null);
       }
@@ -264,6 +281,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     } else if (gesture.type === "CABLE_CONNECT") {
       setCableDrag(null);
       setCableHover(null);
+      setCableWizard(null);
       if (gesture.nodeId && gesture.portId && gesture.targetNodeId) {
         onCableConnect(
           { nodeId: gesture.nodeId, portId: gesture.portId },
@@ -291,6 +309,14 @@ export const Canvas: React.FC<CanvasProps> = ({
     return `${remote.name}:${port?.name ?? (isSource ? edge.targetPortId : edge.sourcePortId)}`;
   };
 
+  /** Warna garis sesuai tipe kabel (sama dengan rendering edge). */
+  const cableColorOf = (t: string | null | undefined): string => {
+    if (t === "fiber") return "#f97316";
+    if (t === "serial") return "#f43f5e";
+    if (t === "copper_cross") return "#eab308";
+    return "#3b82f6";
+  };
+
   const getNodeIcon = (deviceType: string) => {    switch (deviceType) {
       case "switch":
         return <HardDrive className="w-4 h-4 text-blue-400" />;
@@ -315,7 +341,18 @@ export const Canvas: React.FC<CanvasProps> = ({
         e.preventDefault();
         onContextMenu(e);
       }}
-      onClick={() => setConnectingNode(null)}
+      onPointerMove={(e) => {
+        if (!cableWizard) {
+          if (pointerWorld) setPointerWorld(null);
+          return;
+        }
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        setPointerWorld({
+          x: (e.clientX - rect.left - viewport.x) / viewport.zoom,
+          y: (e.clientY - rect.top - viewport.y) / viewport.zoom,
+        });
+      }}
       className={`relative w-full h-full overflow-hidden select-none touch-none active:cursor-grabbing ${
         theme === "dark"
           ? "bg-[#0B0C0E] text-slate-100"
@@ -498,6 +535,37 @@ export const Canvas: React.FC<CanvasProps> = ({
           </g>
         )}
 
+        {/* Ghost cable — wizard kabel ala Packet Tracer, mengikuti cursor */}
+        {cableWizard && cableWizard.sourcePortId && cableWizard.cableType && pointerWorld && (() => {
+          const srcNode = nodes.find((n) => n.id === cableWizard.sourceNodeId);
+          if (!srcNode) return null;
+          const anchor = getPortAnchor(srcNode, cableWizard.sourcePortId);
+          const tgtNode = cableWizard.targetNodeId ? nodes.find((n) => n.id === cableWizard.targetNodeId) : null;
+          const end = tgtNode
+            ? { x: tgtNode.position.x + NODE_W / 2, y: tgtNode.position.y + NODE_H / 2 }
+            : pointerWorld;
+          const col = cableColorOf(cableWizard.cableType);
+          return (
+            <g pointerEvents="none">
+              <path
+                d={`M ${anchor.x} ${anchor.y} C ${anchor.x + 60} ${anchor.y}, ${end.x - 60} ${end.y}, ${end.x} ${end.y}`}
+                fill="none"
+                stroke={col}
+                strokeWidth="2.5"
+                strokeDasharray="7 5"
+                style={{ filter: `drop-shadow(0 0 4px ${col})` }}
+              >
+                <animate attributeName="stroke-dashoffset" from="24" to="0" dur="0.8s" repeatCount="indefinite" />
+              </path>
+              <circle cx={anchor.x} cy={anchor.y} r="5" fill={col} />
+              <circle cx={end.x} cy={end.y} r="6" fill={col} opacity="0.75" />
+              {tgtNode && (
+                <circle cx={end.x} cy={end.y} r="12" fill="none" stroke={col} strokeWidth="1.5" strokeDasharray="3 3" />
+              )}
+            </g>
+          );
+        })()}
+
         {/* Delete-cable chip on the selected edge */}
         {(() => {
           const edge = edges.find((e) => e.id === selectedEdgeId);
@@ -554,6 +622,12 @@ export const Canvas: React.FC<CanvasProps> = ({
       >
         {nodes.map((node) => {
           const isSelected = selectedNodeId === node.id || node.selected;
+          const nodeInCableFlow =
+            activeTool === 'cable' ||
+            cableWizard?.sourceNodeId === node.id ||
+            cableWizard?.targetNodeId === node.id;
+          const isWizardSource = cableWizard?.sourceNodeId === node.id;
+          const isWizardTarget = cableWizard?.targetNodeId === node.id;
           return (
             <div
               key={node.id}
@@ -567,14 +641,20 @@ export const Canvas: React.FC<CanvasProps> = ({
                 height: `${NODE_H}px`,
               }}
               className={`absolute flex flex-col items-center justify-center p-2 rounded-lg group transition-all ${
-                activeTool === 'cable' ? 'cursor-pointer hover:bg-white/[0.05]' : 'cursor-grab active:cursor-grabbing'
+                activeTool === 'cable'
+                  ? 'cursor-pointer'
+                  : 'cursor-grab active:cursor-grabbing'
               } ${
-                cableStart?.nodeId === node.id
+                cableWizard?.sourceNodeId === node.id
                   ? "bg-blue-500/10 border border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.3)]"
                   : isSelected
-                    ? "bg-white/[0.03] border border-white/10"
-                    : "hover:bg-white/[0.02] border border-transparent"
-              }`}
+                    ? theme === 'dark'
+                      ? "bg-white/[0.03] border border-white/10"
+                      : "bg-slate-900/5 border border-slate-400/40"
+                    : theme === 'dark'
+                      ? "hover:bg-white/[0.02] border border-transparent"
+                      : "hover:bg-slate-900/5 border border-transparent"
+              } ${cableWizard?.targetNodeId === node.id ? "border border-cyan-400/60 bg-cyan-500/10" : ""}`}
             >
               <div className="pointer-events-none flex items-center justify-center w-12 h-12 bg-[#1A1D24] border border-[#2B2D31] rounded-lg shadow-sm mb-2 group-hover:border-[#4B4D51] transition-colors relative">
                 {getNodeIcon(node.deviceType)}
@@ -582,17 +662,22 @@ export const Canvas: React.FC<CanvasProps> = ({
                 <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-500 border border-[#1A1D24]"></span>
               </div>
               <div className="text-center pointer-events-none flex flex-col items-center">
-                <span className="text-[11px] font-medium text-slate-200 tracking-tight leading-tight max-w-[88px] truncate">{node.name}</span>
-                <span className="text-[9px] text-slate-500 font-mono mt-0.5 max-w-[88px] truncate">{node.model}</span>
+                <span className={`text-[11px] font-medium tracking-tight leading-tight max-w-[88px] truncate ${
+                  theme === 'dark' ? 'text-slate-200' : 'text-slate-800'
+                }`}>{node.name}</span>
+                <span className={`text-[9px] font-mono mt-0.5 max-w-[88px] truncate ${
+                  theme === 'dark' ? 'text-slate-500' : 'text-slate-500'
+                }`}>{node.model}</span>
               </div>
 
-              {/* Port dots - drag between ports to connect cables */}
+              {/* Port dots - hanya terlihat saat mode kabel aktif atau sedang menyambung */}
               {node.ports.map((port, idx) => {
                 const side = idx % 2 === 0 ? "left" : "right";
                 const slot = Math.floor(idx / 2);
                 const isCableStart = cableStart?.nodeId === node.id && cableStart?.portId === port.id;
                 const isHover = cableHover?.nodeId === node.id && cableHover?.portId === port.id;
                 const portConn = getPortConnection(node.id, port.id);
+                const isWizardPort = isWizardSource && cableWizard?.sourcePortId === port.id;
                 return (
                   <div
                     key={port.id}
@@ -601,9 +686,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                     title={`${port.name} (${port.status})${portConn ? ` → ${portConn}` : ' — kosong'}`}
                     className={`absolute w-4 h-4 flex items-center justify-center z-40 cursor-crosshair touch-none ${
                       side === "left" ? "-left-2" : "-right-2"
-                    } ${cableDrag ? "opacity-100" : "opacity-0 group-hover:opacity-100"} transition-opacity ${
-                      isCableStart || isHover ? "opacity-100" : ""
-                    }`}
+                    } ${nodeInCableFlow ? "opacity-100" : "opacity-0"} transition-opacity`}
                     style={{ top: `${PORT_TOP + slot * PORT_GAP - 8}px` }}
                   >
                     <span
@@ -613,7 +696,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                           : "bg-slate-600 border-slate-500"
                       } ${isCableStart ? "ring-2 ring-blue-400 scale-125" : ""} ${
                         isHover ? "ring-2 ring-cyan-300 scale-125" : ""
-                      } ${cableDrag ? "hover:ring-2 hover:ring-cyan-300 hover:scale-125" : ""}`}
+                      } ${isWizardPort ? "ring-2 ring-blue-400 scale-125" : ""} ${
+                        nodeInCableFlow ? "hover:ring-2 hover:ring-cyan-300 hover:scale-125" : ""
+                      }`}
                     />
                   </div>
                 );
@@ -633,21 +718,19 @@ export const Canvas: React.FC<CanvasProps> = ({
                 <TerminalSquare className="w-3 h-3" />
               </button>
 
-              {/* Connect Cable button that appears on hover/select (Hidden if cable tool active) */}
-              {activeTool !== 'cable' && (
-                <button 
-                  className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-slate-400 hover:text-white hover:border-blue-500 transition-opacity z-30 ${
-                    isSelected ? "opacity-100 pointer-events-auto shadow-md" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
-                  }`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setConnectingNode(connectingNode === node.id ? null : node.id);
-                  }}
-                  title="Connect Cable"
-                >
-                  <Plus className="w-3 h-3" />
-                </button>
-              )}
+              {/* Connect Cable button — mulai wizard kabel (klik perangkat juga bisa di mode cable) */}
+              <button 
+                className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-slate-400 hover:text-white hover:border-blue-500 transition-opacity z-30 ${
+                  isSelected ? "opacity-100 pointer-events-auto shadow-md" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCableWizard({ sourceNodeId: node.id, sourcePortId: null, cableType: null, targetNodeId: null });
+                }}
+                title="Sambungkan Kabel (pilih tipe kabel dulu)"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
               
               {/* Panel Lihat Port — kabel terhubung di port mana saja */}
               {hoverNodeId === node.id || (viewPorts && isSelected) ? (
@@ -705,14 +788,90 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div>
               ) : null}
 
-              {/* Port Popover */}
-              {connectingNode === node.id && (                <div 
-                  className="absolute left-[calc(100%+12px)] top-0 z-50 w-36 bg-[#0F1015]/95 backdrop-blur-md border border-[#2B2D31] rounded-lg shadow-xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
+              {/* Wizard Kabel — langkah 1: pilih tipe kabel (wajib) lalu port sumber */}
+              {isWizardSource && !isWizardTarget && (
+                <div
+                  className="absolute left-[calc(100%+12px)] top-0 z-50 w-44 bg-[#0F1015]/95 backdrop-blur-md border border-blue-500/30 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="px-2.5 py-2 border-b border-[#2B2D31] flex items-center justify-between bg-[#1A1D24]/80">
-                    <span className="text-[10px] font-semibold text-slate-300">Select Port</span>
-                    <button onClick={() => setConnectingNode(null)} className="text-slate-500 hover:text-white transition-colors">
+                    <span className="text-[10px] font-semibold text-slate-200">Sambungkan Kabel</span>
+                    <button onClick={() => setCableWizard(null)} className="text-slate-500 hover:text-white transition-colors">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="p-1.5">
+                    <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wide mb-1">
+                      1. Tipe Kabel <span className="text-rose-400">*wajib</span>
+                    </label>
+                    <select
+                      value={cableWizard.cableType ?? ''}
+                      onChange={(e) =>
+                        setCableWizard({ ...cableWizard, cableType: e.target.value || null, sourcePortId: null })
+                      }
+                      className="w-full bg-[#1A1D24] border border-[#2B2D31] rounded-md text-[10px] px-1.5 py-1.5 text-slate-200 outline-none focus:border-blue-500/60 mb-2"
+                    >
+                      <option value="">— pilih tipe —</option>
+                      <option value="copper_straight">Straight (UTP)</option>
+                      <option value="copper_cross">Cross (UTP)</option>
+                      <option value="fiber">Fiber Optik</option>
+                      <option value="serial">Serial</option>
+                    </select>
+                    <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wide mb-1">
+                      2. Port Sumber
+                    </label>
+                    {!cableWizard.cableType && (
+                      <div className="px-2 py-2 text-[9px] text-slate-500 text-center">
+                        Pilih tipe kabel dulu
+                      </div>
+                    )}
+                    <div className="max-h-36 overflow-y-auto">
+                      {cableWizard.cableType &&
+                        node.ports.map((port) => {
+                          const busy = getPortConnection(node.id, port.id) !== null;
+                          const active = cableWizard.sourcePortId === port.id;
+                          return (
+                            <button
+                              key={port.id}
+                              disabled={busy}
+                              onClick={() => setCableWizard({ ...cableWizard, sourcePortId: port.id })}
+                              className={`w-full text-left px-2 py-1.5 text-[10px] font-mono rounded flex items-center justify-between mb-0.5 border transition-colors ${
+                                active
+                                  ? "bg-blue-500/20 text-blue-300 border border-blue-500/40"
+                                  : busy
+                                    ? "text-slate-600 border border-transparent cursor-not-allowed"
+                                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent"
+                              }`}
+                            >
+                              <span className="truncate pr-2">{port.name}</span>
+                              <span className="flex items-center gap-1">
+                                {busy && <span className="text-[8px] text-slate-600">terpakai</span>}
+                                <span className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${port.status === 'up' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
+                    <div className="mt-1.5 px-1 py-1 text-[9px] font-mono text-cyan-300/80 bg-cyan-500/10 rounded border border-cyan-500/20">
+                      {cableWizard.sourcePortId
+                        ? `Sumber: ${node.name}:${cableWizard.sourcePortId} — klik perangkat tujuan`
+                        : 'Tarik kabel mengikuti cursor → klik perangkat tujuan'}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Wizard Kabel — langkah 2: pilih port tujuan */}
+              {isWizardTarget && (
+                <div
+                  className="absolute left-[calc(100%+12px)] top-0 z-50 w-44 bg-[#0F1015]/95 backdrop-blur-md border border-cyan-500/30 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-2.5 py-2 border-b border-[#2B2D31] flex items-center justify-between bg-[#1A1D24]/80">
+                    <span className="text-[10px] font-semibold text-slate-200">
+                      Pilih Port Tujuan — {node.name}
+                    </span>
+                    <button onClick={() => setCableWizard(null)} className="text-slate-500 hover:text-white transition-colors">
                       <X className="w-3 h-3" />
                     </button>
                   </div>
@@ -721,22 +880,31 @@ export const Canvas: React.FC<CanvasProps> = ({
                       <div className="px-2 py-2 text-[9px] text-slate-500 text-center">No ports available</div>
                     )}
                     {node.ports.map((port) => {
-                      const isCableStart = cableStart?.nodeId === node.id && cableStart?.portId === port.id;
+                      const busy = getPortConnection(node.id, port.id) !== null;
                       return (
                         <button
                           key={port.id}
+                          disabled={busy}
                           onClick={() => {
-                            onPortClick(node.id, port.id);
-                            setConnectingNode(null);
+                            if (!cableWizard.cableType || !cableWizard.sourcePortId) return;
+                            onCableConnect(
+                              { nodeId: cableWizard.sourceNodeId, portId: cableWizard.sourcePortId },
+                              { nodeId: node.id, portId: port.id },
+                              cableWizard.cableType
+                            );
+                            setCableWizard(null);
                           }}
-                          className={`w-full text-left px-2 py-1.5 text-[10px] font-mono rounded flex items-center justify-between mb-0.5 transition-colors ${
-                            isCableStart 
-                              ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" 
-                              : "text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent"
+                          className={`w-full text-left px-2 py-1.5 text-[10px] font-mono rounded flex items-center justify-between mb-0.5 border transition-colors ${
+                            busy
+                              ? "text-slate-600 border border-transparent cursor-not-allowed"
+                              : "text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:border-cyan-500/40 border border-transparent"
                           }`}
                         >
                           <span className="truncate pr-2">{port.name}</span>
-                          <span className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${port.status === 'up' ? 'bg-emerald-500' : 'bg-slate-600'}`}></span>
+                          <span className="flex items-center gap-1">
+                            {busy && <span className="text-[8px] text-slate-600">terpakai</span>}
+                            <span className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${port.status === 'up' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
+                          </span>
                         </button>
                       );
                     })}

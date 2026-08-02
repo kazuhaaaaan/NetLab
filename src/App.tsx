@@ -399,7 +399,8 @@ export default function App() {
   const handleCableConnect = useCallback(
     (
       source: { nodeId: string; portId: string },
-      target: { nodeId: string; portId?: string }
+      target: { nodeId: string; portId?: string },
+      explicitCableType?: LabEdge['cableType']
     ) => {
       const srcNode = project.nodes.find((n) => n.id === source.nodeId);
       if (!srcNode) return;
@@ -445,7 +446,7 @@ export default function App() {
         return;
       }
 
-      const cableType = inferCableType(srcNode.deviceType, tgtNode.deviceType, srcPort.type);
+      const cableType = explicitCableType ?? inferCableType(srcNode.deviceType, tgtNode.deviceType, srcPort.type);
       const newEdge: LabEdge = {
         id: `edge-${Date.now()}`,
         sourceNodeId: srcNode.id,
