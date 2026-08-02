@@ -317,6 +317,14 @@ export const Canvas: React.FC<CanvasProps> = ({
     return "#3b82f6";
   };
 
+  /** Kecocokan tipe kabel dengan tipe port: copper → port copper, fiber → port fiber, dst. */
+  const cableMatchesPort = (cableType: string | null, portType: string | undefined): boolean => {
+    if (!cableType) return false;
+    if (cableType === "fiber") return portType === "fiber";
+    if (cableType === "serial") return portType === "serial";
+    return portType === "copper";
+  };
+
   const getNodeIcon = (deviceType: string) => {    switch (deviceType) {
       case "switch":
         return <HardDrive className="w-4 h-4 text-blue-400" />;
@@ -830,22 +838,27 @@ export const Canvas: React.FC<CanvasProps> = ({
                         node.ports.map((port) => {
                           const busy = getPortConnection(node.id, port.id) !== null;
                           const active = cableWizard.sourcePortId === port.id;
+                          const match = cableMatchesPort(cableWizard.cableType, port.type);
                           return (
                             <button
                               key={port.id}
-                              disabled={busy}
+                              disabled={busy || !match}
                               onClick={() => setCableWizard({ ...cableWizard, sourcePortId: port.id })}
                               className={`w-full text-left px-2 py-1.5 text-[10px] font-mono rounded flex items-center justify-between mb-0.5 border transition-colors ${
                                 active
                                   ? "bg-blue-500/20 text-blue-300 border border-blue-500/40"
-                                  : busy
+                                  : busy || !match
                                     ? "text-slate-600 border border-transparent cursor-not-allowed"
                                     : "text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent"
                               }`}
                             >
                               <span className="truncate pr-2">{port.name}</span>
                               <span className="flex items-center gap-1">
-                                {busy && <span className="text-[8px] text-slate-600">terpakai</span>}
+                                {busy ? (
+                                  <span className="text-[8px] text-slate-600">terpakai</span>
+                                ) : !match ? (
+                                  <span className="text-[8px] text-slate-600">{port.type ?? 'copper'} ≠ kabel</span>
+                                ) : null}
                                 <span className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${port.status === 'up' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
                               </span>
                             </button>
@@ -875,39 +888,66 @@ export const Canvas: React.FC<CanvasProps> = ({
                       <X className="w-3 h-3" />
                     </button>
                   </div>
-                  <div className="p-1 max-h-40 overflow-y-auto">
-                    {node.ports.length === 0 && (
-                      <div className="px-2 py-2 text-[9px] text-slate-500 text-center">No ports available</div>
-                    )}
-                    {node.ports.map((port) => {
-                      const busy = getPortConnection(node.id, port.id) !== null;
-                      return (
-                        <button
-                          key={port.id}
-                          disabled={busy}
-                          onClick={() => {
-                            if (!cableWizard.cableType || !cableWizard.sourcePortId) return;
-                            onCableConnect(
-                              { nodeId: cableWizard.sourceNodeId, portId: cableWizard.sourcePortId },
-                              { nodeId: node.id, portId: port.id },
-                              cableWizard.cableType
-                            );
-                            setCableWizard(null);
-                          }}
-                          className={`w-full text-left px-2 py-1.5 text-[10px] font-mono rounded flex items-center justify-between mb-0.5 border transition-colors ${
-                            busy
-                              ? "text-slate-600 border border-transparent cursor-not-allowed"
-                              : "text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:border-cyan-500/40 border border-transparent"
-                          }`}
-                        >
-                          <span className="truncate pr-2">{port.name}</span>
-                          <span className="flex items-center gap-1">
-                            {busy && <span className="text-[8px] text-slate-600">terpakai</span>}
-                            <span className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${port.status === 'up' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
-                          </span>
-                        </button>
-                      );
-                    })}
+                  <div className="p-1.5">
+                    <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wide mb-1">
+                      Tipe Kabel
+                    </label>
+                    <select
+                      value={cableWizard.cableType ?? ''}
+                      onChange={(e) =>
+                        setCableWizard({ ...cableWizard, cableType: e.target.value || null })
+                      }
+                      className="w-full bg-[#1A1D24] border border-[#2B2D31] rounded-md text-[10px] px-1.5 py-1.5 text-slate-200 outline-none focus:border-cyan-500/60 mb-1.5"
+                    >
+                      <option value="copper_straight">Straight (UTP)</option>
+                      <option value="copper_cross">Cross (UTP)</option>
+                      <option value="fiber">Fiber Optik</option>
+                      <option value="serial">Serial</option>
+                    </select>
+                    <div className="px-1 py-0.5 text-[8.5px] font-mono text-slate-500 mb-1">
+                      Hanya port yang cocok dengan {cableWizard.cableType === 'fiber' ? 'fiber' : cableWizard.cableType === 'serial' ? 'serial' : 'copper'} yang bisa dipilih
+                    </div>
+                  </div>
+                  <div className="px-1.5 pb-1.5">
+                    <div className="max-h-36 overflow-y-auto">
+                      {node.ports.length === 0 && (
+                        <div className="px-2 py-2 text-[9px] text-slate-500 text-center">No ports available</div>
+                      )}
+                      {node.ports.map((port) => {
+                        const busy = getPortConnection(node.id, port.id) !== null;
+                        const match = cableMatchesPort(cableWizard.cableType, port.type);
+                        return (
+                          <button
+                            key={port.id}
+                            disabled={busy || !match}
+                            onClick={() => {
+                              if (!cableWizard.cableType || !cableWizard.sourcePortId) return;
+                              onCableConnect(
+                                { nodeId: cableWizard.sourceNodeId, portId: cableWizard.sourcePortId },
+                                { nodeId: node.id, portId: port.id },
+                                cableWizard.cableType
+                              );
+                              setCableWizard(null);
+                            }}
+                            className={`w-full text-left px-2 py-1.5 text-[10px] font-mono rounded flex items-center justify-between mb-0.5 border transition-colors ${
+                              busy || !match
+                                ? "text-slate-600 border border-transparent cursor-not-allowed"
+                                : "text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:border-cyan-500/40 border border-transparent"
+                            }`}
+                          >
+                            <span className="truncate pr-2">{port.name}</span>
+                            <span className="flex items-center gap-1">
+                              {busy ? (
+                                <span className="text-[8px] text-slate-600">terpakai</span>
+                              ) : !match ? (
+                                <span className="text-[8px] text-slate-600">{port.type ?? 'copper'} ≠ kabel</span>
+                              ) : null}
+                              <span className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${port.status === 'up' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               )}
