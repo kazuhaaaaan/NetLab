@@ -522,12 +522,15 @@ export class InteractionEngine {
   private handleWheel = (e: WheelEvent): void => {
     e.preventDefault();
     const pt = { x: e.clientX, y: e.clientY };
+    if (e.ctrlKey) {
+      // Trackpad pinch (browser mengirim wheel + ctrlKey): zoom proporsional
+      // dengan besaran cubitan — deltaY negatif (jari menjauh) = zoom in.
+      const scaleDelta = Math.exp(-e.deltaY * 0.005);
+      this.onGestureCallback({ type: "PINCH", point: pt, scaleDelta });
+      return;
+    }
     const scaleDelta = e.deltaY < 0 ? 1.1 : 0.9;
-    this.onGestureCallback({
-      type: "PINCH",
-      point: pt,
-      scaleDelta,
-    });
+    this.onGestureCallback({ type: "PINCH", point: pt, scaleDelta });
   };
 
   private clearLongPressTimer(): void {
