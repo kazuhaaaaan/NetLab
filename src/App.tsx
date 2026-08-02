@@ -45,6 +45,24 @@ const CABLE_TYPE_LABEL: Record<LabEdge['cableType'], string> = {
   serial: 'Serial',
 };
 
+// UI state (theme, sidebar, tools) — dipersist agar reload tidak mengulang pengaturan
+const UI_STATE_KEY = 'netlab_ui_state';
+
+function loadUiState() {
+  try {
+    const raw = localStorage.getItem(UI_STATE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as {
+      theme?: 'dark' | 'light';
+      isSidebarOpen?: boolean;
+      activeTool?: ActiveTool;
+      viewPorts?: boolean;
+    };
+  } catch {
+    return null;
+  }
+}
+
 
 export default function App() {
   // Show splash only once per browser session
@@ -77,10 +95,10 @@ export default function App() {
 
   const [project, setProject] = useState<LabProject>(TEMPLATE_BASIC);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [activeTool, setActiveTool] = useState<ActiveTool>('select');
+  const [activeTool, setActiveTool] = useState<ActiveTool>(() => loadUiState()?.activeTool ?? 'select');
   const [cableStart, setCableStart] = useState<{ nodeId: string; portId: string } | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [viewPorts, setViewPorts] = useState(false);
+  const [viewPorts, setViewPorts] = useState(() => loadUiState()?.viewPorts ?? false);
 
   // Real network simulation engine (per-device routing, TTL, hop trace)
   const simEngineRef = useRef<SimulationEngine>(new SimulationEngine());
@@ -147,12 +165,12 @@ export default function App() {
   }, [terminalLogs, openTerminalNodeIds, activeTerminalNodeId, isTerminalOpen]);
 
   // UI Modals & Panels
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => loadUiState()?.isSidebarOpen ?? true);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [isDonateOpen, setIsDonateOpen] = useState(false);
   const [isMonorepoOpen, setIsMonorepoOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetId?: string; targetType?: string } | null>(null);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => loadUiState()?.theme ?? 'dark');
 
   // Ping PDU simulation state
   const [pingResults, setPingResults] = useState<PingResult[]>([]);
@@ -165,16 +183,27 @@ export default function App() {
   const isUndoRedoRef = useRef<boolean>(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  // Selesai memuat proyek tersimpan → auto-save baru aktif setelah ini (hindari menimpa proyek lama dgn template default saat reload)
+  const projectLoadedRef = useRef<boolean>(false);
 
   // Check tutorial on first visit (only for touch devices)
   useEffect(() => {
     if ('ontouchstart' in window && !StorageEngine.hasSeenTutorial()) {
       setIsTutorialOpen(true);
+      StorageEngine.setTutorialSeen(true); // jangan muncul lagi saat reload
     }
 
     // Load saved project from IndexedDB if present
     StorageEngine.loadProject().then((saved) => {
-      if (saved) setProject(saved);
+      if (saved) {
+        setProject(saved);
+        // Undo history dimulai dari proyek tersimpan, bukan template default
+        historyRef.current = [saved];
+        historyIndexRef.current = 0;
+        setCanUndo(false);
+        setCanRedo(false);
+      }
+      projectLoadedRef.current = true;
     });
 
     // Restore CLI-configured device state (IPs/routes/BGP) from storage
@@ -187,10 +216,20 @@ export default function App() {
     });
   }, []);
 
-  // Auto-save project changes
+  // Auto-save project changes (hanya setelah proyek tersimpan dimuat ulang)
   useEffect(() => {
+    if (!projectLoadedRef.current) return;
     StorageEngine.saveProject(project);
   }, [project]);
+
+  // Auto-save UI state (theme, sidebar, tool, port visibility)
+  useEffect(() => {
+    try {
+      localStorage.setItem(UI_STATE_KEY, JSON.stringify({ theme, isSidebarOpen, activeTool, viewPorts }));
+    } catch {
+      // storage penuh / tidak tersedia — abaikan
+    }
+  }, [theme, isSidebarOpen, activeTool, viewPorts]);
 
   // Keep the simulation engine in sync with the topology
   useEffect(() => {
