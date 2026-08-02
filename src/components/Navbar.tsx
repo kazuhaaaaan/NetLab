@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Network,
   Download,
@@ -53,6 +53,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onRedo
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isTemplateOpen, setIsTemplateOpen] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -126,28 +127,46 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
-        {/* Template Selector */}
-        <div className="relative group hidden lg:block">
-          <button className="flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+        {/* Template Selector (klik untuk buka) */}
+        <div className="relative hidden lg:block">
+          <button
+            onClick={() => setIsTemplateOpen((v) => !v)}
+            className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium border transition ${
+              isTemplateOpen
+                ? 'bg-slate-700 text-slate-100 border-emerald-500/50'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+          >
             <FolderTree className="w-3.5 h-3.5 text-emerald-400" />
             <span>Templates</span>
           </button>
-          <div className="absolute left-0 mt-1 w-52 bg-slate-900 border border-slate-700 rounded-lg shadow-xl hidden group-hover:block z-50 p-1 font-sans">
-            <button
-              onClick={() => onLoadTemplate('basic')}
-              className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
-            >
-              <div className="font-semibold text-slate-100">Mudah: Router + Switch + PC</div>
-              <div className="text-[10px] text-slate-400">MikroTik gateway, switch Cisco, 1 PC</div>
-            </button>
-            <button
-              onClick={() => onLoadTemplate('enterprise')}
-              className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
-            >
-              <div className="font-semibold text-slate-100">ISP / Data Center Lab</div>
-              <div className="text-[10px] text-slate-400">16 perangkat: ISP, firewall, core, server</div>
-            </button>
-          </div>
+          {isTemplateOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setIsTemplateOpen(false)} />
+              <div className="absolute left-0 mt-1 w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-xl z-50 p-1 font-sans">
+                <button
+                  onClick={() => {
+                    onLoadTemplate('basic');
+                    setIsTemplateOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
+                >
+                  <div className="font-semibold text-slate-100">Mudah: Router + Switch + PC</div>
+                  <div className="text-[10px] text-slate-400">MikroTik gateway, switch Cisco, 1 PC</div>
+                </button>
+                <button
+                  onClick={() => {
+                    onLoadTemplate('enterprise');
+                    setIsTemplateOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
+                >
+                  <div className="font-semibold text-slate-100">ISP / Data Center Lab</div>
+                  <div className="text-[10px] text-slate-400">16 perangkat: ISP, firewall, core, server</div>
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Import .mlab */}
