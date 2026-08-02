@@ -20,7 +20,7 @@ import { SimulationEngine, formatPingOutput } from './engine/sim';
 
 const vendorDispatcher = new VendorDispatcher();
 
-import { TEMPLATE_BASIC, TEMPLATE_BGP } from './data/templates';
+import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE } from './data/templates';
 
 /** Infer the right cable type from port & device types (auto-detection). */
 function inferCableType(
@@ -708,7 +708,7 @@ export default function App() {
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onLoadTemplate={(tpl) => {
           if (tpl === 'basic') setProjectWithHistory(TEMPLATE_BASIC);
-          if (tpl === 'bgp') setProjectWithHistory(TEMPLATE_BGP);
+          if (tpl === 'enterprise') setProjectWithHistory(TEMPLATE_ENTERPRISE);
         }}
         onOpenDonate={() => setIsDonateOpen(true)}
         canUndo={canUndo}

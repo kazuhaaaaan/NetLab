@@ -12,7 +12,7 @@ import {
 } from './src/data/deviceModels';
 import { CLI_HINTS } from './src/data/cliHints';
 import { BEGINNER_GUIDES } from './src/data/beginnerGuide';
-import { TEMPLATE_BASIC, TEMPLATE_BGP } from './src/data/templates';
+import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE } from './src/data/templates';
 import { LabProject } from './src/types';
 
 let passed = 0;
@@ -323,9 +323,10 @@ console.log('\n== 5. Integritas data ==');
   }
   for (const [name, tpl] of [
     ['TEMPLATE_BASIC', TEMPLATE_BASIC],
-    ['TEMPLATE_BGP', TEMPLATE_BGP],
+    ['TEMPLATE_ENTERPRISE', TEMPLATE_ENTERPRISE],
   ] as const) {
     check(`${name} punya node`, tpl.nodes.length > 0);
+    if (name === 'TEMPLATE_ENTERPRISE') check(`${name} template besar punya >= 10 perangkat`, tpl.nodes.length >= 10);
     const nodeIds = new Set(tpl.nodes.map((n) => n.id));
     check(`${name} edge merujuk node valid`, tpl.edges.every((e) => nodeIds.has(e.sourceNodeId) && nodeIds.has(e.targetNodeId)));
     check(

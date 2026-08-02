@@ -137,15 +137,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               onClick={() => onLoadTemplate('basic')}
               className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
             >
-              <div className="font-semibold text-slate-100">Basic MikroTik & Cisco</div>
-              <div className="text-[10px] text-slate-400">Router + Switch connection</div>
+              <div className="font-semibold text-slate-100">Mudah: Router + Switch + PC</div>
+              <div className="text-[10px] text-slate-400">MikroTik gateway, switch Cisco, 1 PC</div>
             </button>
             <button
               onClick={() => onLoadTemplate('enterprise')}
               className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
             >
-              <div className="font-semibold text-slate-100">Enterprise Multi-Vendor Core</div>
-              <div className="text-[10px] text-slate-400">MikroTik, Cisco, Juniper, Huawei</div>
+              <div className="font-semibold text-slate-100">ISP / Data Center Lab</div>
+              <div className="text-[10px] text-slate-400">16 perangkat: ISP, firewall, core, server</div>
             </button>
           </div>
         </div>
