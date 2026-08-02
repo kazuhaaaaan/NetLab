@@ -53,7 +53,22 @@ export const Navbar: React.FC<NavbarProps> = ({
   onRedo
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tplBtnRef = useRef<HTMLButtonElement>(null);
   const [isTemplateOpen, setIsTemplateOpen] = useState(false);
+  const [tplMenuPos, setTplMenuPos] = useState<{ left: number; top: number } | null>(null);
+
+  const toggleTemplateMenu = () => {
+    const btn = tplBtnRef.current;
+    if (!btn) return;
+    if (isTemplateOpen) {
+      setIsTemplateOpen(false);
+      setTplMenuPos(null);
+      return;
+    }
+    const r = btn.getBoundingClientRect();
+    setTplMenuPos({ left: Math.min(r.left, window.innerWidth - 250), top: r.bottom + 6 });
+    setIsTemplateOpen(true);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -127,10 +142,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
-        {/* Template Selector (klik untuk buka) */}
-        <div className="relative hidden lg:block">
+        {/* Template Selector (popover ke bawah, klik & sentuh) */}
+        <div className="relative flex-shrink-0">
           <button
-            onClick={() => setIsTemplateOpen((v) => !v)}
+            ref={tplBtnRef}
+            onClick={toggleTemplateMenu}
             className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium border transition ${
               isTemplateOpen
                 ? 'bg-slate-700 text-slate-100 border-emerald-500/50'
@@ -140,14 +156,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             <FolderTree className="w-3.5 h-3.5 text-emerald-400" />
             <span>Templates</span>
           </button>
-          {isTemplateOpen && (
+          {isTemplateOpen && tplMenuPos && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setIsTemplateOpen(false)} />
-              <div className="absolute left-0 mt-1 w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-xl z-50 p-1 font-sans">
+              <div className="fixed inset-0 z-[55]" onClick={toggleTemplateMenu} />
+              <div
+                className="fixed z-[60] w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl p-1 font-sans animate-in fade-in zoom-in-95 duration-150"
+                style={{ left: tplMenuPos.left, top: tplMenuPos.top }}
+              >
                 <button
                   onClick={() => {
                     onLoadTemplate('basic');
-                    setIsTemplateOpen(false);
+                    toggleTemplateMenu();
                   }}
                   className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
                 >
@@ -157,7 +176,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   onClick={() => {
                     onLoadTemplate('enterprise');
-                    setIsTemplateOpen(false);
+                    toggleTemplateMenu();
                   }}
                   className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
                 >
