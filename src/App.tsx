@@ -650,6 +650,28 @@ export default function App() {
       <>
         <LandingPage onLaunch={goToCanvas} onOpenDonate={() => setIsDonateOpen(true)} />
         {showSplash && <SplashScreen onDone={handleSplashDone} />}
+
+        {/* Donate Modal (QRIS) — tampil juga di homepage */}
+        {isDonateOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full shadow-2xl overflow-hidden animate-in fade-in duration-200">
+              <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+                <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                  <span className="text-rose-500 text-xl">♥</span> Donate untuk Support Developer
+                </h2>
+                <button onClick={() => setIsDonateOpen(false)} className="text-slate-400 hover:text-slate-200 transition">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 flex flex-col items-center">
+                <img src="/qris.jpeg" alt="QRIS Donation" className="w-56 h-auto object-contain rounded-lg border-2 border-slate-700 mb-4 shadow-md" />
+                <p className="text-sm text-slate-300 text-center font-medium">
+                  Terima kasih atas dukungannya! Donasi kamu membantu developer NetLab terus mengembangkan simulator ini.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </>
     );
   }

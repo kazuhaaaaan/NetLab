@@ -298,7 +298,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
               className="group flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 text-[13px] font-semibold px-3.5 py-2 transition-all duration-200 hover:bg-rose-500/20 hover:scale-[1.03] active:scale-[0.98]"
               title="Donate untuk support developer"
             >
-              <img src="/qris.jpeg" alt="QRIS" className="w-4 h-4 rounded-sm object-cover ring-1 ring-rose-500/40 transition-transform group-hover:scale-125" />
               <Heart className="w-3.5 h-3.5 text-rose-400 transition-transform group-hover:scale-125" />
               Donate
             </button>
@@ -939,7 +938,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
               className="flex items-center gap-1.5 text-rose-300 hover:text-rose-200 transition-colors font-medium"
               title="Donate untuk support developer"
             >
-              <img src="/qris.jpeg" alt="QRIS" className="w-4 h-4 rounded-sm object-cover ring-1 ring-rose-500/40" />
               <Heart className="w-3.5 h-3.5 text-rose-400" />
               Donate untuk Support Developer
             </button>
