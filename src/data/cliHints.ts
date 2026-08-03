@@ -513,7 +513,15 @@ export function getHints(vendor: string, prefix: string): CliHint[] {
   const flat = flattenHints(tree);
   const query = prefix.replace(/\?$/, '').toLowerCase().trim();
   if (!query) return flat.slice(0, 12);
-  return flat.filter((h) => h.command.toLowerCase().startsWith(query)).slice(0, 12);
+  const tokens = query.split(/\s+/);
+  return flat
+    .filter((h) => {
+      const words = h.command.toLowerCase().split(/\s+/);
+      if (words.length < tokens.length) return false;
+      // tiap kata boleh disingkat (prefix), mis. "sh ip r" → "show ip route"
+      return tokens.every((t, i) => words[i].startsWith(t));
+    })
+    .slice(0, 12);
 }
 
 function flattenHints(hints: CliHint[]): CliHint[] {
@@ -527,12 +535,28 @@ function flattenHints(hints: CliHint[]): CliHint[] {
 
 /**
  * Get the best Tab autocomplete match for a given partial input.
+ * Completes the whole command path: "sh ip r" → "show ip route".
+ * Each typed word may be an unambiguous abbreviation of the hint word.
  */
 export function getTabCompletion(vendor: string, partial: string): string | null {
   const tree = CLI_HINTS[vendor] || CLI_HINTS['cisco_ios'];
   const flat = flattenHints(tree);
   const query = partial.toLowerCase().trim();
   if (!query) return null;
-  const match = flat.find((h) => h.command.toLowerCase().startsWith(query));
+  const tokens = query.split(/\s+/);
+  if (tokens.length === 1) {
+    const match = flat.find((h) => h.command.toLowerCase().startsWith(query));
+    return match ? match.command : null;
+  }
+  const head = tokens.slice(0, -1);
+  const last = tokens[tokens.length - 1];
+  const match = flat.find((h) => {
+    const words = h.command.toLowerCase().split(/\s+/);
+    if (words.length < tokens.length) return false;
+    for (let i = 0; i < head.length; i++) {
+      if (!words[i].startsWith(head[i])) return false;
+    }
+    return words[tokens.length - 1].startsWith(last);
+  });
   return match ? match.command : null;
 }

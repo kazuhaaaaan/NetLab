@@ -1358,9 +1358,9 @@ export class VendorDispatcher {
 
     if (normalized.action === '?' || normalized.action === 'help' || rawInput.trim() === '?') {
       cmdResult = { type: 'help' };
-    } else if (/^interface\s+\S+/i.test(rawInput.trim())) {
-      // IOS-style: "interface Gi0/0" (Cisco, Aruba, Huawei) — sets the config context
-      const ifaceRaw = rawInput.trim().replace(/^interface\s+/i, '').split(/\s+/)[0];
+    } else if (/^(?:interface|int)\s+\S+/i.test(rawInput.trim())) {
+      // IOS-style: "interface Gi0/0" / "int Gi0/0" (Cisco, Aruba, Huawei) — sets the config context
+      const ifaceRaw = rawInput.trim().replace(/^(?:interface|int)\s+/i, '').split(/\s+/)[0];
       const isSubinterface =
         ifaceRaw.includes('.') &&
         !(context?.ports || []).some((p: any) => p.name.toLowerCase() === ifaceRaw.toLowerCase()) &&
@@ -1387,9 +1387,9 @@ export class VendorDispatcher {
       const vlanId = parseInt(rawInput.trim().match(/^dot1q\s+termination\s+vid\s+(\d+)/i)?.[1] || '1', 10);
       upsertSubinterface(mem, mem.currentIface, mem.currentIface.replace(/\.\d+$/, ''), vlanId);
       cmdResult = { raw: '' };
-    } else if (/^(no\s+)?shutdown$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
-      // Cisco/Huawei: "shutdown" / "no shutdown" (interface view) — administratively down/up
-      const down = !/^no\s+shutdown/i.test(rawInput.trim());
+    } else if (/^(no\s+)?shut(down)?$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+      // Cisco/Huawei: "shutdown"/"shut" / "no shutdown"/"no shut" (interface view) — administratively down/up
+      const down = !/^no\s+/i.test(rawInput.trim());
       setShutdownState(mem, mem.currentIface, down);
       cmdResult = { raw: '' };
     } else if (/^\/interface\s+(disable|enable)\s+(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
@@ -1419,9 +1419,9 @@ export class VendorDispatcher {
       } else {
         cmdResult = { raw: '% Error: enter interface config first (config system interface → edit <name>)' };
       }
-    } else if (vendorId === 'huawei' && /^ip\s+address\s+\S+\s+\S+/i.test(rawInput.trim())) {
-      // Huawei: "ip address <ip> <mask>" inside an interface view
-      const m = rawInput.trim().match(/^ip\s+address\s+(\S+)\s+(\S+)/i);
+    } else if (vendorId === 'huawei' && /^ip\s+(address|add)\s+\S+\s+\S+/i.test(rawInput.trim())) {
+      // Huawei: "ip address <ip> <mask>" / "ip add ..." inside an interface view
+      const m = rawInput.trim().match(/^ip\s+(?:address|add)\s+(\S+)\s+(\S+)/i);
       if (m && mem.currentIface) {
         mem.configuredIps[mem.currentIface] = `${m[1]} ${m[2]}`;
         cmdResult = { raw: '' };
@@ -1501,9 +1501,9 @@ export class VendorDispatcher {
         mem.hostname = m[1];
         cmdResult = { raw: '' };
       }
-    } else if (/^\/system\s+identity\s+set\s+name=(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
-      // MikroTik: "/system identity set name=<hostname>"
-      const m = rawInput.trim().match(/^\/system\s+identity\s+set\s+name=(\S+)/i);
+    } else if (/^\/?(system|sys)\s+(identity|id)\s+set\s+name=(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/system identity set name=<hostname>" / "/sys id set name=..."
+      const m = rawInput.trim().match(/^\/?(?:system|sys)\s+(?:identity|id)\s+set\s+name=(\S+)/i);
       if (m) {
         mem.hostname = m[1];
         cmdResult = { raw: '' };
@@ -1997,7 +1997,7 @@ export class VendorDispatcher {
       cmdResult = { type: normalized.action, ports };
     } else if (normalized.action === 'show_ip_route' || normalized.action === 'show_route' || normalized.action === 'display_routing' || normalized.action === 'ip_route') {
       const dynamicRoutes = typeof context.routeProvider === 'function' ? context.routeProvider() : [];
-      const connectedRoutes = (context?.ports || [])
+      const connectedRoutes = (mergeIps(context?.ports, mem.configuredIps) || [])
         .filter((p: any) => p.ipAddress)
         .map((p: any) => ({ dst: p.ipAddress, iface: p.name, gateway: '', prefSrc: p.ipAddress?.split('/')[0], kind: 'connected' }));
       const staticRoutes = mem.routes.map((r: any) => ({ dst: r.dst, iface: '', gateway: r.gateway || '', prefSrc: '', kind: 'static' }));
