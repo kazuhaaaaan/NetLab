@@ -733,6 +733,12 @@ export default function App() {
           const result = simEngineRef.current.simulatePing(nodeId, host);
           return formatPingOutput(vendorId, host, result);
         },
+        dhcpClientGrant: (iface: string, addDefaultRoute: boolean) => {
+          const granted = simEngineRef.current.grantDhcpLease(nodeId, iface);
+          return granted
+            ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId }
+            : null;
+        },
       });
 
       // Pick up config changes made by this command (add_ip / add_route)

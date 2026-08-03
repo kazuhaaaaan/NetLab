@@ -108,6 +108,14 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       ]
     },
     {
+      command: '/ip dhcp-client',
+      description: 'DHCP client (minta IP otomatis)',
+      children: [
+        { command: '/ip dhcp-client add interface=<port> add-default-route=yes', description: 'Jadikan port ini DHCP client — minta IP dari server' },
+        { command: '/ip dhcp-client print', description: 'Lihat status DHCP client (bound/unbound)' },
+      ]
+    },
+    {
       command: '/ip firewall',
       description: 'Firewall (pengaman jaringan)',
       children: [
@@ -199,6 +207,14 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
         { command: 'show ip dhcp pool', description: 'Lihat daftar pool DHCP' },
       ]
     },
+    {
+      command: 'interface',
+      description: 'Konfigurasi port',
+      children: [
+        { command: 'interface Gi0/1', description: 'Masuk ke mode port (misal Gi0/1)' },
+        { command: 'ip address dhcp', description: 'Jadikan port ini DHCP client — minta IP dari server' },
+      ]
+    },
     { command: 'show hosts', description: 'Lihat DNS server yang dipakai' },
   ],
 
@@ -280,6 +296,14 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
     { command: 'dns server <ip>', description: 'Atur DNS server' },
     { command: 'vlan <id>', description: 'Buat VLAN (dari system-view)' },
     { command: 'dhcp enable', description: 'Nyalakan fitur DHCP' },
+    {
+      command: 'interface',
+      description: 'Konfigurasi port',
+      children: [
+        { command: 'interface GigabitEthernet0/0/1', description: 'Masuk ke mode port (misal GigabitEthernet0/0/1)' },
+        { command: 'ip address dhcp', description: 'Jadikan port ini DHCP client — minta IP dari server' },
+      ]
+    },
   ],
 
   ubiquiti: [
@@ -383,6 +407,7 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       children: [
         { command: 'ip addr', description: 'Lihat alamat IP semua interface' },
         { command: 'ip addr add <ip/mask> dev <eth0>', description: 'Beri IP ke sebuah interface' },
+        { command: 'dhclient <eth1>', description: 'Jadikan interface ini DHCP client — minta IP dari server' },
         { command: 'ip route', description: 'Lihat tabel routing' },
         { command: 'ip route add default via <gateway>', description: 'Tambah gateway default' },
         { command: 'ip link', description: 'Lihat status interface' },

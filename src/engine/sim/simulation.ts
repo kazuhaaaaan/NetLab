@@ -61,6 +61,14 @@ export interface DhcpLeaseInfo {
   nodeId: string;
   ip: string;
   gateway: string;
+  prefix: number;
+  poolNodeId: string;
+}
+
+export interface DhcpLeaseGrant {
+  ip: string;
+  gateway: string;
+  prefix: number;
   poolNodeId: string;
 }
 
@@ -81,7 +89,7 @@ export class SimulationEngine {
   /** DHCP pools configured via CLI, keyed by the serving node id. */
   private dhcpPools = new Map<string, DhcpPoolInfo[]>();
   /** client nodeId → granted lease */
-  private leases = new Map<string, { ip: string; gateway: string; poolNodeId: string }>();
+  private leases = new Map<string, DhcpLeaseGrant>();
 
   syncTopology(project: LabProject): void {
     const seen = new Set<string>();
@@ -178,6 +186,7 @@ export class SimulationEngine {
       nodeId,
       ip: l.ip,
       gateway: l.gateway,
+      prefix: l.prefix,
       poolNodeId: l.poolNodeId,
     }));
   }
@@ -364,11 +373,25 @@ export class SimulationEngine {
   // ============================================================
 
   /**
+   * Public entry point used by the CLI layer: a device configured as a
+   * DHCP client requests a lease immediately (not only on first ping).
+   * Returns the granted lease, or null when no pool can serve this device.
+   */
+  grantDhcpLease(nodeId: string, ifaceName?: string): DhcpLeaseGrant | null {
+    return this.dhcpLeaseFor(nodeId, ifaceName);
+  }
+
+  /** Current lease of a device, or null when it has none. */
+  getLeaseFor(nodeId: string): DhcpLeaseGrant | null {
+    return this.leases.get(nodeId) || null;
+  }
+
+  /**
    * Try to obtain a DHCP lease for a device that has no IP yet.
    * The serving router must have a pool configured (via CLI) whose
    * interface shares the client's L2 segment (through switches).
    */
-  dhcpLeaseFor(nodeId: string): { ip: string; gateway: string; poolNodeId: string } | null {
+  dhcpLeaseFor(nodeId: string, ifaceName?: string): DhcpLeaseGrant | null {
     const dev = this.devices.get(nodeId);
     if (!dev || dev.getIpAddress()) return null;
     if (this.leases.has(nodeId)) return this.leases.get(nodeId) || null;
@@ -417,12 +440,13 @@ export class SimulationEngine {
 
         if (!candidate) continue;
 
-        const firstPort = dev.getInterfaces()[0];
-        if (!firstPort) continue;
-        dev.setIpByName(firstPort.name, `${candidate}/${prefix}`);
+        const firstPort = ifaceName ? dev.getIfaceByName(ifaceName) : null;
+        const targetIface = firstPort || dev.getInterfaces()[0];
+        if (!targetIface) continue;
+        dev.setIpByName(targetIface.name, `${candidate}/${prefix}`);
         if (gateway && gateway !== candidate) dev.addStaticRoute('0.0.0.0/0', gateway);
 
-        const lease = { ip: candidate, gateway, poolNodeId: serverNodeId };
+        const lease: DhcpLeaseGrant = { ip: candidate, gateway, prefix, poolNodeId: serverNodeId };
         this.leases.set(nodeId, lease);
 
         // Learn MAC/ARP between the client and the serving router interface

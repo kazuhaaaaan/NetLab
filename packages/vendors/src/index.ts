@@ -1176,8 +1176,10 @@ export class VendorDispatcher {
         vlans: [],
         dnsServers: [],
         dhcpPools: [],
+        dhcpClients: [],
         natRules: [],
         currentStaticDst: '',
+        currentDhcpPool: '',
       });
     }
     return this.nodeMemory.get(nodeId);
@@ -1212,8 +1214,10 @@ export class VendorDispatcher {
       if (Array.isArray(mem.vlans)) target.vlans = mem.vlans;
       if (Array.isArray(mem.dnsServers)) target.dnsServers = mem.dnsServers;
       if (Array.isArray(mem.dhcpPools)) target.dhcpPools = mem.dhcpPools;
+      if (Array.isArray(mem.dhcpClients)) target.dhcpClients = mem.dhcpClients;
       if (Array.isArray(mem.natRules)) target.natRules = mem.natRules;
       if (typeof mem.currentStaticDst === 'string') target.currentStaticDst = mem.currentStaticDst;
+      if (typeof mem.currentDhcpPool === 'string') target.currentDhcpPool = mem.currentDhcpPool;
       if (typeof mem.currentIface === 'string') target.currentIface = mem.currentIface;
     }
   }
@@ -1487,6 +1491,35 @@ export class VendorDispatcher {
     } else if (/^dhcp\s+enable/i.test(rawInput.trim()) && vendorId === 'huawei') {
       mem.dhcpPools.push({ name: 'global', range: '', network: '', iface: '', gateway: '' });
       cmdResult = { raw: '' };
+    } else if (/^\/ip\s+dhcp-client\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ip dhcp-client add interface=ether2 add-default-route=yes"
+      const raw = rawInput.trim();
+      const ifaceRaw = raw.match(/interface=(\S+)/i)?.[1];
+      if (ifaceRaw) {
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        const addDefaultRoute = !/add-default-route=no/i.test(raw);
+        cmdResult = { raw: grantDhcpClient(context, mem, iface, addDefaultRoute) };
+      } else {
+        cmdResult = { raw: '% Usage: /ip dhcp-client add interface=<port> add-default-route=yes' };
+      }
+    } else if (/^\/ip\s+dhcp-client\s+print/i.test(rawInput.trim()) || (normalized.target === 'ip_dhcp-client' && normalized.action === 'print')) {
+      cmdResult = { type: 'dhcp_client_print', clients: mem.dhcpClients };
+    } else if ((vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei') && /^ip\s+address\s+dhcp/i.test(rawInput.trim())) {
+      // Cisco/Huawei: "ip address dhcp" di dalam interface view → DHCP client
+      if (mem.currentIface) {
+        cmdResult = { raw: grantDhcpClient(context, mem, mem.currentIface, true) };
+      } else {
+        cmdResult = { raw: '% Error: enter interface view first (interface <name>)' };
+      }
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^(dhclient|udhcpc)\s/i.test(rawInput.trim())) {
+      // Linux: "dhclient eth1" / "udhcpc -i eth1" → DHCP client
+      const m = rawInput.trim().match(/^(?:dhclient|udhcpc(?:\s+-i)?)\s+(\S+)/i);
+      if (m) {
+        const iface = resolveIfaceName(context?.ports, m[1]) || m[1];
+        cmdResult = { raw: grantDhcpClient(context, mem, iface, true) };
+      } else {
+        cmdResult = { raw: '% Usage: dhclient <interface>' };
+      }
     } else if (/^\/ip\s+firewall\s+nat\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       // MikroTik: "/ip firewall nat add chain=srcnat out-interface=ether1 action=masquerade"
       const raw = rawInput.trim();
@@ -1677,6 +1710,14 @@ function formatExtended(cmdResult: any): string {
     ).join('\n');
     return ' # NAME         NETWORK/RANGE           INTERFACE    GATEWAY\n' + rows;
   }
+  if (cmdResult.type === 'dhcp_client_print') {
+    const clients = cmdResult.clients || [];
+    if (clients.length === 0) return 'Flags: X - disabled, I - invalid, B - bound\n #    INTERFACE    ADD-DEFAULT-ROUTE    STATUS\n -- no entries --';
+    const rows = clients.map((c: any, i: number) =>
+      ` ${i} ${(c.iface || '-').padEnd(12)} ${(c.addDefaultRoute ? 'yes' : 'no').padEnd(19)} ${c.status === 'bound' ? 'B bound (address ' + c.ip + (c.gateway ? ', gw ' + c.gateway : '') + ')' : (c.status || 'searching')}`
+    ).join('\n');
+    return 'Flags: X - disabled, I - invalid, B - bound\n #    INTERFACE    ADD-DEFAULT-ROUTE    STATUS\n' + rows;
+  }
   if (cmdResult.type === 'dns_print') {
     const servers = cmdResult.servers || [];
     if (servers.length === 0) return 'servers: (none)';
@@ -1701,6 +1742,49 @@ function mergeIps(ports: any[], configuredIps: Record<string, string>) {
     ...p,
     ipAddress: configuredIps[p.name] || p.ipAddress
   }));
+}
+
+/**
+ * Mark an interface as a DHCP client and request a lease from the
+ * simulation engine (via the host-app callback). On success the granted
+ * IP is written into the CLI memory so it shows in "address print" and
+ * survives a page refresh; an optional default route is added too.
+ */
+function grantDhcpClient(context: any, mem: any, iface: string, addDefaultRoute: boolean): string {
+  if (!mem.dhcpClients) mem.dhcpClients = [];
+  let entry = mem.dhcpClients.find((c: any) => c.iface === iface);
+  if (!entry) {
+    entry = { iface, addDefaultRoute, status: 'searching' };
+    mem.dhcpClients.push(entry);
+  }
+  entry.addDefaultRoute = addDefaultRoute;
+
+  const granted = typeof context.dhcpClientGrant === 'function'
+    ? context.dhcpClientGrant(iface, addDefaultRoute)
+    : null;
+
+  if (granted && granted.ip) {
+    entry.status = 'bound';
+    entry.ip = granted.ip;
+    entry.gateway = granted.gateway || '';
+    const cidr = `${granted.ip}/${granted.prefix ?? 24}`;
+    mem.configuredIps[iface] = cidr;
+    if (
+      addDefaultRoute &&
+      granted.gateway &&
+      !mem.routes.some(
+        (r: any) => r.gateway === granted.gateway && (r.dst === '0.0.0.0/0' || r.dst === '0.0.0.0 0.0.0.0')
+      )
+    ) {
+      mem.routes.push({ dst: '0.0.0.0/0', gateway: granted.gateway, distance: 1 });
+    }
+    return `% Interface ${iface}: DHCP client bound — lease ${cidr}${granted.gateway ? ` (gateway ${granted.gateway})` : ''}`;
+  }
+
+  entry.status = 'unbound';
+  delete entry.ip;
+  delete entry.gateway;
+  return `% Interface ${iface}: DHCP client aktif — menunggu lease (pastikan DHCP server sudah dikonfigurasi di segmen yang sama)`;
 }
 
 /** Map a user-typed interface name to the device's real port name (case-insensitive). */

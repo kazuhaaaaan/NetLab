@@ -96,6 +96,12 @@ export const BEGINNER_GUIDES: VendorGuide[] = [
         explain: 'Cek apakah petugas parkir sudah berdiri di posnya.',
       },
       {
+        command: '/ip dhcp-client add interface=ether2 add-default-route=yes',
+        title: '12b. Jadikan device lain DHCP client (opsional)',
+        note: 'Jalankan di device yang ingin dapat IP otomatis, misal router/host yang colok ke ether2.',
+        explain: 'Kebalikan dari DHCP server: di sini perangkatmu jadi "penyewa" — ia minta IP ke petugas parkir di segmen yang sama. Tambahan add-default-route=yes membuat rute default ikut terisi otomatis dari gateway yang diberikan server. Cek hasilnya dengan /ip dhcp-client print (status bound = berhasil).',
+      },
+      {
         command: '/ip dns set servers=8.8.8.8',
         title: '13. Atur DNS (buku telepon internet)',
         note: 'DNS = penerjemah nama domain menjadi IP. 8.8.8.8 = DNS publik Google.',
@@ -206,6 +212,12 @@ export const BEGINNER_GUIDES: VendorGuide[] = [
         command: 'exit',
         title: '13. Keluar dari mode pengaturan',
         explain: 'Selesai memasak, keluar dari dapur.',
+      },
+      {
+        command: 'configure terminal',
+        title: '13b. Jadikan device lain DHCP client (opsional)',
+        note: 'Masuk mode pengaturan, pilih port yang menghadap DHCP server, lalu ketik "ip address dhcp".',
+        explain: 'Di device yang ingin dapat IP otomatis (bukan yang jadi server): configure terminal → interface <port> → ip address dhcp. Perangkat akan minta IP ke server di segmen yang sama. Cek dengan "show ip interface brief" — kolom IP-Address akan terisi.',
       },
       {
         command: 'ip name-server 8.8.8.8',
@@ -809,6 +821,12 @@ export const BEGINNER_GUIDES: VendorGuide[] = [
         command: 'ip route',
         title: '5. Lihat tabel rute',
         explain: 'Menampilkan peta jalan keluar server.',
+      },
+      {
+        command: 'dhclient eth1',
+        title: '5b. Minta IP otomatis (DHCP client, opsional)',
+        note: 'Ganti eth1 dengan interface yang menghadap DHCP server.',
+        explain: 'Daripada set IP manual, server bisa meminta alamat ke petugas parkir (DHCP server) di segmen yang sama — seperti menyewa kamar. Gateway ikut terisi otomatis. Cek hasilnya dengan ip addr: akan muncul "inet" baru di interface itu.',
       },
       {
         command: 'cat /etc/resolv.conf',
