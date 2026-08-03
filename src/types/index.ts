@@ -44,6 +44,8 @@ export interface LabNode {
   position: { x: number; y: number };
   ports: PortSpec[];
   selected?: boolean;
+  /** false = device dimatikan (tidak bisa dilalui paket) */
+  powered?: boolean;
 }
 
 export interface LabEdge {

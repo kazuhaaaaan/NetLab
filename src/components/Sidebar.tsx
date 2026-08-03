@@ -6,7 +6,9 @@ import {
   Trash2,
   Terminal,
   Search,
-  ChevronRight
+  ChevronRight,
+  Power,
+  PowerOff
 } from 'lucide-react';
 import { LabNode, VendorType } from '../types';
 import { VENDOR_MAP } from '../data/vendors';
@@ -18,6 +20,7 @@ interface SidebarProps {
   onUpdateNodeName: (nodeId: string, name: string) => void;
   onUpdateNodeModel: (nodeId: string, model: string) => void;
   onDeleteNode: (nodeId: string) => void;
+  onTogglePower: (nodeId: string) => void;
   onOpenTerminal: (nodeId: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
@@ -29,6 +32,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUpdateNodeName,
   onUpdateNodeModel,
   onDeleteNode,
+  onTogglePower,
   onOpenTerminal,
   isOpen,
   onToggleOpen
@@ -210,13 +214,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="bg-[#1A1D24] border border-[#2B2D31] rounded-md p-3 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-100">Node Properties</span>
-                    <button
-                      onClick={() => onOpenTerminal(selectedNode.id)}
-                      className="flex items-center space-x-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold"
-                    >
-                      <Terminal className="w-3 h-3" />
-                      <span>CLI Terminal</span>
-                    </button>
+                    <div className="flex items-center space-x-1.5">
+                      <button
+                        onClick={() => onTogglePower(selectedNode.id)}
+                        title={selectedNode.powered === false ? 'Device dimatikan' : 'Device menyala'}
+                        className={`flex items-center space-x-1 px-2 py-1 rounded text-[11px] font-semibold border transition ${
+                          selectedNode.powered === false
+                            ? 'bg-rose-950/60 hover:bg-rose-900 border-rose-800 text-rose-200'
+                            : 'bg-emerald-950/60 hover:bg-emerald-900 border-emerald-800 text-emerald-200'
+                        }`}
+                      >
+                        {selectedNode.powered === false ? <PowerOff className="w-3 h-3" /> : <Power className="w-3 h-3" />}
+                        <span>{selectedNode.powered === false ? 'Power: OFF' : 'Power: ON'}</span>
+                      </button>
+                      <button
+                        onClick={() => onOpenTerminal(selectedNode.id)}
+                        className="flex items-center space-x-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold"
+                      >
+                        <Terminal className="w-3 h-3" />
+                        <span>CLI Terminal</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div>

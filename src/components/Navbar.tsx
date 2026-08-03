@@ -16,7 +16,8 @@ import {
   Home,
   Share2,
   Image,
-  FileImage
+  FileImage,
+  ClipboardCheck
 } from 'lucide-react';
 import { LabProject } from '../types';
 
@@ -27,6 +28,7 @@ interface NavbarProps {
   onImportMlab: (file: File) => void;
   onOpenMonorepo: () => void;
   onOpenTutorial: () => void;
+  onOpenGrading: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
   onLoadTemplate: (templateName: string) => void;
@@ -48,6 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onImportMlab,
   onOpenMonorepo,
   onOpenTutorial,
+  onOpenGrading,
   theme,
   onToggleTheme,
   onLoadTemplate,
@@ -252,6 +255,16 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <FileImage className="w-3.5 h-3.5 text-fuchsia-400" />
           <span className="hidden lg:inline">SVG</span>
+        </button>
+
+        {/* Auto-Grading */}
+        <button
+          onClick={onOpenGrading}
+          title="Auto-grading: validasi lab otomatis (skripsi/praktikum)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-violet-950 hover:bg-violet-900 text-violet-200 border border-violet-800 transition"
+        >
+          <ClipboardCheck className="w-3.5 h-3.5 text-violet-400" />
+          <span className="hidden xl:inline">Grading</span>
         </button>
 
         {/* Monorepo Architecture Explorer */}

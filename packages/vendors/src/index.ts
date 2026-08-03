@@ -48,6 +48,10 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
         target = 'ip_dns';
         action = s1 || 'print';
       }
+      if (isPrefix(action, 'ip') && isPrefix(s0, 'neighbor')) {
+        target = 'ip_neighbor';
+        action = s1 || 'print';
+      }
       if (isPrefix(action, 'ip') && isPrefix(s0, 'dhcp-server')) {
         target = 'ip_dhcp-server';
         action = s1 || 'print';
@@ -227,6 +231,9 @@ export class CiscoVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'vlan')) return { action: 'show_vlan', target: 'ios', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'spanning-tree')) return { action: 'show_stp', target: 'ios', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'cdp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_cdp_neighbors', target: 'ios', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_lldp_neighbors', target: 'ios', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'ospf') && isPrefix(subs[2], 'neighbor')) return { action: 'show_ospf_neighbor', target: 'ios', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'tcp') && isPrefix(subs[1], 'brief')) return { action: 'show_tcp_brief', target: 'ios', payload: { raw: rawInput, ast } };
     }
     if (isPrefix(action, 'configure') || isPrefix(action, 'conf')) return { action: 'configure_terminal', target: 'ios', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'enable') || isPrefix(action, 'en')) return { action: 'enable', target: 'ios', payload: { raw: rawInput, ast } };
@@ -300,10 +307,42 @@ export class CiscoVendorAdapter implements IVendorAdapter {
     if (cmdResult.type === 'show_bgp_summary') {
       const peers = cmdResult.peers || [];
       const header = 'BGP router identifier ' + (cmdResult.routerId || '0.0.0.0') + ', local AS number ' + (cmdResult.asn || '0') + '\n\nNeighbor        V           AS MsgRcvd MsgSent   TblVer  InQ OutQ Up/Down  State/PfxRcd\n';
-      const rows = peers.map((p: any) =>
-        `${(p.remoteAddr || '0.0.0.0').padEnd(15)} 4        ${(p.remoteAs || '0').padEnd(5)}       0       0        0    0    0 00:00:00 0`
-      ).join('\n');
-      return header + (rows || 'No BGP neighbors configured.');
+      const rows = peers.map((p: any) => {
+        const pfx = p.state === 'Established' ? (p.prefixes ?? 0) : p.state;
+        return `${(p.remoteAddr || '0.0.0.0').padEnd(15)} 4        ${String(p.remoteAs || 0).padEnd(5)}    1255    1255       0    0    0  ${String(p.uptime || 'never').padEnd(8)} ${pfx}`;
+      });
+      return header + (rows.join('\n') || 'No BGP neighbors configured.');
+    }
+    if (cmdResult.type === 'neighbor_print') {
+      const neighbors = cmdResult.neighbors || [];
+      if (cmdResult.proto === 'cdp') {
+        const header = 'Capability Codes: R - Router, T - Trans Bridge, B - Source Route Bridge\n                  S - Switch, H - Host, I - IGMP, r - Repeater, P - Phone\n\nDevice ID        Local Intrfce   Holdtme  Capability  Platform  Port ID\n';
+        const rows = neighbors.map((n: any) =>
+          `${(n.peerName || '?').padEnd(16)} ${(n.localPort || '').padEnd(15)} 145    R S I       ${(n.peerDeviceType || '').padEnd(9)} ${n.peerPort || ''}`
+        );
+        return header + (rows.join('\n') || 'Total cdp entries displayed : 0');
+      }
+      const header = 'Local Intf   Chassis-id      Port id   System Name\n';
+      const rows = neighbors.map((n: any) =>
+        `${(n.localPort || '').padEnd(12)} ${(n.peerName || '?').padEnd(15)} ${(n.peerPort || '').padEnd(10)} ${n.peerName || ''}`
+      );
+      return header + (rows.join('\n') || 'Total entries displayed: 0');
+    }
+    if (cmdResult.type === 'ospf_neighbor_print') {
+      const neighbors = cmdResult.neighbors || [];
+      const header = 'Neighbor ID     Pri   State           Dead Time   Address         Interface\n';
+      const rows = neighbors.map((n: any) =>
+        `${(n.routerId || '0.0.0.0').padEnd(15)}   1   FULL/  -        00:00:31    ${(n.ip || '').padEnd(16)} ${n.iface || ''}`
+      );
+      return header + (rows.join('\n') || '(no OSPF neighbors)');
+    }
+    if (cmdResult.type === 'tcp_print') {
+      const conns = cmdResult.connections || [];
+      const header = 'TCB          Local Address               Foreign Address             (state)\n';
+      const rows = conns.map((c: any, i: number) =>
+        `${('0x' + (1000000 + i).toString(16)).padEnd(12)} ${(c.localIp + '.' + c.localPort).padEnd(26)} ${(c.remoteIp + '.' + c.remotePort).padEnd(28)} ${c.state}`
+      );
+      return header + (rows.join('\n') || '(no active connections)');
     }
     if (cmdResult.type === 'show_vlan') {
       const vlans = cmdResult.vlans || [];
@@ -364,6 +403,10 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'vlan')) return { action: 'show_vlan', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'interface') && isPrefix(subs[1], 'status')) return { action: 'show_int_status', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'version')) return { action: 'show_version', target: 'nxos', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'cdp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_cdp_neighbors', target: 'nxos', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_lldp_neighbors', target: 'nxos', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'ospf') && isPrefix(subs[2], 'neighbor')) return { action: 'show_ospf_neighbor', target: 'nxos', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'tcp') && isPrefix(subs[1], 'brief')) return { action: 'show_tcp_brief', target: 'nxos', payload: { raw: rawInput, ast } };
     }
     if (isPrefix(action, 'configure') || isPrefix(action, 'conf')) return { action: 'configure_terminal', target: 'nxos', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'nxos', payload: { raw: rawInput, ast, host: subs[0] } };
@@ -525,6 +568,7 @@ export class HuaweiVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'vlan')) return { action: 'vlan_print', target: 'vrp', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'version')) return { action: 'display_version', target: 'vrp', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'ospf') && isPrefix(subs[1], 'peer')) return { action: 'display_ospf_peer', target: 'vrp', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbor')) return { action: 'show_lldp_neighbors', target: 'vrp', payload: { raw: rawInput, ast } };
     }
     if (isPrefix(action, 'system-view') || isPrefix(action, 'sys')) return { action: 'system_view', target: 'vrp', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'vrp', payload: { raw: rawInput, ast, host: subs[0] } };
@@ -783,6 +827,10 @@ export class ArubaVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'running-config') || isPrefix(subs[0], 'run')) return { action: 'show_running', target: 'cx', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'vlan')) return { action: 'show_vlan', target: 'cx', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'version')) return { action: 'show_version', target: 'cx', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'cdp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_cdp_neighbors', target: 'cx', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_lldp_neighbors', target: 'cx', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'ospf') && isPrefix(subs[2], 'neighbor')) return { action: 'show_ospf_neighbor', target: 'cx', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'tcp') && isPrefix(subs[1], 'brief')) return { action: 'show_tcp_brief', target: 'cx', payload: { raw: rawInput, ast } };
     }
     if (isPrefix(action, 'configure') || isPrefix(action, 'conf')) return { action: 'configure_terminal', target: 'cx', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'cx', payload: { raw: rawInput, ast, host: subs[0] } };
@@ -995,26 +1043,39 @@ export class LinuxDebianVendorAdapter implements IVendorAdapter {
       return rows.join('\n') || '';
     }
     if (cmdResult.type === 'ip_neigh') {
-      return '192.168.1.1 dev eth0 lladdr 00:11:22:33:44:55 STALE\n192.168.1.254 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE';
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'arp cache empty — kirim ping dulu untuk belajar MAC';
+      return entries.map((e: any) => `${e.ip} dev eth0 lladdr ${e.mac} REACHABLE`).join('\n');
     }
     if (cmdResult.type === 'ip_route' || cmdResult.type === 'show_ip_route') {
       return 'default via 192.168.1.1 dev eth0 proto static metric 100\n192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10';
     }
+    if (cmdResult.type === 'tcp_print') {
+      const conns = cmdResult.connections || [];
+      const header = 'Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name\n';
+      if (conns.length === 0) return header + '(no active connections)';
+      const rows = conns.map((c: any) =>
+        `tcp        0      0 ${(c.localIp + ':' + c.localPort).padEnd(20)} ${(c.remoteIp + ':' + c.remotePort).padEnd(22)} ${c.state}      1234/app`
+      );
+      return header + rows.join('\n');
+    }
     if (cmdResult.type === 'ss') {
-      return [
-        'Netid  State   Recv-Q  Send-Q   Local Address:Port      Peer Address:Port  Process',
-        'tcp    LISTEN  0       128      0.0.0.0:22             0.0.0.0:*          users:(("sshd",pid=1,fd=3))',
-        'tcp    LISTEN  0       511      0.0.0.0:80             0.0.0.0:*          users:(("nginx",pid=890,fd=6))',
-        'tcp    ESTAB   0       0        192.168.1.10:22        192.168.1.5:51234  users:(("sshd",pid=1234,fd=3))',
-      ].join('\n');
+      const conns = cmdResult.connections || [];
+      const header = 'Netid  State   Recv-Q  Send-Q   Local Address:Port      Peer Address:Port  Process';
+      if (conns.length === 0) return header + '\n(no active connections)';
+      const rows = conns.map((c: any) =>
+        `tcp    ${c.state === 'LISTEN' ? 'LISTEN' : 'ESTAB'} 0       0        ${(c.localIp + ':' + c.localPort).padEnd(21)} ${(c.remoteIp + ':' + c.remotePort).padEnd(20)}  users:(("app",pid=1234,fd=3))`
+      );
+      return header + '\n' + rows.join('\n');
     }
     if (cmdResult.type === 'netstat') {
-      return [
-        'Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name',
-        'tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      1/sshd',
-        'tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      890/nginx',
-        'tcp        0      0 192.168.1.10:22         192.168.1.5:51234       ESTABLISHED 1234/sshd',
-      ].join('\n');
+      const conns = cmdResult.connections || [];
+      const header = 'Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name';
+      if (conns.length === 0) return header + '\n(no active connections)';
+      const rows = conns.map((c: any) =>
+        `tcp        0      0 ${(c.localIp + ':' + c.localPort).padEnd(20)} ${(c.remoteIp + ':' + c.remotePort).padEnd(22)} ${c.state}      1234/app`
+      );
+      return header + '\n' + rows.join('\n');
     }
     if (cmdResult.type === 'traceroute') {
       const host = cmdResult.host || '8.8.8.8';
@@ -1804,7 +1865,7 @@ export class VendorDispatcher {
       cmdResult = { type: 'mangle_print', rules: mem.mangleRules };
     } else if (/^\/routing\s+(ospf|rip|bgp)\s+(instance|network)?\s*(print)?/i.test(rawInput.trim()) && vendorId === 'mikrotik' && /print/i.test(rawInput.trim())) {
       cmdResult = { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
-    } else if (/^show\s+ip\s+protocols/i.test(rawInput.trim()) || /^display\s+ospf\s+peer/i.test(rawInput.trim())) {
+    } else if (/^show\s+ip\s+protocols/i.test(rawInput.trim())) {
       cmdResult = { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
     } else if (normalized.action === 'set_config') {
       // Juniper / EdgeOS / VyOS: "set interfaces <if> ... address <ip/mask>" or static routes
@@ -1890,7 +1951,23 @@ export class VendorDispatcher {
     } else if (normalized.action === 'bgp_peer_print') {
       cmdResult = { type: 'bgp_peer_print', peers: mem.bgp.peers };
     } else if (normalized.action === 'show_bgp_summary') {
-      cmdResult = { type: 'show_bgp_summary', peers: mem.bgp.peers, asn: mem.bgp.asn, routerId: mem.bgp.routerId || mem.configuredIps[Object.keys(mem.configuredIps)[0]] };
+      const states = typeof context.bgpNeighborProvider === 'function' ? context.bgpNeighborProvider() : [];
+      const peers = mem.bgp.peers.map((p: any) => {
+        const s = states.find((x: any) => x.remoteAddr === p.remoteAddr);
+        return { ...p, state: s?.state || 'Idle', prefixes: s?.prefixes ?? 0, uptime: s?.uptime || 'never' };
+      });
+      cmdResult = { type: 'show_bgp_summary', peers, asn: mem.bgp.asn, routerId: mem.bgp.routerId || mem.configuredIps[Object.keys(mem.configuredIps)[0]] };
+    } else if (normalized.action === 'show_cdp_neighbors' || normalized.action === 'show_lldp_neighbors') {
+      const proto = normalized.action === 'show_cdp_neighbors' ? 'cdp' : 'lldp';
+      cmdResult = { type: 'neighbor_print', proto, neighbors: typeof context.neighborProvider === 'function' ? context.neighborProvider(proto) : [] };
+    } else if (normalized.action === 'show_ospf_neighbor' || normalized.action === 'display_ospf_peer') {
+      cmdResult = { type: 'ospf_neighbor_print', neighbors: typeof context.ospfNeighborProvider === 'function' ? context.ospfNeighborProvider() : [] };
+    } else if (normalized.action === 'ip_neighbor_print' || (normalized.target === 'ip_neighbor' && normalized.action === 'print')) {
+      cmdResult = { type: 'neighbor_print', proto: 'lldp', neighbors: typeof context.neighborProvider === 'function' ? context.neighborProvider('lldp') : [] };
+    } else if (normalized.action === 'netstat' || normalized.action === 'ss' || normalized.action === 'show_tcp_brief') {
+      cmdResult = { type: 'tcp_print', connections: typeof context.tcpProvider === 'function' ? context.tcpProvider() : [] };
+    } else if (normalized.action === 'ip_neigh') {
+      cmdResult = { type: 'ip_neigh', entries: typeof context.arpProvider === 'function' ? context.arpProvider() : [] };
     } else if (
       normalized.action === 'ip_address_print' ||
       (normalized.target === 'ip_address' && normalized.action === 'print')
@@ -2102,6 +2179,35 @@ function formatExtended(cmdResult: any): string {
       ` ${i} R ${name.padEnd(11)} ${(w.ssid || '').padEnd(18)} ${(w.band || '2ghz-G').padEnd(13)} ${w.mode || 'ap-bridge'}`
     ).join('\n');
     return 'Flags: X - disabled, R - running\n #    NAME       SSID               BAND         MODE\n' + rows;
+  }
+  if (cmdResult.type === 'neighbor_print') {
+    const neighbors = cmdResult.neighbors || [];
+    if (neighbors.length === 0) return ' -- no neighbors discovered --';
+    const rows = neighbors.map((n: any, i: number) =>
+      ` ${i} ${(n.localPort || '-').padEnd(14)} ${(n.peerName || '?').padEnd(18)} ${(n.peerDeviceType || '').padEnd(12)} ${n.peerPort || '-'}`
+    ).join('\n');
+    return ' #    LOCAL-PORT     PEER               PLATFORM      PEER-PORT\n' + rows;
+  }
+  if (cmdResult.type === 'ospf_neighbor_print') {
+    const neighbors = cmdResult.neighbors || [];
+    const header = 'Neighbor ID     Pri   State           Dead Time   Address         Interface\n';
+    const rows = neighbors.map((n: any) =>
+      `${(n.routerId || '0.0.0.0').padEnd(16)}   1   FULL/  -        00:00:31    ${(n.ip || '').padEnd(16)} ${n.iface || ''}`
+    ).join('\n');
+    return header + (rows || '(no OSPF neighbors)');
+  }
+  if (cmdResult.type === 'tcp_print') {
+    const conns = cmdResult.connections || [];
+    if (conns.length === 0) return 'Local Address         Foreign Address         State\n(no active connections)';
+    const rows = conns.map((c: any) =>
+      `${(c.localIp + ':' + c.localPort).padEnd(21)} ${(c.remoteIp + ':' + c.remotePort).padEnd(23)} ${c.state}`
+    ).join('\n');
+    return 'Local Address         Foreign Address         State\n' + rows;
+  }
+  if (cmdResult.type === 'ip_neigh') {
+    const entries = cmdResult.entries || [];
+    if (entries.length === 0) return '(ARP cache empty — kirim ping dulu untuk belajar MAC)';
+    return entries.map((e: any) => `${e.ip} dev eth0 lladdr ${e.mac} REACHABLE`).join('\n');
   }
   return '';
 }

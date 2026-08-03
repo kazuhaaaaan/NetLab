@@ -30,7 +30,7 @@ export interface PingSimResult {
   ttlAtDestination: number;
   /** true when the source obtained an IP automatically via DHCP */
   dhcpGranted?: boolean;
-  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked';
+  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power';
 }
 
 interface PathResult {
@@ -38,7 +38,7 @@ interface PathResult {
   path?: SimDevice[];
   edges?: string[];
   ttl?: number;
-  reason?: 'ttl' | 'unreachable' | 'blocked';
+  reason?: 'ttl' | 'unreachable' | 'blocked' | 'power';
 }
 
 export interface DhcpPoolInfo {
@@ -124,6 +124,50 @@ export interface TracerouteResult {
   reason?: PingSimResult['reason'];
 }
 
+export interface LldpNeighborInfo {
+  peerNodeId: string;
+  peerName: string;
+  peerDeviceType: string;
+  localPort: string;
+  peerPort: string;
+}
+
+export interface OspfNeighborInfo {
+  routerId: string;
+  ip: string;
+  iface: string;
+  state: string;
+}
+
+export interface BgpNeighborStateInfo {
+  remoteAddr: string;
+  remoteAs: number;
+  state: 'Established' | 'Idle' | 'Connect';
+  uptime: string;
+  prefixes: number;
+}
+
+export interface TcpConnectionInfo {
+  localIp: string;
+  localPort: number;
+  remoteIp: string;
+  remotePort: number;
+  state: 'LISTEN' | 'ESTABLISHED' | 'TIME_WAIT';
+  proto: string;
+}
+
+export interface TcpHandshakeSegment {
+  seq: number;
+  ack: number;
+  flags: string;
+}
+
+export interface TcpConnectResult {
+  ok: boolean;
+  reason?: PingSimResult['reason'];
+  handshake: TcpHandshakeSegment[];
+}
+
 /**
  * MikroLab real network simulation engine.
  *
@@ -159,6 +203,10 @@ export class SimulationEngine {
   private subinterfaces = new Map<string, Map<string, { parentPort: string; vlanId: number }>>();
   /** trunk ports on switches: nodeId → iface names (carry all VLANs) */
   private trunkPorts = new Map<string, Set<string>>();
+  /** devices powered off (absent = powered on) */
+  private poweredOff = new Set<string>();
+  /** TCP connections established during this session: nodeId → connections */
+  private tcpConnections = new Map<string, TcpConnectionInfo[]>();
 
   syncTopology(project: LabProject): void {
     const seen = new Set<string>();
@@ -189,6 +237,8 @@ export class SimulationEngine {
         this.shutIfaces.delete(id);
         this.subinterfaces.delete(id);
         this.trunkPorts.delete(id);
+        this.poweredOff.delete(id);
+        this.tcpConnections.delete(id);
       }
     }
 
@@ -219,6 +269,16 @@ export class SimulationEngine {
 
   getDevice(nodeId: string): SimDevice | undefined {
     return this.devices.get(nodeId);
+  }
+
+  /** Turn a device on/off. Powered-off devices cannot be traversed by packets. */
+  setNodePowered(nodeId: string, on: boolean): void {
+    if (on) this.poweredOff.delete(nodeId);
+    else this.poweredOff.add(nodeId);
+  }
+
+  isNodePowered(nodeId: string): boolean {
+    return !this.poweredOff.has(nodeId);
   }
 
   /** Apply CLI-configured IPs/routes (from VendorDispatcher memory). */
@@ -350,20 +410,6 @@ export class SimulationEngine {
 
   /** L2 segments as a map: link-port → segment key. */
   private computeProtocolRoutes(segments: Map<string, string>): void {
-    // IP of device `devId` on the port that lies on segment `key`
-    const ipOnSegment = (devId: string, key: string): string | null => {
-      const dev = this.devices.get(devId);
-      if (!dev) return null;
-      for (const link of this.linksOfDevice(devId)) {
-        const keyOf = this.segmentKeyOfLink(link, devId, segments);
-        if (keyOf !== key) continue;
-        const myPort = link.nodeIdA === devId ? link.portNameA : link.portNameB;
-        const iface = dev.getIfaceByName(myPort) || dev.getVirtualByParentPort(myPort);
-        if (iface?.ip) return iface.ip.address;
-      }
-      return null;
-    };
-
     const tables = new Map<string, TableEntry[]>();
     const devices = [...this.devices.values()].filter((d) => !d.isSwitch);
 
@@ -402,12 +448,12 @@ export class SimulationEngine {
           myKeys.add(this.segmentKeyOfLink(link, dev.id, segments));
         }
         for (const key of myKeys) {
-          const myIp = ipOnSegment(dev.id, key);
+          const myIp = this.ipOnSegment(dev.id, key, segments);
           if (!myIp) continue;
           for (const other of devices) {
             if (other.id === dev.id) continue;
             if (!this.routings.has(other.id)) continue;
-            const otherIp = ipOnSegment(other.id, key);
+            const otherIp = this.ipOnSegment(other.id, key, segments);
             if (!otherIp) continue;
             for (const e of myEntries) {
               candidates.push({ peerId: other.id, dst: e.dst, gateway: myIp, metric: e.metric + 1 });
@@ -506,6 +552,20 @@ export class SimulationEngine {
     return segments.get(`${fromId}:${myPort}`) || `ptp:${link.id}`;
   }
 
+  /** IP of device `devId` on the port that lies on L2 segment `key`. */
+  private ipOnSegment(devId: string, key: string, segments: Map<string, string>): string | null {
+    const dev = this.devices.get(devId);
+    if (!dev) return null;
+    for (const link of this.linksOfDevice(devId)) {
+      const keyOf = this.segmentKeyOfLink(link, devId, segments);
+      if (keyOf !== key) continue;
+      const myPort = link.nodeIdA === devId ? link.portNameA : link.portNameB;
+      const iface = dev.getIfaceByName(myPort) || dev.getVirtualByParentPort(myPort);
+      if (iface?.ip) return iface.ip.address;
+    }
+    return null;
+  }
+
   private computeBgpRoutes(): void {
     const bgpRouters = [...this.bgps.entries()].filter(([, cfg]) => cfg.asn && cfg.peers.length > 0);
     if (bgpRouters.length === 0) return;
@@ -520,7 +580,7 @@ export class SimulationEngine {
           entries.push({ dst: `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`, gateway: '', metric: 0 });
         }
       }
-      for (const n of cfg.networks) {
+      for (const n of cfg.networks || []) {
         const norm = this.normalizeNetworkEntry(dev, n);
         if (norm && !entries.some((e) => e.dst === norm)) entries.push({ dst: norm, gateway: '', metric: 0 });
       }
@@ -684,6 +744,7 @@ export class SimulationEngine {
     // (e.g. host → switch → router → switch → host).
     const visitKey = src.isSwitch ? `${src.id}:${ingressPort || ''}` : src.id;
     if (visited.has(visitKey)) return { ok: false, reason: 'unreachable' };
+    if (!this.isNodePowered(src.id)) return { ok: false, reason: 'power' };
 
     const localIface = src.hasIp(dstIp);
     if (localIface) {
@@ -811,6 +872,11 @@ export class SimulationEngine {
       }
       dhcpGranted = true;
     }
+
+    // Real L2: before ICMP flows, ARP resolves the destination MAC. The ARP
+    // request is broadcast (flooded through switches within the VLAN) and
+    // populates the ARP cache + MAC tables along the way — like a real switch.
+    this.resolveArpPath(src, dstIp);
 
     const result = this.findPath(src, dstIp, src.getIpAddress() || '', 64, new Set(), []);
     if (result.ok && result.path) {
@@ -1068,6 +1134,227 @@ export class SimulationEngine {
       }
     }
     return false;
+  }
+
+  // ============================================================
+  // Neighbor discovery (CDP / LLDP / OSPF / BGP tables)
+  // ============================================================
+
+  /**
+   * ARP resolution phase: walk the path once and learn MAC/ARP entries on
+   * every hop pair (flooding through switches inside the VLAN). L3 devices
+   * also ARP for their effective next hop: when the adjacent device is an
+   * L2-only switch, walk forward to the first IP-capable device on that
+   * segment and resolve its MAC (as if the switch flooded the ARP request).
+   */
+  private resolveArpPath(src: SimDevice, dstIp: string): void {
+    if (src.hasIp(dstIp)) return;
+    const result = this.findPath(src, dstIp, src.getIpAddress() || '', 64, new Set(), []);
+    if (!result.ok || !result.path || result.path.length < 2) return;
+    const path = result.path;
+    const ids = path.map((d) => d.id);
+    for (const link of this.links) {
+      const ai = ids.indexOf(link.nodeIdA);
+      const bi = ids.indexOf(link.nodeIdB);
+      if (ai >= 0 && bi >= 0 && Math.abs(ai - bi) === 1) {
+        this.learnHop(path[ai], path[bi], link);
+      }
+    }
+    const ifaceOf = (dev: SimDevice, link: SimLink) =>
+      dev.getIfaceByName(link.nodeIdA === dev.id ? link.portNameA : link.portNameB) ||
+      dev.getVirtualByParentPort(link.nodeIdA === dev.id ? link.portNameA : link.portNameB);
+    const directLink = (a: SimDevice, b: SimDevice) =>
+      this.links.find(
+        (l) =>
+          (l.nodeIdA === a.id && l.nodeIdB === b.id) ||
+          (l.nodeIdA === b.id && l.nodeIdB === a.id)
+      );
+    for (let i = 0; i < path.length; i++) {
+      const dev = path[i];
+      if (dev.isSwitch) continue;
+      for (const dir of [-1, 1] as const) {
+        let j = i + dir;
+        while (j >= 0 && j < path.length && path[j].isSwitch) j += dir;
+        if (j < 0 || j >= path.length) continue;
+        // direct neighbor, or (when switches sit between) the segment link
+        // of the peer on the side facing `dev` — as if the switch flooded ARP
+        const link =
+          j === i + dir
+            ? directLink(dev, path[j])
+            : directLink(path[j], path[j - dir]);
+        const peerIf = link && ifaceOf(path[j], link);
+        if (link && peerIf && peerIf.ip) dev.learnArp(peerIf.ip.address, peerIf.mac);
+      }
+    }
+  }
+
+  /**
+   * Directly connected neighbors (CDP/LLDP discovery). Powered-off
+   * devices are not advertised by their neighbor.
+   */
+  getLldpNeighbors(nodeId: string): LldpNeighborInfo[] {
+    const out: LldpNeighborInfo[] = [];
+    if (!this.isNodePowered(nodeId)) return out;
+    for (const link of this.linksOfDevice(nodeId)) {
+      const peerId = link.nodeIdA === nodeId ? link.nodeIdB : link.nodeIdA;
+      const peer = this.devices.get(peerId);
+      if (!peer || !this.isNodePowered(peerId)) continue;
+      out.push({
+        peerNodeId: peer.id,
+        peerName: peer.name,
+        peerDeviceType: peer.deviceType,
+        localPort: link.nodeIdA === nodeId ? link.portNameA : link.portNameB,
+        peerPort: link.nodeIdA === peerId ? link.portNameA : link.portNameB,
+      });
+    }
+    return out;
+  }
+
+  /** OSPF adjacencies: other OSPF routers sharing an L2 segment. */
+  getOspfNeighbors(nodeId: string): OspfNeighborInfo[] {
+    const dev = this.devices.get(nodeId);
+    if (!dev) return [];
+    const cfg = this.routings.get(nodeId);
+    if (!cfg?.ospf?.enabled) return [];
+    const segments = this.buildSegments();
+    const myKeys = new Set<string>();
+    for (const link of this.linksOfDevice(nodeId)) {
+      myKeys.add(this.segmentKeyOfLink(link, nodeId, segments));
+    }
+    const out: OspfNeighborInfo[] = [];
+    for (const other of this.devices.values()) {
+      if (other.id === nodeId || other.isSwitch) continue;
+      const oc = this.routings.get(other.id);
+      if (!oc?.ospf?.enabled) continue;
+      for (const link of this.linksOfDevice(other.id)) {
+        const key = this.segmentKeyOfLink(link, other.id, segments);
+        if (!myKeys.has(key)) continue;
+        const otherIp = this.ipOnSegment(other.id, key, segments);
+        if (!otherIp) continue;
+        const myPort = link.nodeIdA === nodeId ? link.portNameA : link.portNameB;
+        out.push({ routerId: otherIp, ip: otherIp, iface: myPort, state: 'Full/ -' });
+        break;
+      }
+    }
+    const seen = new Set<string>();
+    return out.filter((n) => (seen.has(n.routerId) ? false : (seen.add(n.routerId), true)));
+  }
+
+  /** BGP session state per configured peer (Established when reachable & both sides configured). */
+  getBgpNeighborStates(nodeId: string): BgpNeighborStateInfo[] {
+    const cfg = this.bgps.get(nodeId);
+    if (!cfg) return [];
+    return cfg.peers.map((p) => {
+      const peerId = this.deviceIdByIp(p.remoteAddr);
+      const reachable =
+        !!peerId && this.bgps.has(peerId) && this.isNodePowered(nodeId) && this.canReach(nodeId, p.remoteAddr);
+      const prefixes = reachable ? this.devices.get(peerId as string)?.getDynamicRoutes().length || 0 : 0;
+      return {
+        remoteAddr: p.remoteAddr,
+        remoteAs: p.remoteAs,
+        state: reachable ? 'Established' : 'Idle',
+        uptime: reachable ? '00:00:12' : 'never',
+        prefixes,
+      };
+    });
+  }
+
+  // ============================================================
+  // TCP connection simulation (HTTP/curl/netstat)
+  // ============================================================
+
+  /**
+   * Real 3-way TCP handshake: SYN → SYN-ACK → ACK. Both the forward path
+   * and the return path must work, then the connection is recorded on
+   * both endpoints (visible via netstat / show tcp brief).
+   */
+  simulateTcpConnect(srcNodeId: string, dstIp: string, dstPort = 80): TcpConnectResult {
+    const src = this.devices.get(srcNodeId);
+    if (!src) return { ok: false, reason: 'not-found', handshake: [] };
+    if (!isValidIp(dstIp)) return { ok: false, reason: 'invalid', handshake: [] };
+    if (!this.isNodePowered(src.id)) return { ok: false, reason: 'power', handshake: [] };
+    const srcIp = src.getIpAddress();
+    if (!srcIp) return { ok: false, reason: 'no-ip', handshake: [] };
+
+    const fwd = this.findPath(src, dstIp, srcIp, 64, new Set(), []);
+    if (!fwd.ok || !fwd.path) return { ok: false, reason: fwd.reason || 'unreachable', handshake: [] };
+    const dstDev = fwd.path[fwd.path.length - 1];
+    if (!this.isNodePowered(dstDev.id)) return { ok: false, reason: 'power', handshake: [] };
+    const dstIpLocal = dstDev.getIpAddress() || dstIp;
+    const back = this.findPath(dstDev, srcIp, dstIpLocal, 64, new Set(), []);
+    if (!back.ok) return { ok: false, reason: back.reason || 'unreachable', handshake: [] };
+
+    const iseq = Math.floor(Math.random() * 50000) + 1000;
+    const handshake: TcpHandshakeSegment[] = [
+      { seq: iseq, ack: 0, flags: 'SYN' },
+      { seq: iseq + 1, ack: iseq + 1, flags: 'SYN-ACK' },
+      { seq: iseq + 1, ack: iseq + 2, flags: 'ACK' },
+    ];
+    const clientPort = 40000 + Math.floor(Math.random() * 10000);
+    const clientSide: TcpConnectionInfo = {
+      localIp: srcIp,
+      localPort: clientPort,
+      remoteIp: dstIp,
+      remotePort: dstPort,
+      state: 'ESTABLISHED',
+      proto: 'tcp',
+    };
+    const serverSide: TcpConnectionInfo = {
+      localIp: dstIpLocal,
+      localPort: dstPort,
+      remoteIp: srcIp,
+      remotePort: clientPort,
+      state: 'ESTABLISHED',
+      proto: 'tcp',
+    };
+    const srcList = this.tcpConnections.get(src.id) || [];
+    srcList.push(clientSide);
+    this.tcpConnections.set(src.id, srcList);
+    const dstList = this.tcpConnections.get(dstDev.id) || [];
+    dstList.push(serverSide);
+    this.tcpConnections.set(dstDev.id, dstList);
+    return { ok: true, handshake };
+  }
+
+  /** Established TCP connections of a device (netstat / show tcp brief). */
+  getTcpConnections(nodeId: string): TcpConnectionInfo[] {
+    return this.tcpConnections.get(nodeId) || [];
+  }
+
+  // ============================================================
+  // Grading helpers (read-only view of CLI-configured state)
+  // ============================================================
+
+  getNodeRouting(nodeId: string): RoutingMemoryShape | undefined {
+    return this.routings.get(nodeId);
+  }
+
+  getNodeBgp(nodeId: string): BgpConfig | undefined {
+    return this.bgps.get(nodeId);
+  }
+
+  getNodeAcls(nodeId: string): AclRule[] {
+    return this.acls.get(nodeId) || [];
+  }
+
+  getNodeNats(nodeId: string): NatRule[] {
+    return this.nats.get(nodeId) || [];
+  }
+
+  getNodePortVlans(nodeId: string): Map<string, number> {
+    return this.portVlans.get(nodeId) || new Map();
+  }
+
+  getNodeTrunkPorts(nodeId: string): Set<string> {
+    return this.trunkPorts.get(nodeId) || new Set();
+  }
+
+  getNodeShutdownIfaces(nodeId: string): Set<string> {
+    return this.shutIfaces.get(nodeId) || new Set();
+  }
+
+  getNodeSubinterfaces(nodeId: string): Map<string, { parentPort: string; vlanId: number }> {
+    return this.subinterfaces.get(nodeId) || new Map();
   }
 
   // ============================================================

@@ -85,6 +85,13 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       ]
     },
     {
+      command: '/ip neighbor',
+      description: 'Neighbor discovery',
+      children: [
+        { command: '/ip neighbor print', description: 'Show directly connected neighbors (LLDP/CDP)' },
+      ]
+    },
+    {
       command: '/system',
       description: 'System settings',
       children: [
@@ -187,6 +194,8 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
         { command: 'show mac address-table', description: 'Show MAC address table (switches)' },
         { command: 'show spanning-tree', description: 'Show STP topology' },
         { command: 'show cdp neighbors', description: 'Show directly connected Cisco devices' },
+        { command: 'show lldp neighbors', description: 'Show LLDP neighbors' },
+        { command: 'show tcp brief', description: 'Show TCP connection table' },
         { command: 'show access-lists', description: 'Show all access lists' },
         { command: 'show crypto isakmp sa', description: 'Show ISAKMP/IKE SAs' },
       ]
@@ -343,6 +352,7 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
         { command: 'display current-configuration', description: 'Show current configuration' },
         { command: 'display version', description: 'Show software version' },
         { command: 'display ospf peer', description: 'Show OSPF peers' },
+        { command: 'display lldp neighbor', description: 'Show LLDP neighbors' },
       ]
     },
     { command: 'system-view', description: 'Enter system view (config mode)' },
@@ -479,8 +489,8 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
     },
     { command: 'ping <host>', description: 'Tes koneksi ke host lain' },
     { command: 'traceroute <host>', description: 'Telusuri jalur paket' },
-    { command: 'ss -tulnp', description: 'Lihat port yang terbuka (listening)' },
-    { command: 'netstat -tulnp', description: 'Lihat port yang terbuka (versi lama)' },
+    { command: 'ss -tn', description: 'Lihat koneksi TCP aktif (netstat modern)' },
+    { command: 'netstat -tn', description: 'Lihat koneksi TCP aktif' },
     { command: 'nslookup <domain>', description: 'Cari IP dari nama domain' },
     { command: 'curl <url>', description: 'Tes akses HTTP ke sebuah URL' },
     { command: 'systemctl status <service>', description: 'Lihat status layanan (misal nginx)' },

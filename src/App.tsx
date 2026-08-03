@@ -6,6 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
 import { TerminalPanel } from './components/TerminalPanel';
 import { TutorialModal } from './components/TutorialModal';
+import { GradingModal } from './components/GradingModal';
 import { MonorepoExplorerModal } from './components/MonorepoExplorerModal';
 import { ContextMenu } from './components/ContextMenu';
 import { MobileToolbar } from './components/MobileToolbar';
@@ -170,6 +171,7 @@ export default function App() {
   // UI Modals & Panels
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => loadUiState()?.isSidebarOpen ?? true);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  const [isGradingOpen, setIsGradingOpen] = useState(false);
   const [isDonateOpen, setIsDonateOpen] = useState(false);
   const [isMonorepoOpen, setIsMonorepoOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetId?: string; targetType?: string } | null>(null);
@@ -301,6 +303,9 @@ export default function App() {
   // Keep the simulation engine in sync with the topology
   useEffect(() => {
     simEngineRef.current.syncTopology(project);
+    for (const n of project.nodes) {
+      simEngineRef.current.setNodePowered(n.id, n.powered !== false);
+    }
   }, [project]);
 
   // setProject wrapper that pushes to undo history
@@ -462,6 +467,20 @@ export default function App() {
       ...prev,
       nodes: prev.nodes.map((n) => (n.id === nodeId ? { ...n, name } : n))
     }));
+  };
+
+  /** Nyalakan/matikan sebuah perangkat — device mati tidak bisa dilalui paket. */
+  const handleTogglePower = (nodeId: string) => {
+    const node = project.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const on = node.powered !== false;
+    setProjectWithHistory((prev) => ({
+      ...prev,
+      nodes: prev.nodes.map((n) => (n.id === nodeId ? { ...n, powered: !on } : n)),
+    }));
+    simEngineRef.current.setNodePowered(nodeId, !on);
+    setStatsVersion((v) => v + 1);
+    showToast(!on ? `⚡ ${node.name} dimatikan — paket tidak akan melewatinya` : `⚡ ${node.name} dinyalakan kembali`);
   };
 
   const handleUpdateNodeModel = (nodeId: string, model: string) => {
@@ -764,12 +783,22 @@ export default function App() {
           if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
             return `curl: (6) Could not resolve host: ${host}`;
           }
-          const result = simEngineRef.current.simulatePing(nodeId, host);
-          if (!result.success) {
+          // Real 3-way TCP handshake (SYN → SYN-ACK → ACK) against port 80
+          const conn = simEngineRef.current.simulateTcpConnect(nodeId, host, 80);
+          if (!conn.ok) {
+            const reason = conn.reason;
+            if (reason === 'no-ip') return 'curl: (6) Could not resolve host: ' + host;
+            if (reason === 'ttl') return 'curl: (28) Timeout: TTL exceeded menuju ' + host;
             return `curl: (7) Failed to connect to ${host} port 80 after 3000 ms: Connection refused`;
           }
+          setStatsVersion((v) => v + 1);
           return `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 69\r\n\r\n<html><head><title>Welcome to ${host}</title></head><body><h1>It works!</h1></body></html>`;
         },
+        neighborProvider: (proto: 'cdp' | 'lldp') => simEngineRef.current.getLldpNeighbors(nodeId),
+        ospfNeighborProvider: () => simEngineRef.current.getOspfNeighbors(nodeId),
+        bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
+        tcpProvider: () => simEngineRef.current.getTcpConnections(nodeId),
+        arpProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.arp || [],
       });
 
       // Pick up config changes made by this command (IP, routes, routing, ACL, NAT, VLAN)
@@ -881,6 +910,7 @@ export default function App() {
         }}
         onOpenMonorepo={() => setIsMonorepoOpen(true)}
         onOpenTutorial={() => setIsTutorialOpen(true)}
+        onOpenGrading={() => setIsGradingOpen(true)}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onLoadTemplate={(tpl) => {
@@ -906,6 +936,7 @@ export default function App() {
           onUpdateNodeName={handleUpdateNodeName}
           onUpdateNodeModel={handleUpdateNodeModel}
           onDeleteNode={handleDeleteNode}
+          onTogglePower={handleTogglePower}
           onOpenTerminal={handleOpenTerminal}
           isOpen={isSidebarOpen}
           onToggleOpen={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -1043,6 +1074,14 @@ export default function App() {
 
       {/* First-Time Experience Tutorial Modal */}
       <TutorialModal isOpen={isTutorialOpen} onClose={() => setIsTutorialOpen(false)} />
+
+      {/* Auto-Grading Lab Modal */}
+      <GradingModal
+        isOpen={isGradingOpen}
+        onClose={() => setIsGradingOpen(false)}
+        nodes={project.nodes}
+        engine={simEngineRef.current}
+      />
 
       {/* Mobile desktop-optimization warning */}
       <MobileWarning />

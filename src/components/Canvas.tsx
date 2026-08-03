@@ -867,11 +867,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                 top: `${node.position.y}px`,
                 width: `${NODE_W}px`,
                 height: `${NODE_H}px`,
+                opacity: node.powered === false ? 0.45 : 1,
+                filter: node.powered === false ? 'grayscale(0.7)' : undefined,
               }}
               className={`absolute flex flex-col items-center justify-center p-2 rounded-lg group transition-all ${
-                activeTool === 'cable'
-                  ? 'cursor-pointer'
-                  : 'cursor-grab active:cursor-grabbing'
+                node.powered === false ? '' : activeTool === 'cable' ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
               } ${
                 cableWizard?.sourceNodeId === node.id
                   ? "bg-blue-500/10 border border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.3)]"
@@ -886,8 +886,12 @@ export const Canvas: React.FC<CanvasProps> = ({
             >
               <div className="pointer-events-none flex items-center justify-center w-12 h-12 bg-[#1A1D24] border border-[#2B2D31] rounded-lg shadow-sm mb-2 group-hover:border-[#4B4D51] transition-colors relative">
                 {getNodeIcon(node.deviceType)}
-                {/* Status indicator tipis */}
-                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-500 border border-[#1A1D24]"></span>
+                {/* Status indicator tipis: hijau menyala, merah mati */}
+                <span
+                  className={`absolute -top-1 -right-1 w-2 h-2 rounded-full border border-[#1A1D24] ${
+                    node.powered === false ? 'bg-rose-500' : 'bg-emerald-500'
+                  }`}
+                ></span>
               </div>
               <div className="text-center pointer-events-none flex flex-col items-center">
                 <span className={`text-[11px] font-medium tracking-tight leading-tight max-w-[88px] truncate ${
