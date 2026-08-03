@@ -25,6 +25,16 @@ function portAnchor(node: LabNode, portId: string): Anchor {
   };
 }
 
+/** Cable endpoint clamped inside the device body (matches the canvas look). */
+function edgeAnchor(node: LabNode, portId: string): Anchor {
+  const a = portAnchor(node, portId);
+  const inset = 6;
+  return {
+    x: Math.min(Math.max(a.x, node.position.x + inset), node.position.x + NODE_W - inset),
+    y: Math.min(Math.max(a.y, node.position.y + inset), node.position.y + NODE_H - inset),
+  };
+}
+
 function edgePath(
   nodeA: LabNode,
   portA: string,
@@ -33,8 +43,8 @@ function edgePath(
   tx: (v: number) => number,
   ty: (v: number) => number
 ): string {
-  const a = portAnchor(nodeA, portA);
-  const b = portAnchor(nodeB, portB);
+  const a = edgeAnchor(nodeA, portA);
+  const b = edgeAnchor(nodeB, portB);
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   let cx1: number, cy1: number, cx2: number, cy2: number;
@@ -147,29 +157,12 @@ export function buildSvg(project: LabProject, theme: 'dark' | 'light'): string {
       const ry = ty(y);
       const nx = tx(x + NODE_W / 2);
       const ny = ty(y + NODE_H / 2);
-      const portDots = n.ports
-        .map((p, idx) => {
-          const a = portAnchor(n, p.id);
-          const px = tx(a.x);
-          const py = ty(a.y);
-          const up = p.status === 'up';
-          const onEdge = edges.some(
-            (e) =>
-              (e.sourceNodeId === n.id && e.sourcePortId === p.id) ||
-              (e.targetNodeId === n.id && e.targetPortId === p.id)
-          );
-          return `<circle cx="${px}" cy="${py}" r="3.5" fill="${up ? '#10b981' : '#64748B'}" ${
-            onEdge ? 'stroke="#22d3ee" stroke-width="1.5"' : ''
-          }/>`;
-        })
-        .join('');
       return `
         <g>
           <rect x="${rx}" y="${ry}" width="${NODE_W * scale}" height="${NODE_H * scale}" rx="8" fill="${nodeBg}" stroke="${nodeBorder}" stroke-width="1"/>
           <g transform="translate(${nx} ${ny - 10 * scale})" opacity="0.95">${deviceGlyph(n.deviceType)}</g>
           <text x="${nx}" y="${ny + 8 * scale}" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="${11 * scale}" font-weight="600" fill="${textPrimary}">${escapeXml(n.name)}</text>
           <text x="${nx}" y="${ny + 21 * scale}" text-anchor="middle" font-family="ui-monospace, monospace" font-size="${8.5 * scale}" fill="${textSecondary}">${escapeXml(n.model)}</text>
-          ${portDots}
         </g>`;
     })
     .join('');
