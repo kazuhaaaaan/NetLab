@@ -72,6 +72,25 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
         target = 'system_resource';
         action = s1 || 'print';
       }
+      if (isPrefix(action, 'routing')) {
+        // "/routing bgp|ospf|rip instance|peer|network add|print ..."
+        const verb = (ast.subCommands[2] || s1 || 'print').toLowerCase();
+        if (isPrefix(s0, 'bgp')) {
+          target = isPrefix(s1, 'instance') || isPrefix(s1, 'peer') || isPrefix(s1, 'network')
+            ? `routing_bgp_${s1}`
+            : 'routing_bgp';
+          action = isPrefix(s1, 'instance') || isPrefix(s1, 'peer') || isPrefix(s1, 'network') ? verb : s1 || 'print';
+        } else if (isPrefix(s0, 'ospf') || isPrefix(s0, 'rip')) {
+          target = isPrefix(s1, 'instance') || isPrefix(s1, 'network')
+            ? `routing_${s0}_${s1}`
+            : `routing_${s0}`;
+          action = isPrefix(s1, 'instance') || isPrefix(s1, 'network') ? verb : s1 || 'print';
+        }
+      }
+      if (isPrefix(action, 'interface') && isPrefix(s0, 'wireless')) {
+        target = 'interface_wireless';
+        action = (ast.subCommands[2] || s1 || 'print').toLowerCase();
+      }
     }
 
     if (action === 'add' && target === 'ip_address') {
@@ -1598,10 +1617,9 @@ export class VendorDispatcher {
       const pool = raw.match(/address-pool=(\S+)/i)?.[1];
       const entry = mem.dhcpPools.find((p: any) => p.name === pool);
       if (name && iface) {
-        if (entry) {
-          entry.iface = resolveIfaceName(context?.ports, iface) || iface;
-          entry.name = name;
-        } else {
+      if (entry) {
+        entry.iface = resolveIfaceName(context?.ports, iface) || iface;
+      } else {
           mem.dhcpPools.push({ name, range: '', network: '', iface: resolveIfaceName(context?.ports, iface) || iface, gateway: '' });
         }
         cmdResult = { raw: '' };

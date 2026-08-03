@@ -429,8 +429,12 @@ export class SimulationEngine {
         if (!iface.ip || !iface.up) continue;
         const subnet = `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`;
         const participates = normalized.some((net) => {
-          const p = net.split('/');
-          return inSameSubnet(iface.ip.address, iface.ip.prefix, p[0]);
+          const parsed = parseCidr(net);
+          if (!parsed) return false;
+          // interface subnet must be contained in the "network" statement:
+          // compare both at the finer of the two prefixes
+          const pa = Math.min(iface.ip.prefix, parsed.prefix);
+          return inSameSubnet(iface.ip.address, pa, parsed.address);
         });
         if (participates) entries.push({ dst: subnet, gateway: '', metric: 0 });
       }
