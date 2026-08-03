@@ -153,6 +153,12 @@ export class SimulationEngine {
   private nats = new Map<string, NatRule[]>();
   /** access-VLAN per port: nodeId → ifaceName → vlanId */
   private portVlans = new Map<string, Map<string, number>>();
+  /** interfaces administratively shut down via CLI: nodeId → iface names */
+  private shutIfaces = new Map<string, Set<string>>();
+  /** VLAN subinterfaces: nodeId → subname → { parentPort, vlanId } */
+  private subinterfaces = new Map<string, Map<string, { parentPort: string; vlanId: number }>>();
+  /** trunk ports on switches: nodeId → iface names (carry all VLANs) */
+  private trunkPorts = new Map<string, Set<string>>();
 
   syncTopology(project: LabProject): void {
     const seen = new Set<string>();
@@ -180,6 +186,9 @@ export class SimulationEngine {
         this.acls.delete(id);
         this.nats.delete(id);
         this.portVlans.delete(id);
+        this.shutIfaces.delete(id);
+        this.subinterfaces.delete(id);
+        this.trunkPorts.delete(id);
       }
     }
 
@@ -204,6 +213,7 @@ export class SimulationEngine {
     });
 
     // Topology changed → protocol-learned routes are stale
+    this.applyIfaceStates();
     this.computeDynamicRoutes();
   }
 
@@ -229,7 +239,10 @@ export class SimulationEngine {
     };
     this.configs.set(nodeId, cfg);
     const dev = this.devices.get(nodeId);
-    if (dev) this.applyConfigToDevice(dev, cfg);
+    if (dev) {
+      this.applyConfigToDevice(dev, cfg);
+      this.applyIfaceStates();
+    }
   }
 
   private applyConfigToDevice(dev: SimDevice, cfg: { ips: Record<string, string>; routes: SimRoute[] }): void {
@@ -286,6 +299,38 @@ export class SimulationEngine {
     }
   }
 
+  /** Register interfaces administratively shut down via CLI (shutdown / disable). */
+  setShutdownIfaces(nodeId: string, names: string[] | undefined): void {
+    if (names && names.length > 0) this.shutIfaces.set(nodeId, new Set(names));
+    else this.shutIfaces.delete(nodeId);
+  }
+
+  /** Register VLAN subinterfaces (router-on-a-stick): name → physical port + tag. */
+  setSubinterfaces(nodeId: string, subs: { name: string; parentPort: string; vlanId: number }[] | undefined): void {
+    const map = new Map<string, { parentPort: string; vlanId: number }>();
+    for (const s of subs || []) map.set(s.name, { parentPort: s.parentPort, vlanId: s.vlanId });
+    this.subinterfaces.set(nodeId, map);
+    const dev = this.devices.get(nodeId);
+    if (dev) {
+      for (const [name, s] of map) dev.addVirtualIface(name, s.parentPort, s.vlanId, '');
+    }
+  }
+
+  /** Mark switch ports as trunks (forward every VLAN). */
+  setTrunkPorts(nodeId: string, names: string[] | undefined): void {
+    if (names && names.length > 0) this.trunkPorts.set(nodeId, new Set(names));
+    else this.trunkPorts.delete(nodeId);
+  }
+
+  /** Re-apply shutdown states after any topology/config (re)sync. */
+  private applyIfaceStates(): void {
+    for (const [nodeId, names] of this.shutIfaces) {
+      const dev = this.devices.get(nodeId);
+      if (!dev) continue;
+      for (const name of names) dev.setIfaceUp(name, false);
+    }
+  }
+
   /**
    * Recompute all routes learned from dynamic routing protocols.
    * Simple distance-vector over the L2 adjacency graph:
@@ -313,7 +358,7 @@ export class SimulationEngine {
         const keyOf = this.segmentKeyOfLink(link, devId, segments);
         if (keyOf !== key) continue;
         const myPort = link.nodeIdA === devId ? link.portNameA : link.portNameB;
-        const iface = dev.getIfaceByName(myPort);
+        const iface = dev.getIfaceByName(myPort) || dev.getVirtualByParentPort(myPort);
         if (iface?.ip) return iface.ip.address;
       }
       return null;
@@ -582,11 +627,14 @@ export class SimulationEngine {
   }
 
   private peerViaIface(nodeId: string, ifaceName: string): SimDevice | null {
+    const dev = this.devices.get(nodeId);
+    // VLAN subinterfaces ride on a physical port
+    const portName = dev?.getIfaceByName(ifaceName)?.parentPort || ifaceName;
     for (const link of this.linksOfDevice(nodeId)) {
-      if (link.nodeIdA === nodeId && link.portNameA === ifaceName) {
+      if (link.nodeIdA === nodeId && link.portNameA === portName) {
         return this.devices.get(link.nodeIdB) || null;
       }
-      if (link.nodeIdB === nodeId && link.portNameB === ifaceName) {
+      if (link.nodeIdB === nodeId && link.portNameB === portName) {
         return this.devices.get(link.nodeIdA) || null;
       }
     }
@@ -607,8 +655,8 @@ export class SimulationEngine {
   private learnHop(src: SimDevice, peer: SimDevice, link: SimLink): void {
     const srcPort = link.nodeIdA === src.id ? link.portNameA : link.portNameB;
     const peerPort = link.nodeIdA === peer.id ? link.portNameA : link.portNameB;
-    const srcIf = src.getIfaceByName(srcPort);
-    const peerIf = peer.getIfaceByName(peerPort);
+    const srcIf = src.getIfaceByName(srcPort) || src.getVirtualByParentPort(srcPort);
+    const peerIf = peer.getIfaceByName(peerPort) || peer.getVirtualByParentPort(peerPort);
     if (!srcIf || !peerIf) return;
     if (peerIf.ip) src.learnArp(peerIf.ip.address, peerIf.mac);
     if (srcIf.ip) peer.learnArp(srcIf.ip.address, srcIf.mac);
@@ -628,9 +676,14 @@ export class SimulationEngine {
     srcIp: string,
     ttl: number,
     visited: Set<string>,
-    edges: string[]
+    edges: string[],
+    ingressPort?: string
   ): PathResult {
-    if (visited.has(src.id)) return { ok: false, reason: 'unreachable' };
+    // L3 devices: re-entry from anywhere = loop. Switches: re-entry via the
+    // same port = loop, but re-entry via a different port is legitimate
+    // (e.g. host → switch → router → switch → host).
+    const visitKey = src.isSwitch ? `${src.id}:${ingressPort || ''}` : src.id;
+    if (visited.has(visitKey)) return { ok: false, reason: 'unreachable' };
 
     const localIface = src.hasIp(dstIp);
     if (localIface) {
@@ -642,7 +695,7 @@ export class SimulationEngine {
     if (ttl <= 0) return { ok: false, reason: 'ttl' };
 
     const next = new Set(visited);
-    next.add(src.id);
+    next.add(visitKey);
 
     if (src.isSwitch) {
       let best: PathResult = { ok: false, reason: 'unreachable' };
@@ -651,7 +704,8 @@ export class SimulationEngine {
         const peer = this.devices.get(link.nodeIdA === src.id ? link.nodeIdB : link.nodeIdA);
         if (!peer) continue;
         if (this.vlanBlocks(src.id, link, ingressEdgeId)) continue;
-        const r = this.findPath(peer, dstIp, srcIp, ttl - 1, next, [...edges, link.id]);
+        const peerIngress = link.nodeIdA === peer.id ? link.portNameA : link.portNameB;
+        const r = this.findPath(peer, dstIp, srcIp, ttl - 1, next, [...edges, link.id], peerIngress);
         if (r.ok) {
           this.learnHop(src, peer, link);
           return { ok: true, path: [src, ...(r.path || [])], edges: r.edges, ttl: r.ttl };
@@ -671,12 +725,14 @@ export class SimulationEngine {
     const peer = this.peerViaIface(src.id, nh.iface);
     if (!peer) return { ok: false, reason: 'unreachable' };
 
+    const portName = this.physicalPortName(src.id, nh.iface);
     const link = this.linksOfDevice(src.id).find(
-      (l) => (l.nodeIdA === src.id && l.portNameA === nh.iface) || (l.nodeIdB === src.id && l.portNameB === nh.iface)
+      (l) => (l.nodeIdA === src.id && l.portNameA === portName) || (l.nodeIdB === src.id && l.portNameB === portName)
     );
     if (!link) return { ok: false, reason: 'unreachable' };
 
-    const r = this.findPath(peer, dstIp, srcIp, ttl - 1, next, [...edges, link.id]);
+    const peerIngress = link.nodeIdA === peer.id ? link.portNameA : link.portNameB;
+    const r = this.findPath(peer, dstIp, srcIp, ttl - 1, next, [...edges, link.id], peerIngress);
     if (r.ok) {
       this.learnHop(src, peer, link);
       return { ok: true, path: [src, ...(r.path || [])], edges: r.edges, ttl: r.ttl };
@@ -709,19 +765,23 @@ export class SimulationEngine {
   }
 
   /**
-   * Access-VLAN isolation on switches: the packet is forwarded only when
-   * the ingress and egress ports of THIS switch share the same access VLAN.
-   * Ports without a configured VLAN default to VLAN 1.
+   * VLAN isolation on switches: the packet is forwarded only when the
+   * ingress and egress ports of THIS switch share the same access VLAN.
+   * Trunk ports carry every VLAN (ingress trunk → any egress; egress
+   * trunk → always allowed). Ports without a VLAN default to VLAN 1.
    */
   private vlanBlocks(switchId: string, egressLink: SimLink, ingressEdgeId: string | undefined): boolean {
     const vlans = this.portVlans.get(switchId);
     if (!vlans || vlans.size === 0) return false;
+    const trunks = this.trunkPorts.get(switchId);
     const egressPort = egressLink.nodeIdA === switchId ? egressLink.portNameA : egressLink.portNameB;
     let ingressPort: string | undefined;
     if (ingressEdgeId) {
       const il = this.links.find((l) => l.id === ingressEdgeId);
       if (il) ingressPort = il.nodeIdA === switchId ? il.portNameA : il.portNameB;
     }
+    if (ingressPort && trunks?.has(ingressPort)) return false; // tagged ingress: any VLAN
+    if (trunks?.has(egressPort)) return false; // trunk egress: carries all VLANs
     const inVlan = ingressPort === undefined ? 1 : (vlans.get(ingressPort) ?? 1);
     const outVlan = vlans.get(egressPort) ?? 1;
     return inVlan !== outVlan;
@@ -920,7 +980,7 @@ export class SimulationEngine {
             }
           }
           if (!facing) continue;
-          if (!this.sameSegment(nodeId, serverNodeId, facing.name)) continue;
+          if (!this.sameSegment(nodeId, serverNodeId, this.physicalPortName(serverNodeId, facing.name))) continue;
           gateway = gateway || (serverIface?.ip?.address || facing.ip?.address || '');
           for (let n = base + 2; n < base + 250; n++) {
             const ip = intToIp(n);
@@ -953,6 +1013,11 @@ export class SimulationEngine {
       }
     }
     return null;
+  }
+
+  /** Resolve a (possibly virtual) interface to its physical link port name. */
+  private physicalPortName(nodeId: string, ifaceName: string): string {
+    return this.devices.get(nodeId)?.getIfaceByName(ifaceName)?.parentPort || ifaceName;
   }
 
   private allUsedIps(): Set<string> {

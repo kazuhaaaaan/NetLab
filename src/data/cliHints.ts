@@ -123,6 +123,8 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
         { command: '/ip firewall nat print', description: 'Lihat aturan NAT' },
         { command: '/ip firewall filter add chain=forward protocol=icmp action=drop', description: 'Blokir ping ICMP yang lewat router' },
         { command: '/ip firewall filter print', description: 'Lihat aturan filter' },
+        { command: '/ip firewall mangle add chain=prerouting protocol=icmp action=mark-packet', description: 'Tandai paket (mangle)' },
+        { command: '/ip firewall mangle print', description: 'Lihat aturan mangle' },
       ]
     },
     {
@@ -143,6 +145,28 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       children: [
         { command: '/interface vlan add name=vlan10 vlan-id=10 interface=<port>', description: 'Buat VLAN di atas sebuah port' },
         { command: '/interface vlan print', description: 'Lihat daftar VLAN' },
+      ]
+    },
+    {
+      command: '/interface',
+      description: 'Interface management',
+      children: [
+        { command: '/interface print', description: 'Show all interfaces' },
+        { command: '/interface ethernet print', description: 'Show ethernet interfaces' },
+        { command: '/interface vlan print', description: 'Show VLAN interfaces' },
+        { command: '/interface bridge print', description: 'Show bridge interfaces' },
+        { command: '/interface disable <port>', description: 'Matikan interface (administratively down)' },
+        { command: '/interface enable <port>', description: 'Nyalakan kembali interface' },
+        { command: '/interface wireless set wlan1 ssid=<nama> band=2ghz-b mode=ap-bridge', description: 'Konfigurasi SSID wireless' },
+        { command: '/interface wireless print', description: 'Lihat status wireless' },
+      ]
+    },
+    {
+      command: '/queue simple',
+      description: 'QoS queue (atur bandwidth)',
+      children: [
+        { command: '/queue simple add name=q1 target=<jaringan> max-limit=10M/10M', description: 'Buat antrian bandwidth' },
+        { command: '/queue simple print', description: 'Lihat daftar queue' },
       ]
     },
   ],
@@ -236,10 +260,16 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       description: 'Konfigurasi port',
       children: [
         { command: 'interface Gi0/1', description: 'Masuk ke mode port (misal Gi0/1)' },
+        { command: 'interface Gi0/0.10', description: 'Buat subinterface VLAN 10 (router-on-a-stick)' },
+        { command: 'encapsulation dot1q 10', description: 'Tag VLAN subinterface (setelah interface X.Y)' },
         { command: 'ip address dhcp', description: 'Jadikan port ini DHCP client — minta IP dari server' },
         { command: 'switchport access vlan 10', description: 'Masukkan port ke VLAN 10 (khusus switch)' },
+        { command: 'switchport mode trunk', description: 'Jadikan port trunk — lewat semua VLAN (khusus switch)' },
+        { command: 'no shutdown', description: 'Nyalakan port (default Cisco: shutdown)' },
+        { command: 'shutdown', description: 'Matikan port — putus koneksi secara logis' },
       ]
     },
+    { command: 'network <ip> mask <mask>', description: 'Advertise subnet ke BGP (setelah router bgp <asn>)' },
     { command: 'traceroute <host>', description: 'Telusuri jalur paket hop demi hop' },
     { command: 'show hosts', description: 'Lihat DNS server yang dipakai' },
   ],
@@ -327,7 +357,12 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       description: 'Konfigurasi port',
       children: [
         { command: 'interface GigabitEthernet0/0/1', description: 'Masuk ke mode port (misal GigabitEthernet0/0/1)' },
+        { command: 'interface GigabitEthernet0/0/1.10', description: 'Buat subinterface VLAN 10 (router-on-a-stick)' },
+        { command: 'dot1q termination vid 10', description: 'Tag VLAN subinterface (setelah interface X.Y)' },
         { command: 'ip address dhcp', description: 'Jadikan port ini DHCP client — minta IP dari server' },
+        { command: 'undo shutdown', description: 'Nyalakan port' },
+        { command: 'shutdown', description: 'Matikan port — putus koneksi secara logis' },
+        { command: 'port link-type trunk', description: 'Jadikan port trunk — lewat semua VLAN (khusus switch)' },
       ]
     },
   ],
@@ -437,6 +472,8 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
         { command: 'ip route', description: 'Lihat tabel routing' },
         { command: 'ip route add default via <gateway>', description: 'Tambah gateway default' },
         { command: 'ip link', description: 'Lihat status interface' },
+        { command: 'ip link set <eth0> down', description: 'Matikan interface — putus koneksi secara logis' },
+        { command: 'ip link set <eth0> up', description: 'Nyalakan kembali interface' },
         { command: 'ip neigh', description: 'Lihat cache ARP (siapa yang terhubung)' },
       ]
     },

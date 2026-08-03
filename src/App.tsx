@@ -207,15 +207,19 @@ export default function App() {
   }, []);
 
   /** Dorong SEMUA state konfigurasi CLI sebuah node ke simulation engine
-   *  (IP, rute statis, routing dinamis, BGP, ACL, NAT, VLAN port). */
+   *  (IP, rute statis, routing dinamis, BGP, ACL, NAT, VLAN port,
+   *  interface shutdown/up, subinterface & trunk). */
   const syncNodeToEngine = useCallback((nodeId: string) => {
     const mem = vendorDispatcher.getNodeMemory(nodeId);
+    simEngineRef.current.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
+    simEngineRef.current.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
     simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
     simEngineRef.current.setRouting(nodeId, mem.routing || undefined);
     simEngineRef.current.setBgp(nodeId, mem.bgp || undefined);
     simEngineRef.current.setAcls(nodeId, mem.acls || undefined);
     simEngineRef.current.setNatRules(nodeId, mem.natRules || undefined);
     simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
+    simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
     simEngineRef.current.computeDynamicRoutes();
   }, []);
 
@@ -755,6 +759,16 @@ export default function App() {
           return granted
             ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId }
             : null;
+        },
+        connectivitySimulator: (host: string, vendorId: string) => {
+          if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
+            return `curl: (6) Could not resolve host: ${host}`;
+          }
+          const result = simEngineRef.current.simulatePing(nodeId, host);
+          if (!result.success) {
+            return `curl: (7) Failed to connect to ${host} port 80 after 3000 ms: Connection refused`;
+          }
+          return `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 69\r\n\r\n<html><head><title>Welcome to ${host}</title></head><body><h1>It works!</h1></body></html>`;
         },
       });
 

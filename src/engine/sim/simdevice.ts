@@ -7,6 +7,10 @@ export interface SimIface {
   mac: string;
   ip?: { address: string; prefix: number };
   up: boolean;
+  /** set for VLAN subinterfaces: the physical port this iface rides on */
+  parentPort?: string;
+  /** set for VLAN subinterfaces: the 802.1Q tag */
+  vlanId?: number;
 }
 
 export interface SimRoute {
@@ -32,7 +36,8 @@ export class SimDevice {
   readonly isSwitch: boolean;
 
   private interfaces = new Map<string, SimIface>(); // keyed by portId
-  private nameIndex = new Map<string, string>(); // iface name (case-insensitive) -> portId
+  private virtualIfaces = new Map<string, SimIface>(); // subinterfaces, keyed by name
+  private nameIndex = new Map<string, string>(); // iface name (case-insensitive) -> portId or virt:name
 
   /** ip -> mac */
   readonly arpCache = new Map<string, string>();
@@ -83,14 +88,25 @@ export class SimDevice {
       this.nameIndex.set(p.name.toLowerCase(), p.id);
     }
     for (const id of [...this.interfaces.keys()]) {
-      if (!seen.has(id)) this.interfaces.delete(id);
+      if (!seen.has(id)) {
+        const oldName = this.interfaces.get(id)!.name;
+        this.interfaces.delete(id);
+        const gone = [...this.virtualIfaces.keys()].filter(
+          (v) => this.virtualIfaces.get(v)!.parentPort === oldName
+        );
+        for (const g of gone) {
+          const lower = g.toLowerCase();
+          if (this.nameIndex.get(lower) === `virt:${g}`) this.nameIndex.delete(lower);
+          this.virtualIfaces.delete(g);
+        }
+      }
     }
     this.rebuildConnectedRoutes();
   }
 
   private rebuildConnectedRoutes(): void {
     const connected: SimRoute[] = [];
-    for (const iface of this.interfaces.values()) {
+    const collect = (iface: SimIface) => {
       if (iface.ip && iface.up) {
         connected.push({
           dst: `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`,
@@ -99,7 +115,9 @@ export class SimDevice {
           kind: 'connected',
         });
       }
-    }
+    };
+    for (const iface of this.interfaces.values()) collect(iface);
+    for (const iface of this.virtualIfaces.values()) collect(iface);
     this.routes = [...connected, ...this.staticRoutes, ...this.dynamicRoutes];
   }
 
@@ -110,21 +128,68 @@ export class SimDevice {
   /** Set an IP on an interface by its name (from CLI: /ip address add).
    *  Assigning an IP implicitly brings the interface up. */
   setIpByName(ifaceName: string, cidr: string): boolean {
-    const portId = this.nameIndex.get(ifaceName.toLowerCase());
-    if (!portId) return false;
-    const iface = this.interfaces.get(portId);
+    const key = this.nameIndex.get(ifaceName.toLowerCase());
+    if (!key) return false;
     const parsed = parseCidr(cidr);
-    if (!iface || !parsed) return false;
+    if (!parsed) return false;
+    let iface: SimIface | undefined;
+    if (key.startsWith('virt:')) {
+      iface = this.virtualIfaces.get(key.slice(5));
+    } else {
+      iface = this.interfaces.get(key);
+    }
+    if (!iface) return false;
     iface.ip = parsed;
     iface.up = true;
     this.rebuildConnectedRoutes();
     return true;
   }
 
+  /** Bring an interface up/down (CLI: shutdown / no shutdown). */
+  setIfaceUp(ifaceName: string, up: boolean): boolean {
+    const key = this.nameIndex.get(ifaceName.toLowerCase());
+    if (!key) return false;
+    const iface = key.startsWith('virt:')
+      ? this.virtualIfaces.get(key.slice(5))
+      : this.interfaces.get(key);
+    if (!iface) return false;
+    iface.up = up;
+    this.rebuildConnectedRoutes();
+    return true;
+  }
+
+  /** Register a VLAN subinterface riding on a physical port. */
+  addVirtualIface(name: string, parentPortName: string, vlanId: number, mac: string): void {
+    const lower = name.toLowerCase();
+    if (this.nameIndex.has(lower)) return;
+    const parent = this.interfaces.get(this.nameIndex.get(parentPortName.toLowerCase()) || '');
+    this.virtualIfaces.set(name, {
+      portId: `virt:${name}`,
+      name,
+      mac: mac || parent?.mac || `02:00:00:00:${vlanId}:00`,
+      up: false,
+      parentPort: parentPortName,
+      vlanId,
+    });
+    this.nameIndex.set(lower, `virt:${name}`);
+    this.rebuildConnectedRoutes();
+  }
+
+  /** Virtual subinterface attached to a physical port (used by ARP learning). */
+  getVirtualByParentPort(parentPortName: string): SimIface | null {
+    const parentKey = this.nameIndex.get(parentPortName.toLowerCase());
+    if (!parentKey || parentKey.startsWith('virt:')) return null;
+    for (const v of this.virtualIfaces.values()) {
+      if (v.parentPort === parentPortName) return v;
+    }
+    return null;
+  }
+
   getIfaceByName(ifaceName: string): SimIface | null {
-    const portId = this.nameIndex.get(ifaceName.toLowerCase());
-    if (!portId) return null;
-    return this.interfaces.get(portId) || null;
+    const key = this.nameIndex.get(ifaceName.toLowerCase());
+    if (!key) return null;
+    if (key.startsWith('virt:')) return this.virtualIfaces.get(key.slice(5)) || null;
+    return this.interfaces.get(key) || null;
   }
 
   getIfaceByPortId(portId: string): SimIface | null {
@@ -132,12 +197,12 @@ export class SimDevice {
   }
 
   getInterfaces(): SimIface[] {
-    return [...this.interfaces.values()];
+    return [...this.interfaces.values(), ...this.virtualIfaces.values()];
   }
 
   /** First configured IP address (host view), or null. */
   getIpAddress(): string | null {
-    for (const iface of this.interfaces.values()) {
+    for (const iface of this.getInterfaces()) {
       if (iface.ip) return iface.ip.address;
     }
     return null;
@@ -145,7 +210,7 @@ export class SimDevice {
 
   /** Is `ip` assigned to one of this device's interfaces? */
   hasIp(ip: string): SimIface | null {
-    for (const iface of this.interfaces.values()) {
+    for (const iface of this.getInterfaces()) {
       if (iface.ip && iface.ip.address === ip) return iface;
     }
     return null;
@@ -228,13 +293,13 @@ export class SimDevice {
     // static route — find the interface whose subnet contains the gateway
     const gw = best.gateway;
     if (!gw) return null;
-    for (const iface of this.interfaces.values()) {
+    for (const iface of this.getInterfaces()) {
       if (iface.ip && iface.up && inSameSubnet(iface.ip.address, iface.ip.prefix, gw)) {
         return { gateway: gw, iface: iface.name };
       }
     }
     // fallback: first up interface
-    const firstUp = [...this.interfaces.values()].find((i) => i.up);
+    const firstUp = this.getInterfaces().find((i) => i.up);
     return firstUp ? { gateway: gw, iface: firstUp.name } : null;
   }
 

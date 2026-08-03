@@ -1026,8 +1026,11 @@ export class LinuxDebianVendorAdapter implements IVendorAdapter {
       ].join('\n');
     }
     if (cmdResult.type === 'nslookup') {
+      if (cmdResult.timedOut || !cmdResult.resolved) {
+        return ';; connection timed out; no servers could be reached';
+      }
       const host = cmdResult.host || 'google.com';
-      return `Server:\t\t8.8.8.8\nAddress:\t8.8.8.8#53\n\nNon-authoritative answer:\nName:\t${host}\nAddress: 142.250.66.46`;
+      return `Server:\t\t${cmdResult.server || '8.8.8.8'}\nAddress:\t${cmdResult.server || '8.8.8.8'}#53\n\nNon-authoritative answer:\nName:\t${host}\nAddress: ${cmdResult.resolved}`;
     }
     if (cmdResult.type === 'http_get') {
       return 'HTTP/1.1 200 OK\nContent-Type: text/html; charset=utf-8\nServer: nginx/1.22.1\n\n<!DOCTYPE html><html><head><title>OK</title></head><body>Connection OK</body></html>';
@@ -1189,6 +1192,12 @@ export class VendorDispatcher {
           rip: { enabled: false, networks: [] },
           eigrp: { enabled: false, asn: 0, networks: [] },
         },
+        shutdownIfaces: [],
+        subinterfaces: [],
+        trunkPorts: [],
+        queues: [],
+        mangleRules: [],
+        wireless: {},
         currentStaticDst: '',
         currentDhcpPool: '',
         currentProto: '',
@@ -1241,6 +1250,12 @@ export class VendorDispatcher {
       if (typeof mem.currentDhcpPool === 'string') target.currentDhcpPool = mem.currentDhcpPool;
       if (typeof mem.currentIface === 'string') target.currentIface = mem.currentIface;
       if (typeof mem.currentProto === 'string') target.currentProto = mem.currentProto;
+      if (Array.isArray(mem.shutdownIfaces)) target.shutdownIfaces = mem.shutdownIfaces;
+      if (Array.isArray(mem.subinterfaces)) target.subinterfaces = mem.subinterfaces;
+      if (Array.isArray(mem.trunkPorts)) target.trunkPorts = mem.trunkPorts;
+      if (Array.isArray(mem.queues)) target.queues = mem.queues;
+      if (Array.isArray(mem.mangleRules)) target.mangleRules = mem.mangleRules;
+      if (mem.wireless && typeof mem.wireless === 'object') target.wireless = { ...target.wireless, ...mem.wireless };
     }
   }
 
@@ -1266,8 +1281,51 @@ export class VendorDispatcher {
     } else if (/^interface\s+\S+/i.test(rawInput.trim())) {
       // IOS-style: "interface Gi0/0" (Cisco, Aruba, Huawei) — sets the config context
       const ifaceRaw = rawInput.trim().replace(/^interface\s+/i, '').split(/\s+/)[0];
-      mem.currentIface = resolveIfaceName(context?.ports, ifaceRaw);
+      const isSubinterface =
+        ifaceRaw.includes('.') &&
+        !(context?.ports || []).some((p: any) => p.name.toLowerCase() === ifaceRaw.toLowerCase()) &&
+        (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei');
+      if (isSubinterface) {
+        // VLAN subinterface (router-on-a-stick): "interface Gi0/0.10"
+        const dot = ifaceRaw.lastIndexOf('.');
+        const parent = ifaceRaw.slice(0, dot);
+        const vlanId = parseInt(ifaceRaw.slice(dot + 1), 10) || 1;
+        upsertSubinterface(mem, ifaceRaw, parent, vlanId);
+        mem.currentIface = ifaceRaw;
+        cmdResult = { raw: '' };
+      } else {
+        mem.currentIface = resolveIfaceName(context?.ports, ifaceRaw);
+        cmdResult = { raw: '' };
+      }
+    } else if (/^encapsulation\s+dot1q\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && /\.\d+$/.test(mem.currentIface) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco subinterface: "encapsulation dot1q 10"
+      const vlanId = parseInt(rawInput.trim().match(/^encapsulation\s+dot1q\s+(\d+)/i)?.[1] || '1', 10);
+      upsertSubinterface(mem, mem.currentIface, mem.currentIface.replace(/\.\d+$/, ''), vlanId);
       cmdResult = { raw: '' };
+    } else if (/^dot1q\s+termination\s+vid\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && /\.\d+$/.test(mem.currentIface) && vendorId === 'huawei') {
+      // Huawei subinterface: "dot1q termination vid 10"
+      const vlanId = parseInt(rawInput.trim().match(/^dot1q\s+termination\s+vid\s+(\d+)/i)?.[1] || '1', 10);
+      upsertSubinterface(mem, mem.currentIface, mem.currentIface.replace(/\.\d+$/, ''), vlanId);
+      cmdResult = { raw: '' };
+    } else if (/^(no\s+)?shutdown$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+      // Cisco/Huawei: "shutdown" / "no shutdown" (interface view) — administratively down/up
+      const down = !/^no\s+shutdown/i.test(rawInput.trim());
+      setShutdownState(mem, mem.currentIface, down);
+      cmdResult = { raw: '' };
+    } else if (/^\/interface\s+(disable|enable)\s+(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/interface disable ether1" / "/interface enable ether1"
+      const down = /^\/interface\s+disable\s+/i.test(rawInput.trim());
+      const iface = resolveIfaceName(context?.ports, rawInput.trim().split(/\s+/).pop()) || '';
+      setShutdownState(mem, iface, down);
+      cmdResult = { raw: '' };
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^ip\s+link\s+set\s+(\S+)\s+(up|down)\s*$/i.test(rawInput.trim())) {
+      // Linux: "ip link set eth0 up|down"
+      const m = rawInput.trim().match(/^ip\s+link\s+set\s+(\S+)\s+(up|down)\s*$/i);
+      if (m) {
+        const iface = resolveIfaceName(context?.ports, m[1]) || m[1];
+        setShutdownState(mem, iface, m[2].toLowerCase() === 'down');
+        cmdResult = { raw: '' };
+      }
     } else if (/^edit\s+\S+/i.test(rawInput.trim())) {
       // Fortinet: "edit port1" — sets the config context
       const ifaceRaw = rawInput.trim().replace(/^edit\s+/i, '').split(/\s+/)[0];
@@ -1397,6 +1455,8 @@ export class VendorDispatcher {
       const iface = raw.match(/interface=(\S+)/i)?.[1];
       if (name && id) {
         mem.vlans.push({ id, name, iface: resolveIfaceName(context?.ports, iface) || iface });
+        // VLAN interfaces act as subinterfaces on their parent port (router-on-a-stick)
+        upsertSubinterface(mem, name, resolveIfaceName(context?.ports, iface) || iface, parseInt(id, 10));
         cmdResult = { raw: '' };
       } else {
         cmdResult = { raw: '% Usage: /interface vlan add name=<nama> vlan-id=<id> interface=<port>' };
@@ -1599,7 +1659,16 @@ export class VendorDispatcher {
       if (proto === 'eigrp' && asn) mem.routing.eigrp.asn = parseInt(asn, 10);
       mem.currentProto = proto;
       cmdResult = { raw: '' };
-    } else if (/^network\s+(\d+\.\d+\.\d+\.\d+)(?:\s+(\d+\.\d+\.\d+\.\d+))?(?:\s+area\s+\S+)?$/i.test(rawInput.trim()) && mem.currentProto && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+    } else if (/^network\s+(\d+\.\d+\.\d+\.\d+)\s+mask\s+(\d+\.\d+\.\d+\.\d+)$/i.test(rawInput.trim()) && mem.currentProto === 'bgp' && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco BGP: "network 10.0.0.0 mask 255.255.255.0" (router bgp <asn> mode)
+      const m = rawInput.trim().match(/^network\s+(\d+\.\d+\.\d+\.\d+)\s+mask\s+(\d+\.\d+\.\d+\.\d+)$/i);
+      if (m) {
+        if (!mem.bgp.networks) mem.bgp.networks = [];
+        const entry = `${m[1]} ${m[2]}`;
+        if (!mem.bgp.networks.includes(entry)) mem.bgp.networks.push(entry);
+        cmdResult = { raw: '' };
+      }
+    } else if (/^network\s+(\d+\.\d+\.\d+\.\d+)(?:\s+(\d+\.\d+\.\d+\.\d+))?(?:\s+area\s+\S+)?$/i.test(rawInput.trim()) && mem.currentProto && mem.currentProto !== 'bgp' && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
       // Cisco/Huawei: "network 10.0.0.0 0.0.0.255 area 0" / "network 192.168.0.0" (RIP)
       const m = rawInput.trim().match(/^network\s+(\d+\.\d+\.\d+\.\d+)(?:\s+(\d+\.\d+\.\d+\.\d+))?/i);
       if (m) {
@@ -1655,12 +1724,84 @@ export class VendorDispatcher {
       // Cisco switch: "switchport mode access" / "switchport access vlan 10"
       const vlan = rawInput.trim().match(/access\s+vlan\s+(\d+)/i)?.[1];
       if (vlan) mem.portVlans[mem.currentIface] = parseInt(vlan, 10);
+      if (rawInput.trim().match(/mode\s+access/i)) {
+        mem.trunkPorts = (mem.trunkPorts || []).filter((t: string) => t !== mem.currentIface);
+      }
+      cmdResult = { raw: '' };
+    } else if (/^switchport\s+(mode\s+trunk|trunk\s+allowed\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco switch: "switchport mode trunk" — port carries every VLAN
+      pushTrunk(mem, mem.currentIface);
       cmdResult = { raw: '' };
     } else if (/^port\s+(link-type\s+access|default\s+vlan\s+\d+)$/i.test(rawInput.trim()) && mem.currentIface && vendorId === 'huawei') {
       // Huawei switch: "port link-type access" / "port default vlan 10"
       const vlan = rawInput.trim().match(/default\s+vlan\s+(\d+)/i)?.[1];
       if (vlan) mem.portVlans[mem.currentIface] = parseInt(vlan, 10);
+      if (rawInput.trim().match(/link-type\s+access/i)) {
+        mem.trunkPorts = (mem.trunkPorts || []).filter((t: string) => t !== mem.currentIface);
+      }
       cmdResult = { raw: '' };
+    } else if (/^port\s+(link-type\s+trunk|trunk\s+allow-pass\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && vendorId === 'huawei') {
+      // Huawei switch: "port link-type trunk" / "port trunk allow-pass vlan 10 20"
+      pushTrunk(mem, mem.currentIface);
+      cmdResult = { raw: '' };
+    } else if (/^\/interface\s+bridge\s+port\s+add\s+.*interface=(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/interface bridge port add bridge=bridge1 interface=etherX" — bridge port is trunk-like
+      const iface = rawInput.trim().match(/interface=(\S+)/i)?.[1];
+      if (iface) pushTrunk(mem, resolveIfaceName(context?.ports, iface) || iface);
+      cmdResult = { raw: '' };
+    } else if (/^\/interface\s+wireless\s+(print|set\s+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/interface wireless set wlan1 ssid=NetLab band=2ghz-b mode=ap-bridge"
+      const raw = rawInput.trim();
+      if (/^\/interface\s+wireless\s+set\s+/i.test(raw)) {
+        const iface = raw.match(/set\s+(\S+)/i)?.[1];
+        if (iface) {
+          if (!mem.wireless) mem.wireless = {};
+          const w = { ...(mem.wireless[iface] || {}) };
+          const ssid = raw.match(/ssid=(\S+)/i)?.[1];
+          const band = raw.match(/band=(\S+)/i)?.[1];
+          const mode = raw.match(/mode=(\S+)/i)?.[1];
+          if (ssid) w.ssid = ssid;
+          if (band) w.band = band;
+          if (mode) w.mode = mode;
+          mem.wireless[iface] = w;
+          cmdResult = { raw: '' };
+        } else {
+          cmdResult = { raw: '% Usage: /interface wireless set <interface> ssid=<nama>' };
+        }
+      } else {
+        cmdResult = { type: 'wireless_print', wireless: mem.wireless };
+      }
+    } else if (/^\/queue\s+simple\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/queue simple add name=q1 target=192.168.1.0/24 max-limit=10M/10M"
+      const raw = rawInput.trim();
+      const name = raw.match(/name=(\S+)/i)?.[1];
+      if (name) {
+        if (!mem.queues) mem.queues = [];
+        mem.queues.push({
+          name,
+          target: raw.match(/target=(\S+)/i)?.[1] || '',
+          maxLimit: raw.match(/max-limit=(\S+)/i)?.[1] || '',
+        });
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /queue simple add name=<nama> target=<jaringan> max-limit=<limit>' };
+      }
+    } else if (/^\/queue\s+simple\s+print/i.test(rawInput.trim()) || (normalized.target === 'queue_simple' && normalized.action === 'print')) {
+      cmdResult = { type: 'queue_print', queues: mem.queues };
+    } else if (/^\/ip\s+firewall\s+mangle\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ip firewall mangle add chain=prerouting protocol=icmp action=change-mss new-mss=1360"
+      const raw = rawInput.trim();
+      if (!mem.mangleRules) mem.mangleRules = [];
+      mem.mangleRules.push({
+        chain: raw.match(/chain=(\S+)/i)?.[1] || 'prerouting',
+        protocol: raw.match(/protocol=(\S+)/i)?.[1] || '',
+        srcAddress: raw.match(/src-address=(\S+)/i)?.[1] || '',
+        dstAddress: raw.match(/dst-address=(\S+)/i)?.[1] || '',
+        action: raw.match(/action=(\S+)/i)?.[1] || 'mark-packet',
+      });
+      cmdResult = { raw: '' };
+    } else if (/^\/ip\s+firewall\s+mangle\s+print/i.test(rawInput.trim()) || (normalized.target === 'ip_firewall_mangle' && normalized.action === 'print')) {
+      cmdResult = { type: 'mangle_print', rules: mem.mangleRules };
     } else if (/^\/routing\s+(ospf|rip|bgp)\s+(instance|network)?\s*(print)?/i.test(rawInput.trim()) && vendorId === 'mikrotik' && /print/i.test(rawInput.trim())) {
       cmdResult = { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
     } else if (/^show\s+ip\s+protocols/i.test(rawInput.trim()) || /^display\s+ospf\s+peer/i.test(rawInput.trim())) {
@@ -1728,6 +1869,7 @@ export class VendorDispatcher {
       const { as, routerId } = normalized.payload as any;
       if (as) mem.bgp.asn = as;
       if (routerId) mem.bgp.routerId = routerId;
+      mem.currentProto = 'bgp';
       cmdResult = { raw: '' };
     } else if (normalized.action === 'bgp_peer_add') {
       const { remoteAs, remoteAddr, name } = normalized.payload as any;
@@ -1775,6 +1917,22 @@ export class VendorDispatcher {
     } else if (normalized.action === 'traceroute' || normalized.action === 'tracert' || (normalized.target === 'tool' && (normalized.payload as any)?.ast?.subCommands?.[0]?.toLowerCase() === 'traceroute')) {
       const host = rawInput.trim().split(/\s+/).pop() || '';
       cmdResult = { type: 'traceroute', host, target: host };
+    } else if (normalized.action === 'nslookup' && (vendorId === 'linux' || vendorId === 'openwrt')) {
+      // Linux: "nslookup <domain>" — resolves only when a DNS server is configured
+      const host = (normalized.payload as any)?.host || rawInput.trim().split(/\s+/).pop() || '';
+      const servers = mem.dnsServers || [];
+      if (servers.length === 0) {
+        cmdResult = { type: 'nslookup', host, server: '', resolved: null, timedOut: true };
+      } else {
+        cmdResult = { type: 'nslookup', host, server: servers[0], resolved: fakeDnsIp(host), timedOut: false };
+      }
+    } else if (normalized.action === 'http_get' && (vendorId === 'linux' || vendorId === 'openwrt')) {
+      // Linux: "curl http://192.168.1.10" / "curl <ip>" — checks real connectivity
+      let url = (normalized.payload as any)?.url || rawInput.trim().split(/\s+/).pop() || '';
+      url = url.replace(/^["']|["']$/g, '');
+      const m = url.match(/^https?:\/\/([^/:]+)/i) || url.match(/^(\d+\.\d+\.\d+\.\d+)/);
+      const host = m ? m[1] : '';
+      cmdResult = { type: 'http_get', host };
     } else if (normalized.action === 'show_version' || normalized.action === 'display_version' || normalized.action === 'resource' || normalized.action === 'version' || (normalized.target === 'system_resource' && normalized.action === 'print')) {
       cmdResult = { type: 'show_version', model: mem.modelLabel, hostname: mem.hostname || context?.name };
     } else if (normalized.action === 'configure_terminal' || normalized.action === 'configure' || normalized.action === 'system_view') {
@@ -1830,6 +1988,12 @@ export class VendorDispatcher {
       typeof context.tracerouteSimulator === 'function'
     ) {
       response = context.tracerouteSimulator(cmdResult.host || '', vendorId);
+    }
+    if (
+      cmdResult?.type === 'http_get' &&
+      typeof context.connectivitySimulator === 'function'
+    ) {
+      response = context.connectivitySimulator(cmdResult.host || '', vendorId);
     }
 
     return response;
@@ -1907,6 +2071,37 @@ function formatExtended(cmdResult: any): string {
   }
   if (cmdResult.type === 'identity_print') {
     return `name: ${cmdResult.name || 'device'}`;
+  }
+  if (cmdResult.type === 'nslookup') {
+    if (cmdResult.timedOut || !cmdResult.resolved) {
+      return `;; connection timed out; no servers could be reached`;
+    }
+    return `Server:         ${cmdResult.server}\nAddress:        ${cmdResult.server}#53\n\nNon-authoritative answer:\nName:    ${cmdResult.host}\nAddress: ${cmdResult.resolved}`;
+  }
+  if (cmdResult.type === 'queue_print') {
+    const queues = cmdResult.queues || [];
+    if (queues.length === 0) return 'Flags: X - disabled, I - invalid\n #    NAME       TARGET            MAX-LIMIT\n -- no entries --';
+    const rows = queues.map((q: any, i: number) =>
+      ` ${i} ${(q.name || '').padEnd(10)} ${(q.target || '').padEnd(17)} ${q.maxLimit || ''}`
+    ).join('\n');
+    return 'Flags: X - disabled, I - invalid\n #    NAME       TARGET            MAX-LIMIT\n' + rows;
+  }
+  if (cmdResult.type === 'mangle_print') {
+    const rules = cmdResult.rules || [];
+    if (rules.length === 0) return 'Flags: X - disabled, I - invalid\n #    CHAIN         ACTION       PROTOCOL   SRC-ADDRESS\n -- no entries --';
+    const rows = rules.map((r: any, i: number) =>
+      ` ${i} ${(r.chain || '').padEnd(14)} ${(r.action || '').padEnd(12)} ${(r.protocol || '').padEnd(10)} ${r.srcAddress || ''}`
+    ).join('\n');
+    return 'Flags: X - disabled, I - invalid\n #    CHAIN         ACTION       PROTOCOL   SRC-ADDRESS\n' + rows;
+  }
+  if (cmdResult.type === 'wireless_print') {
+    const wireless = cmdResult.wireless || {};
+    const entries = Object.entries(wireless);
+    if (entries.length === 0) return 'Flags: X - disabled, R - running\n #    NAME       SSID               BAND         MODE\n -- no entries --';
+    const rows = entries.map(([name, w]: [string, any], i: number) =>
+      ` ${i} R ${name.padEnd(11)} ${(w.ssid || '').padEnd(18)} ${(w.band || '2ghz-G').padEnd(13)} ${w.mode || 'ap-bridge'}`
+    ).join('\n');
+    return 'Flags: X - disabled, R - running\n #    NAME       SSID               BAND         MODE\n' + rows;
   }
   return '';
 }
@@ -2006,6 +2201,45 @@ function maskedPair(entry: string): string {
   return `${ip} ${mask}`;
 }
 
+/** Register or update a VLAN subinterface entry (router-on-a-stick). */
+function upsertSubinterface(mem: any, name: string, parentPort: string, vlanId: number): void {
+  if (!mem.subinterfaces) mem.subinterfaces = [];
+  const existing = mem.subinterfaces.find((s: any) => s.name === name);
+  if (existing) {
+    existing.parentPort = parentPort;
+    existing.vlanId = vlanId;
+  } else {
+    mem.subinterfaces.push({ name, parentPort, vlanId });
+  }
+}
+
+/** Administratively bring an interface down (shutdown) or up (no shutdown). */
+function setShutdownState(mem: any, ifaceName: string, down: boolean): void {
+  if (!ifaceName) return;
+  if (!mem.shutdownIfaces) mem.shutdownIfaces = [];
+  if (down) {
+    if (!mem.shutdownIfaces.includes(ifaceName)) mem.shutdownIfaces.push(ifaceName);
+  } else {
+    mem.shutdownIfaces = mem.shutdownIfaces.filter((n: string) => n !== ifaceName);
+  }
+}
+
+/** Mark a port as a trunk (carries all VLANs). */
+function pushTrunk(mem: any, ifaceName: string): void {
+  if (!ifaceName) return;
+  if (!mem.trunkPorts) mem.trunkPorts = [];
+  if (!mem.trunkPorts.includes(ifaceName)) mem.trunkPorts.push(ifaceName);
+}
+
+/** Deterministic fake DNS answer (used by nslookup when a DNS server is set). */
+function fakeDnsIp(domain: string): string {
+  let h = 5381;
+  for (let i = 0; i < domain.length; i++) {
+    h = ((h << 5) + h + domain.charCodeAt(i)) >>> 0;
+  }
+  return `10.${(h >>> 16) % 240 + 8}.${(h >>> 8) % 240 + 8}.${h % 240 + 8}`;
+}
+
 function generateRunningConfig(context: any, mem: any, vendor: string): string {
   const ports = mergeIps(context?.ports || [], mem.configuredIps);
   const lines: string[] = [];
@@ -2024,6 +2258,21 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     });
     mem.routes.forEach((r: any) => {
       lines.push(`/ip route add dst-address=${r.dst} gateway=${r.gateway}`);
+    });
+    (mem.shutdownIfaces || []).forEach((name: string) => {
+      lines.push(`/interface disable ${name}`);
+    });
+    (mem.subinterfaces || []).forEach((s: any) => {
+      lines.push(`/interface vlan add name=${s.name} vlan-id=${s.vlanId} interface=${s.parentPort}`);
+    });
+    (mem.trunkPorts || []).forEach((name: string) => {
+      lines.push(`/interface bridge port add bridge=bridge1 interface=${name}`);
+    });
+    (mem.queues || []).forEach((q: any) => {
+      lines.push(`/queue simple add name=${q.name} target=${q.target || ''} max-limit=${q.maxLimit || ''}`);
+    });
+    Object.entries(mem.wireless || {}).forEach(([name, w]: [string, any]) => {
+      lines.push(`/interface wireless set ${name} ssid=${w.ssid || ''} band=${w.band || '2ghz-G'} mode=${w.mode || 'ap-bridge'}`);
     });
     mem.dhcpPools.forEach((p: any) => {
       if (p.range) lines.push(`/ip pool add name=${p.name} ranges=${p.range}`);
@@ -2099,7 +2348,16 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     withIp.forEach((p: any) => {
       lines.push(`interface ${p.name}`);
       lines.push(` ip address ${maskedPair(p.ipAddress)}`);
-      lines.push(` ${p.status === 'up' ? 'no shutdown' : 'shutdown'}`);
+      lines.push(` ${(mem.shutdownIfaces || []).includes(p.name) ? 'shutdown' : 'no shutdown'}`);
+    });
+    (mem.subinterfaces || []).forEach((s: any) => {
+      lines.push(`interface ${s.name}`);
+      lines.push(` encapsulation dot1q ${s.vlanId}`);
+      lines.push(` no shutdown`);
+    });
+    (mem.trunkPorts || []).forEach((name: string) => {
+      lines.push(`interface ${name}`);
+      lines.push(` switchport mode trunk`);
     });
     mem.routes.forEach((r: any) => {
       lines.push(`ip route ${r.dst} ${r.gateway}`);
