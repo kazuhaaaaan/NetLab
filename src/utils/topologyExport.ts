@@ -160,7 +160,7 @@ export function buildSvg(project: LabProject, theme: 'dark' | 'light'): string {
       return `
         <g>
           <rect x="${rx}" y="${ry}" width="${NODE_W * scale}" height="${NODE_H * scale}" rx="8" fill="${nodeBg}" stroke="${nodeBorder}" stroke-width="1"/>
-          <g transform="translate(${nx} ${ny - 10 * scale})" opacity="0.95">${deviceGlyph(n.deviceType)}</g>
+          <g transform="translate(${nx} ${ny - 10 * scale}) scale(${scale})" opacity="0.95">${deviceGlyph(n.deviceType)}</g>
           <text x="${nx}" y="${ny + 8 * scale}" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="${11 * scale}" font-weight="600" fill="${textPrimary}">${escapeXml(n.name)}</text>
           <text x="${nx}" y="${ny + 21 * scale}" text-anchor="middle" font-family="ui-monospace, monospace" font-size="${8.5 * scale}" fill="${textSecondary}">${escapeXml(n.model)}</text>
         </g>`;
