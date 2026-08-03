@@ -91,6 +91,16 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
         target = 'interface_wireless';
         action = (ast.subCommands[2] || s1 || 'print').toLowerCase();
       }
+      if (isPrefix(action, 'static') && target === 'ip_dns') {
+        // "/ip dns static <verb>" — verb adalah sub-command ke-2 (['dns','static','print'])
+        target = 'ip_dns_static';
+        action = s1 || 'print';
+      }
+      if (isPrefix(action, 'service') && target === 'ip') {
+        // "/ip service <verb>" — verb adalah sub-command ke-2 (['service','print'])
+        target = 'ip_service';
+        action = s1 || 'print';
+      }
     }
 
     if (action === 'add' && target === 'ip_address') {
@@ -920,6 +930,7 @@ export class OpenwrtVendorAdapter implements IVendorAdapter {
     if (isPrefix(action, 'ifconfig') || isPrefix(action, 'ifc')) return { action: 'ifconfig', target: 'openwrt', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'openwrt', payload: { raw: rawInput, ast, host: subs[0] } };
     if (isPrefix(action, 'logread')) return { action: 'logread', target: 'openwrt', payload: { raw: rawInput, ast } };
+    if (isPrefix(action.replace(/^\//, ''), 'export')) return { action: 'export', target: 'openwrt', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'cat')) return { action: 'cat_file', target: 'openwrt', payload: { raw: rawInput, ast, path: subs.join(' ') } };
     if (isPrefix(action, 'reboot')) return { action: 'reboot', target: 'openwrt', payload: { raw: rawInput, ast } };
     return { action: action || 'EXEC_COMMAND', target: 'openwrt', payload: { raw: rawInput, ast } };
@@ -1010,6 +1021,7 @@ export class LinuxDebianVendorAdapter implements IVendorAdapter {
     if (isPrefix(action, 'apt') || isPrefix(action, 'apt-get')) return { action: 'apt', target: 'linux', payload: { raw: rawInput, ast, cmd: subs.join(' ') } };
     if (isPrefix(action, 'cat')) return { action: 'cat_file', target: 'linux', payload: { raw: rawInput, ast, path: subs.join(' ') } };
     if (isPrefix(action, 'hostname')) return { action: 'hostname', target: 'linux', payload: { raw: rawInput, ast } };
+    if (isPrefix(action.replace(/^\//, ''), 'export')) return { action: 'export', target: 'linux', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'uname')) return { action: 'uname', target: 'linux', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'uptime')) return { action: 'uptime', target: 'linux', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'df')) return { action: 'df', target: 'linux', payload: { raw: rawInput, ast } };
@@ -1107,7 +1119,9 @@ export class LinuxDebianVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'nslookup') {
       if (cmdResult.timedOut || !cmdResult.resolved) {
-        return ';; connection timed out; no servers could be reached';
+        return cmdResult.nxdomain
+          ? `;; server can't find ${cmdResult.host}: NXDOMAIN`
+          : ';; connection timed out; no servers could be reached';
       }
       const host = cmdResult.host || 'google.com';
       return `Server:\t\t${cmdResult.server || '8.8.8.8'}\nAddress:\t${cmdResult.server || '8.8.8.8'}#53\n\nNon-authoritative answer:\nName:\t${host}\nAddress: ${cmdResult.resolved}`;
@@ -1262,6 +1276,8 @@ export class VendorDispatcher {
         modelLabel: '',
         vlans: [],
         dnsServers: [],
+        dnsRecords: [],
+        webServer: { enabled: true, port: 80, content: '' },
         dhcpPools: [],
         dhcpClients: [],
         natRules: [],
@@ -1314,6 +1330,8 @@ export class VendorDispatcher {
       if (typeof mem.modelLabel === 'string') target.modelLabel = mem.modelLabel;
       if (Array.isArray(mem.vlans)) target.vlans = mem.vlans;
       if (Array.isArray(mem.dnsServers)) target.dnsServers = mem.dnsServers;
+      if (Array.isArray(mem.dnsRecords)) target.dnsRecords = mem.dnsRecords;
+      if (mem.webServer && typeof mem.webServer === 'object') target.webServer = { ...target.webServer, ...mem.webServer };
       if (Array.isArray(mem.dhcpPools)) target.dhcpPools = mem.dhcpPools;
       if (Array.isArray(mem.dhcpClients)) target.dhcpClients = mem.dhcpClients;
       if (Array.isArray(mem.natRules)) target.natRules = mem.natRules;
@@ -1580,6 +1598,54 @@ export class VendorDispatcher {
         mem.dnsServers = m[1].split(',').map((s: string) => s.trim()).filter(Boolean);
         cmdResult = { raw: '' };
       }
+    } else if (/^\/ip\s+dns\s+static\s+add\s+name=(\S+)\s+address=(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ip dns static add name=site.com address=203.0.113.1"
+      const m = rawInput.trim().match(/^\/ip\s+dns\s+static\s+add\s+name=(\S+)\s+address=(\S+)/i);
+      if (m) {
+        mem.dnsRecords.push({ name: m[1].toLowerCase(), address: m[2] });
+        cmdResult = { raw: '' };
+      }
+    } else if (/^\/ip\s+dns\s+static\s+print/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      cmdResult = { type: 'dns_static_print', records: mem.dnsRecords };
+    } else if (/^\/ip\s+service\s+print/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      cmdResult = { type: 'service_print', web: mem.webServer };
+    } else if (/^\/ip\s+service\s+set\s+www\b/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ip service set www disabled=no|yes"
+      const raw = rawInput.trim();
+      const disabled = /disabled=yes/i.test(raw) ? true : /disabled=no/i.test(raw) ? false : undefined;
+      const enabled = /enabled=no/i.test(raw) ? false : /enabled=yes/i.test(raw) ? true : disabled === undefined ? undefined : !disabled;
+      if (enabled !== undefined) {
+        mem.webServer = { ...(mem.webServer || { enabled: true, port: 80, content: '' }), enabled };
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /ip service set www disabled=no|yes' };
+      }
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^systemctl\s+(start|stop|restart)\s+(nginx|apache2|apache|httpd)\b/i.test(rawInput.trim())) {
+      // Linux: "systemctl start|stop|restart nginx|apache2"
+      const m = rawInput.trim().match(/^systemctl\s+(start|stop|restart)\s+(nginx|apache2|apache|httpd)\b/i);
+      mem.webServer = { ...(mem.webServer || { enabled: true, port: 80, content: '' }), enabled: m![1] !== 'stop' };
+      cmdResult = { raw: '' };
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^service\s+(nginx|apache2|apache|httpd)\s+(start|stop|restart)\b/i.test(rawInput.trim())) {
+      const m = rawInput.trim().match(/^service\s+(nginx|apache2|apache|httpd)\s+(start|stop|restart)\b/i);
+      mem.webServer = { ...(mem.webServer || { enabled: true, port: 80, content: '' }), enabled: m![1] !== 'stop' };
+      cmdResult = { raw: '' };
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^echo\s+"([^"]*)"\s*>\s*\/var\/www\/html\/index\.html/i.test(rawInput.trim())) {
+      // Linux: echo "konten situs" > /var/www/html/index.html
+      const m = rawInput.trim().match(/^echo\s+"([^"]*)"\s*>\s*\/var\/www\/html\/index\.html/i);
+      if (m) {
+        mem.webServer = { ...(mem.webServer || { enabled: true, port: 80, content: '' }), content: m[1] };
+        cmdResult = { raw: '' };
+      }
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^echo\s+["']?nameserver\s+(\d+\.\d+\.\d+\.\d+)\s*["']?\s*>\s*\/etc\/resolv\.conf/i.test(rawInput.trim())) {
+      // Linux: echo "nameserver 203.0.113.1" > /etc/resolv.conf
+      const m = rawInput.trim().match(/^echo\s+["']?nameserver\s+(\d+\.\d+\.\d+\.\d+)\s*["']?\s*>\s*\/etc\/resolv\.conf/i);
+      if (m) {
+        mem.dnsServers = [m[1]];
+        cmdResult = { raw: '' };
+      }
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^cat\s+\/etc\/resolv\.conf/i.test(rawInput.trim())) {
+      const servers = mem.dnsServers || [];
+      cmdResult = { raw: servers.length > 0 ? servers.map((s: string) => `nameserver ${s}`).join('\n') : '# empty (no DNS servers configured)' };
     } else if (/^ip\s+name-server\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       const m = rawInput.trim().match(/^ip\s+name-server\s+(\S+)/i);
       if (m) {
@@ -2031,13 +2097,20 @@ export class VendorDispatcher {
       const host = rawInput.trim().split(/\s+/).pop() || '';
       cmdResult = { type: 'traceroute', host, target: host };
     } else if (normalized.action === 'nslookup' && (vendorId === 'linux' || vendorId === 'openwrt')) {
-      // Linux: "nslookup <domain>" — resolves only when a DNS server is configured
+      // Linux: "nslookup <domain>" — resolves via the engine's DNS (static
+      // records on the configured DNS servers), falls back to the old fake
+      // resolver when no engine callback is wired up.
       const host = (normalized.payload as any)?.host || rawInput.trim().split(/\s+/).pop() || '';
-      const servers = mem.dnsServers || [];
-      if (servers.length === 0) {
-        cmdResult = { type: 'nslookup', host, server: '', resolved: null, timedOut: true };
+      if (typeof context.dnsResolver === 'function') {
+        const r = context.dnsResolver(host);
+        cmdResult = { type: 'nslookup', host, server: r.server || '', resolved: r.resolved, timedOut: !!r.timedOut, nxdomain: !!r.nxdomain };
       } else {
-        cmdResult = { type: 'nslookup', host, server: servers[0], resolved: fakeDnsIp(host), timedOut: false };
+        const servers = mem.dnsServers || [];
+        if (servers.length === 0) {
+          cmdResult = { type: 'nslookup', host, server: '', resolved: null, timedOut: true };
+        } else {
+          cmdResult = { type: 'nslookup', host, server: servers[0], resolved: fakeDnsIp(host), timedOut: false };
+        }
       }
     } else if (normalized.action === 'http_get' && (vendorId === 'linux' || vendorId === 'openwrt')) {
       // Linux: "curl http://192.168.1.10" / "curl <ip>" — checks real connectivity
@@ -2073,6 +2146,10 @@ export class VendorDispatcher {
       cmdResult = { type: 'dns_print', servers: mem.dnsServers };
     } else if (normalized.action === 'nat_print' || (normalized.target === 'ip_firewall_nat' && normalized.action === 'print')) {
       cmdResult = { type: 'nat_print', rules: mem.natRules };
+    } else if ((normalized.target === 'ip_dns_static' && normalized.action === 'print') || normalized.action === 'dns_static_print') {
+      cmdResult = { type: 'dns_static_print', records: mem.dnsRecords };
+    } else if (normalized.target === 'ip_service' && normalized.action === 'print') {
+      cmdResult = { type: 'service_print', web: mem.webServer };
     } else if (normalized.action === 'vlan_print' || normalized.action === 'interface_vlan_print' || (normalized.action === 'print' && normalized.target === 'vlan')) {
       cmdResult = { type: 'vlan_print', vlans: mem.vlans };
     } else if (normalized.action === 'identity_print' || normalized.action === 'hostname_print' || normalized.action === 'show_hostname' || normalized.action === 'hostname' || (normalized.target === 'system_identity' && normalized.action === 'print')) {
@@ -2189,9 +2266,29 @@ function formatExtended(cmdResult: any): string {
   }
   if (cmdResult.type === 'nslookup') {
     if (cmdResult.timedOut || !cmdResult.resolved) {
-      return `;; connection timed out; no servers could be reached`;
+      return cmdResult.nxdomain
+        ? `;; server can't find ${cmdResult.host}: NXDOMAIN`
+        : `;; connection timed out; no servers could be reached`;
     }
     return `Server:         ${cmdResult.server}\nAddress:        ${cmdResult.server}#53\n\nNon-authoritative answer:\nName:    ${cmdResult.host}\nAddress: ${cmdResult.resolved}`;
+  }
+  if (cmdResult.type === 'dns_static_print') {
+    const records = cmdResult.records || [];
+    const header = 'Flags: X - disabled, D - dynamic\n #   NAME            ADDRESS\n';
+    if (records.length === 0) return header + ' -- no entries --';
+    const rows = records.map((r: any, i: number) => ` ${i}   ${r.name.padEnd(16)} ${r.address}`).join('\n');
+    return header + rows;
+  }
+  if (cmdResult.type === 'service_print') {
+    const web = cmdResult.web || {};
+    const wwwState = web.enabled === false ? 'disabled' : 'enabled';
+    const rows = [
+      ' 0   winbox        8291    -                -                        -',
+      ` 1   www           ${String(web.port || 80).padEnd(6)}  -                -                        ${wwwState}`,
+      ' 2   ssh           22      -                -                        -',
+      ' 3   telnet        23      -                -                        -',
+    ].join('\n');
+    return 'Flags: X - disabled, R - running\n #   NAME      PORT    ADDRESS         CERTIFICATE   VRF\n' + rows;
   }
   if (cmdResult.type === 'queue_print') {
     const queues = cmdResult.queues || [];
@@ -2423,6 +2520,8 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
       if (p.iface) lines.push(`/ip dhcp-server add name=${p.name} interface=${p.iface} address-pool=${p.name}`);
     });
     if (mem.dnsServers.length > 0) lines.push(`/ip dns set servers=${mem.dnsServers.join(',')}`);
+    mem.dnsRecords.forEach((r: any) => lines.push(`/ip dns static add name=${r.name} address=${r.address}`));
+    if (mem.webServer && mem.webServer.enabled === false) lines.push('/ip service set www disabled=yes');
     mem.natRules.forEach((r: any) => {
       let line = `/ip firewall nat add chain=${r.chain}${r.outInterface ? ` out-interface=${r.outInterface}` : ''} action=${r.action}`;
       if (r.protocol) line += ` protocol=${r.protocol}`;
@@ -2478,6 +2577,11 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     lines.push(`hostname ${hostname}`);
     withIp.forEach((p: any) => lines.push(`ip addr add ${cidrOf(p.ipAddress)} dev ${p.name}`));
     mem.routes.forEach((r: any) => lines.push(`ip route add ${r.dst} via ${r.gateway}`));
+    (mem.dnsServers || []).forEach((s: string) => lines.push(`echo "nameserver ${s}" > /etc/resolv.conf`));
+    if (mem.webServer) {
+      if (mem.webServer.content) lines.push(`echo "${mem.webServer.content}" > /var/www/html/index.html`);
+      if (mem.webServer.enabled === false) lines.push('systemctl stop nginx');
+    }
   } else {
     lines.push(`! Running configuration`);
     lines.push(`hostname ${hostname}`);

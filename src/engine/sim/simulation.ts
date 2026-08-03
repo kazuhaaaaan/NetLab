@@ -30,7 +30,7 @@ export interface PingSimResult {
   ttlAtDestination: number;
   /** true when the source obtained an IP automatically via DHCP */
   dhcpGranted?: boolean;
-  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power';
+  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power' | 'refused';
 }
 
 interface PathResult {
@@ -134,6 +134,29 @@ export function ipInCidrSpec(ip: string, spec: string | undefined): boolean {
   return networkOf(ip, c.prefix) === networkOf(c.address, c.prefix);
 }
 
+/** Static DNS A-record configured on a device (e.g. MikroTik "/ip dns static"). */
+export interface DnsRecord {
+  name: string;
+  address: string;
+}
+
+/** Web server service state of a device (nginx / www / httpd). */
+export interface WebServerInfo {
+  enabled: boolean;
+  port: number;
+  content: string;
+}
+
+export interface DnsResolution {
+  resolved: string | null;
+  /** IP of the DNS server that answered (or 'self' for local records). */
+  server?: string;
+  /** no DNS server configured / unreachable */
+  timedOut?: boolean;
+  /** server answered but the name does not exist */
+  nxdomain?: boolean;
+}
+
 interface TableEntry {
   dst: string;
   gateway: string;
@@ -194,6 +217,10 @@ export interface TcpConnectResult {
   ok: boolean;
   reason?: PingSimResult['reason'];
   handshake: TcpHandshakeSegment[];
+  /** HTTP status when the connection reached a web server (200). */
+  status?: number;
+  /** Web server body when the connection reached a web server. */
+  body?: string;
 }
 
 /**
@@ -235,6 +262,12 @@ export class SimulationEngine {
   private poweredOff = new Set<string>();
   /** TCP connections established during this session: nodeId → connections */
   private tcpConnections = new Map<string, TcpConnectionInfo[]>();
+  /** static DNS A-records per device: nodeId → records */
+  private dnsRecords = new Map<string, DnsRecord[]>();
+  /** DNS servers configured on each device: nodeId → server IPs */
+  private dnsServers = new Map<string, string[]>();
+  /** web server service per device: nodeId → info (absent = nginx default :80) */
+  private webServers = new Map<string, WebServerInfo>();
 
   syncTopology(project: LabProject): void {
     const seen = new Set<string>();
@@ -267,6 +300,9 @@ export class SimulationEngine {
         this.trunkPorts.delete(id);
         this.poweredOff.delete(id);
         this.tcpConnections.delete(id);
+        this.dnsRecords.delete(id);
+        this.dnsServers.delete(id);
+        this.webServers.delete(id);
       }
     }
 
@@ -376,6 +412,53 @@ export class SimulationEngine {
   setNatRules(nodeId: string, rules: NatRule[] | undefined): void {
     if (rules && rules.length > 0) this.nats.set(nodeId, rules);
     else this.nats.delete(nodeId);
+  }
+
+  setDnsRecords(nodeId: string, records: DnsRecord[] | undefined): void {
+    if (records && records.length > 0) this.dnsRecords.set(nodeId, records);
+    else this.dnsRecords.delete(nodeId);
+  }
+
+  setDnsServers(nodeId: string, servers: string[] | undefined): void {
+    if (servers && servers.length > 0) this.dnsServers.set(nodeId, servers);
+    else this.dnsServers.delete(nodeId);
+  }
+
+  setWebServer(nodeId: string, info: WebServerInfo | undefined): void {
+    if (info) this.webServers.set(nodeId, info);
+    else this.webServers.delete(nodeId);
+  }
+
+  /** Device that owns `ip` on one of its interfaces (CLI-configured or port IP). */
+  private deviceByIp(ip: string): SimDevice | null {
+    for (const dev of this.devices.values()) {
+      if (dev.hasIp(ip)) return dev;
+    }
+    return null;
+  }
+
+  /**
+   * Resolve a hostname the way the device would: its own static records
+   * first, then its configured DNS servers. Unreachable/missing servers
+   * yield a timeout; a server answering "unknown name" yields NXDOMAIN.
+   */
+  resolveHostname(nodeId: string, name: string): DnsResolution {
+    const n = name.toLowerCase().replace(/\.$/, '');
+    const own = (this.dnsRecords.get(nodeId) || []).find(
+      (r) => r.name.toLowerCase() === n || r.name.toLowerCase() === n + '.'
+    );
+    if (own) return { resolved: own.address, server: 'self' };
+
+    const servers = this.dnsServers.get(nodeId) || [];
+    if (servers.length === 0) return { resolved: null, timedOut: true };
+
+    for (const srvIp of servers) {
+      const srv = this.deviceByIp(srvIp);
+      if (!srv || !this.isNodePowered(srv.id)) continue;
+      const rec = (this.dnsRecords.get(srv.id) || []).find((r) => r.name.toLowerCase() === n);
+      if (rec) return { resolved: rec.address, server: srvIp };
+    }
+    return { resolved: null, nxdomain: true };
   }
 
   setPortVlans(nodeId: string, vlanByIface: Record<string, number> | undefined): void {
@@ -1377,6 +1460,14 @@ export class SimulationEngine {
 
     if (!this.isNodePowered(dstDev.id)) return { ok: false, reason: 'power', handshake: [] };
     const dstIpLocal = dstDev.getIpAddress() || dstIp;
+
+    // The destination must actually listen: a web server on `localPort` with
+    // the service running. Otherwise the connection is refused.
+    const web = this.webServers.get(dstDev.id) || { enabled: true, port: 80, content: '' };
+    if (!web.enabled || localPort !== web.port) {
+      return { ok: false, reason: 'refused', handshake: [] };
+    }
+
     const back = this.findPath(dstDev, srcIp, dstIpLocal, 64, new Set(), []);
     if (!back.ok) return { ok: false, reason: back.reason || 'unreachable', handshake: [] };
 
@@ -1409,7 +1500,7 @@ export class SimulationEngine {
     const dstList = this.tcpConnections.get(dstDev.id) || [];
     dstList.push(serverSide);
     this.tcpConnections.set(dstDev.id, dstList);
-    return { ok: true, handshake };
+    return { ok: true, handshake, status: 200, body: web.content };
   }
 
   /** Established TCP connections of a device (netstat / show tcp brief). */

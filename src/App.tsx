@@ -220,6 +220,9 @@ export default function App() {
     simEngineRef.current.setBgp(nodeId, mem.bgp || undefined);
     simEngineRef.current.setAcls(nodeId, mem.acls || undefined);
     simEngineRef.current.setNatRules(nodeId, mem.natRules || undefined);
+    simEngineRef.current.setDnsRecords(nodeId, mem.dnsRecords || undefined);
+    simEngineRef.current.setDnsServers(nodeId, mem.dnsServers || undefined);
+    simEngineRef.current.setWebServer(nodeId, mem.webServer || undefined);
     simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
     simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
     simEngineRef.current.computeDynamicRoutes();
@@ -780,21 +783,33 @@ export default function App() {
             : null;
         },
         connectivitySimulator: (host: string, vendorId: string, port?: number) => {
+          // curl ke hostname → resolve via DNS yang dikonfigurasi perangkat
+          let target = host;
+          let label = host;
           if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
-            return `curl: (6) Could not resolve host: ${host}`;
+            const res = simEngineRef.current.resolveHostname(nodeId, host);
+            if (!res.resolved) {
+              return `curl: (6) Could not resolve host: ${host}`;
+            }
+            target = res.resolved;
+            label = host;
           }
           // Real 3-way TCP handshake (SYN → SYN-ACK → ACK) — port-forward
           // (dstnat) translates the destination before the handshake begins.
-          const conn = simEngineRef.current.simulateTcpConnect(nodeId, host, port || 80);
+          const conn = simEngineRef.current.simulateTcpConnect(nodeId, target, port || 80);
           if (!conn.ok) {
             const reason = conn.reason;
             if (reason === 'no-ip') return 'curl: (6) Could not resolve host: ' + host;
-            if (reason === 'ttl') return 'curl: (28) Timeout: TTL exceeded menuju ' + host;
-            return `curl: (7) Failed to connect to ${host} port 80 after 3000 ms: Connection refused`;
+            if (reason === 'ttl') return 'curl: (28) Timeout: TTL exceeded menuju ' + label;
+            return `curl: (7) Failed to connect to ${label} port ${port || 80} after 3000 ms: Connection refused`;
           }
           setStatsVersion((v) => v + 1);
-          return `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 69\r\n\r\n<html><head><title>Welcome to ${host}</title></head><body><h1>It works!</h1></body></html>`;
+          const body =
+            conn.body ||
+            `<html><head><title>Welcome to ${label}</title></head><body><h1>It works!</h1></body></html>`;
+          return `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\n\r\n${body}`;
         },
+        dnsResolver: (name: string) => simEngineRef.current.resolveHostname(nodeId, name),
         neighborProvider: (proto: 'cdp' | 'lldp') => simEngineRef.current.getLldpNeighbors(nodeId),
         ospfNeighborProvider: () => simEngineRef.current.getOspfNeighbors(nodeId),
         bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
