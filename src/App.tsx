@@ -779,12 +779,13 @@ export default function App() {
             ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId }
             : null;
         },
-        connectivitySimulator: (host: string, vendorId: string) => {
+        connectivitySimulator: (host: string, vendorId: string, port?: number) => {
           if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
             return `curl: (6) Could not resolve host: ${host}`;
           }
-          // Real 3-way TCP handshake (SYN → SYN-ACK → ACK) against port 80
-          const conn = simEngineRef.current.simulateTcpConnect(nodeId, host, 80);
+          // Real 3-way TCP handshake (SYN → SYN-ACK → ACK) — port-forward
+          // (dstnat) translates the destination before the handshake begins.
+          const conn = simEngineRef.current.simulateTcpConnect(nodeId, host, port || 80);
           if (!conn.ok) {
             const reason = conn.reason;
             if (reason === 'no-ip') return 'curl: (6) Could not resolve host: ' + host;

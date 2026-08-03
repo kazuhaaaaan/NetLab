@@ -1682,16 +1682,34 @@ export class VendorDispatcher {
         cmdResult = { raw: '% Usage: dhclient <interface>' };
       }
     } else if (/^\/ip\s+firewall\s+nat\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
-      // MikroTik: "/ip firewall nat add chain=srcnat out-interface=ether1 action=masquerade"
+      // MikroTik:
+      //   srcnat: "/ip firewall nat add chain=srcnat out-interface=ether1 action=masquerade"
+      //   dstnat/port-forward: "/ip firewall nat add chain=dstnat protocol=tcp dst-port=8080 action=dst-nat to-addresses=192.168.1.10 to-ports=80"
       const raw = rawInput.trim();
       const chain = raw.match(/chain=(\S+)/i)?.[1] || 'srcnat';
       const outIface = raw.match(/out-interface=(\S+)/i)?.[1];
       const action = raw.match(/action=(\S+)/i)?.[1];
       if (action) {
-        mem.natRules.push({ chain, outInterface: outIface, action, srcAddress: raw.match(/src-address=(\S+)/i)?.[1] || '' });
+        const rule: any = {
+          chain,
+          outInterface: outIface,
+          action,
+          srcAddress: raw.match(/src-address=(\S+)/i)?.[1] || '',
+        };
+        const protocol = raw.match(/protocol=(\S+)/i)?.[1];
+        if (protocol) rule.protocol = protocol.toLowerCase();
+        const dstAddress = raw.match(/dst-address=(\S+)/i)?.[1];
+        if (dstAddress) rule.dstAddress = dstAddress;
+        const dstPort = raw.match(/dst-port=(\S+)/i)?.[1];
+        if (dstPort) rule.dstPort = dstPort;
+        const toAddresses = raw.match(/to-addresses=(\S+)/i)?.[1];
+        if (toAddresses) rule.toAddresses = toAddresses;
+        const toPorts = raw.match(/to-ports=(\S+)/i)?.[1];
+        if (toPorts) rule.toPorts = toPorts;
+        mem.natRules.push(rule);
         cmdResult = { raw: '' };
       } else {
-        cmdResult = { raw: '% Usage: /ip firewall nat add chain=srcnat out-interface=<port> action=masquerade' };
+        cmdResult = { raw: '% Usage: /ip firewall nat add chain=<srcnat|dstnat> out-interface=<port> action=<masquerade|dst-nat> [protocol=<tcp|udp>] [dst-port=<port>] [to-addresses=<ip>] [to-ports=<port>]' };
       }
     } else if (/^\/ip\s+firewall\s+filter\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       // MikroTik: "/ip firewall filter add chain=input protocol=icmp action=drop"
@@ -2025,9 +2043,10 @@ export class VendorDispatcher {
       // Linux: "curl http://192.168.1.10" / "curl <ip>" — checks real connectivity
       let url = (normalized.payload as any)?.url || rawInput.trim().split(/\s+/).pop() || '';
       url = url.replace(/^["']|["']$/g, '');
-      const m = url.match(/^https?:\/\/([^/:]+)/i) || url.match(/^(\d+\.\d+\.\d+\.\d+)/);
+      const m = url.match(/^https?:\/\/([^/:]+)(?::(\d+))?/i) || url.match(/^(\d+\.\d+\.\d+\.\d+)(?::(\d+))?/);
       const host = m ? m[1] : '';
-      cmdResult = { type: 'http_get', host };
+      const port = m?.[2] ? parseInt(m[2], 10) : 80;
+      cmdResult = { type: 'http_get', host, port };
     } else if (normalized.action === 'show_version' || normalized.action === 'display_version' || normalized.action === 'resource' || normalized.action === 'version' || (normalized.target === 'system_resource' && normalized.action === 'print')) {
       cmdResult = { type: 'show_version', model: mem.modelLabel, hostname: mem.hostname || context?.name };
     } else if (normalized.action === 'configure_terminal' || normalized.action === 'configure' || normalized.action === 'system_view') {
@@ -2088,7 +2107,7 @@ export class VendorDispatcher {
       cmdResult?.type === 'http_get' &&
       typeof context.connectivitySimulator === 'function'
     ) {
-      response = context.connectivitySimulator(cmdResult.host || '', vendorId);
+      response = context.connectivitySimulator(cmdResult.host || '', vendorId, cmdResult.port || 80);
     }
 
     return response;
@@ -2158,11 +2177,12 @@ function formatExtended(cmdResult: any): string {
   }
   if (cmdResult.type === 'nat_print') {
     const rules = cmdResult.rules || [];
-    if (rules.length === 0) return 'Flags: X - disabled, I - invalid, D - dynamic\n #    CHAIN      ACTION      OUT-INTERFACE   SRC-ADDRESS\n -- no entries --';
+    const header = 'Flags: X - disabled, I - invalid, D - dynamic\n #    CHAIN      ACTION      OUT-INTERFACE   SRC-ADDRESS     DST-ADDRESS    DST-PORT  TO-ADDRESSES   TO-PORTS';
+    if (rules.length === 0) return header + '\n -- no entries --';
     const rows = rules.map((r: any, i: number) =>
-      ` ${i} ${r.chain.padEnd(11)} ${r.action.padEnd(12)} ${(r.outInterface || '-').padEnd(15)} ${r.srcAddress || ''}`
+      ` ${i} ${r.chain.padEnd(11)} ${r.action.padEnd(12)} ${(r.outInterface || '-').padEnd(15)} ${(r.srcAddress || '-').padEnd(15)} ${(r.dstAddress || '-').padEnd(14)} ${(r.dstPort || '-').padEnd(9)} ${(r.toAddresses || '-').padEnd(14)} ${r.toPorts || '-'}`
     ).join('\n');
-    return 'Flags: X - disabled, I - invalid, D - dynamic\n #    CHAIN      ACTION      OUT-INTERFACE   SRC-ADDRESS\n' + rows;
+    return header + '\n' + rows;
   }
   if (cmdResult.type === 'identity_print') {
     return `name: ${cmdResult.name || 'device'}`;
@@ -2404,7 +2424,13 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     });
     if (mem.dnsServers.length > 0) lines.push(`/ip dns set servers=${mem.dnsServers.join(',')}`);
     mem.natRules.forEach((r: any) => {
-      lines.push(`/ip firewall nat add chain=${r.chain}${r.outInterface ? ` out-interface=${r.outInterface}` : ''} action=${r.action}`);
+      let line = `/ip firewall nat add chain=${r.chain}${r.outInterface ? ` out-interface=${r.outInterface}` : ''} action=${r.action}`;
+      if (r.protocol) line += ` protocol=${r.protocol}`;
+      if (r.dstAddress) line += ` dst-address=${r.dstAddress}`;
+      if (r.dstPort) line += ` dst-port=${r.dstPort}`;
+      if (r.toAddresses) line += ` to-addresses=${r.toAddresses}`;
+      if (r.toPorts) line += ` to-ports=${r.toPorts}`;
+      lines.push(line);
     });
   } else if (vendor === 'juniper') {
     lines.push(`set system host-name ${hostname}`);

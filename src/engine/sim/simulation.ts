@@ -104,6 +104,34 @@ export interface NatRule {
   outInterface?: string;
   action: string;
   srcAddress?: string;
+  /** dstnat: protocol filter (tcp/udp/icmp/any) */
+  protocol?: string;
+  /** dstnat: destination address / subnet that must contain the packet's dest IP */
+  dstAddress?: string;
+  /** dstnat: destination port or range, e.g. "8080" or "8000-8090" */
+  dstPort?: string;
+  /** dstnat: inside target address(es) */
+  toAddresses?: string;
+  /** dstnat: inside target port(s) */
+  toPorts?: string;
+}
+
+/** True when `port` is inside "p" or "lo-hi" (MikroTik dst-port syntax). */
+export function portInRange(port: number, spec: string | undefined): boolean {
+  if (!spec) return true;
+  const m = spec.trim().match(/^(\d+)(?:-(\d+))?$/);
+  if (!m) return false;
+  const lo = parseInt(m[1], 10);
+  const hi = m[2] ? parseInt(m[2], 10) : lo;
+  return port >= lo && port <= hi;
+}
+
+/** True when `ip` is inside the CIDR-ish spec ("10.0.0.0/24", "10.0.0.5" or "10.0.0.5/32"). */
+export function ipInCidrSpec(ip: string, spec: string | undefined): boolean {
+  if (!spec) return true;
+  const c = parseCidr(spec);
+  if (!c) return false;
+  return networkOf(ip, c.prefix) === networkOf(c.address, c.prefix);
 }
 
 interface TableEntry {
@@ -906,9 +934,44 @@ export class SimulationEngine {
         }
       }
 
+      // dstnat: the device the packet terminates at (the NAT router) may own
+      // a dst-nat rule. ICMP carries no ports, so only port-less rules match
+      // (protocol icmp or unset). The path then continues to to-addresses.
+      let path = result.path;
+      let edges = result.edges || [];
+      let dstDev = this.devices.get(result.path[result.path.length - 1].id) || null;
+      const dstnatDev = dstDev;
+      if (dstDev) {
+        const rules = this.nats.get(dstDev.id) || [];
+        const rule = rules.find(
+          (r) =>
+            (r.action === 'dst-nat' || r.action === 'dstnat') &&
+            r.chain === 'dstnat' &&
+            !!r.toAddresses &&
+            !r.dstPort &&
+            (!r.protocol || r.protocol === 'icmp') &&
+            ipInCidrSpec(dstIp, r.dstAddress)
+        );
+        if (rule) {
+          const toAddress = rule.toAddresses!.split(',')[0].trim();
+          const tail = this.findPath(dstnatDev!, toAddress, dstnatDev!.getIpAddress() || '', 64, new Set(), []);
+          if (!tail.ok || !tail.path) {
+            return {
+              success: false,
+              path: [],
+              edgeIds: [],
+              ttlAtDestination: 0,
+              reason: 'unreachable',
+            };
+          }
+          path = path.concat(tail.path.slice(1));
+          edges = edges.concat(tail.edges || []);
+          dstDev = tail.path[tail.path.length - 1];
+        }
+      }
+
       // A real ICMP exchange also requires the return path to work:
       // the destination must be able to route the reply back to the source.
-      const dstDev = this.devices.get(result.path[result.path.length - 1].id);
       const srcIp = src.getIpAddress() || '';
       if (dstDev && srcIp) {
         const backTarget = natIp || srcIp;
@@ -936,8 +999,8 @@ export class SimulationEngine {
       }
       return {
         success: true,
-        path: result.path.map((d) => d.name),
-        edgeIds: result.edges || [],
+        path: path.map((d) => d.name),
+        edgeIds: edges,
         ttlAtDestination: result.ttl || 0,
         dhcpGranted: dhcpGranted || undefined,
       };
@@ -1282,7 +1345,36 @@ export class SimulationEngine {
 
     const fwd = this.findPath(src, dstIp, srcIp, 64, new Set(), []);
     if (!fwd.ok || !fwd.path) return { ok: false, reason: fwd.reason || 'unreachable', handshake: [] };
-    const dstDev = fwd.path[fwd.path.length - 1];
+    let dstDev = fwd.path[fwd.path.length - 1];
+    let localPort = dstPort;
+
+    // dstnat / port-forward: the router the packet terminates at may own a
+    // dst-nat rule (protocol tcp, dst-port matches). The connection then
+    // continues to to-addresses:to-ports (the inside server).
+    const natRouter = dstDev;
+    if (dstDev) {
+      const rules = this.nats.get(dstDev.id) || [];
+      const rule = rules.find(
+        (r) =>
+          (r.action === 'dst-nat' || r.action === 'dstnat') &&
+          r.chain === 'dstnat' &&
+          !!r.toAddresses &&
+          (!r.protocol || r.protocol === 'tcp') &&
+          portInRange(dstPort, r.dstPort) &&
+          ipInCidrSpec(dstIp, r.dstAddress)
+      );
+      if (rule) {
+        const toAddress = rule.toAddresses!.split(',')[0].trim();
+        if (rule.toPorts) {
+          const lo = parseInt(rule.toPorts.split('-')[0].trim(), 10);
+          if (!isNaN(lo)) localPort = lo;
+        }
+        const tail = this.findPath(natRouter, toAddress, natRouter.getIpAddress() || '', 64, new Set(), []);
+        if (!tail.ok || !tail.path) return { ok: false, reason: tail.reason || 'unreachable', handshake: [] };
+        dstDev = tail.path[tail.path.length - 1];
+      }
+    }
+
     if (!this.isNodePowered(dstDev.id)) return { ok: false, reason: 'power', handshake: [] };
     const dstIpLocal = dstDev.getIpAddress() || dstIp;
     const back = this.findPath(dstDev, srcIp, dstIpLocal, 64, new Set(), []);
@@ -1305,7 +1397,7 @@ export class SimulationEngine {
     };
     const serverSide: TcpConnectionInfo = {
       localIp: dstIpLocal,
-      localPort: dstPort,
+      localPort,
       remoteIp: srcIp,
       remotePort: clientPort,
       state: 'ESTABLISHED',
