@@ -17,7 +17,7 @@ import { StorageEngine } from './storage/db';
 import { VENDOR_MAP } from './data/vendors';
 import { getDefaultModel, getModelsForVendor, getPortsForModel } from './data/deviceModels';
 import { VendorDispatcher } from '../packages/vendors/src/index';
-import { SimulationEngine, formatPingOutput } from './engine/sim';
+import { SimulationEngine, formatPingOutput, formatTracerouteOutput } from './engine/sim';
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 
@@ -206,6 +206,19 @@ export default function App() {
     simEngineRef.current.setDhcpPools(poolsByNode);
   }, []);
 
+  /** Dorong SEMUA state konfigurasi CLI sebuah node ke simulation engine
+   *  (IP, rute statis, routing dinamis, BGP, ACL, NAT, VLAN port). */
+  const syncNodeToEngine = useCallback((nodeId: string) => {
+    const mem = vendorDispatcher.getNodeMemory(nodeId);
+    simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+    simEngineRef.current.setRouting(nodeId, mem.routing || undefined);
+    simEngineRef.current.setBgp(nodeId, mem.bgp || undefined);
+    simEngineRef.current.setAcls(nodeId, mem.acls || undefined);
+    simEngineRef.current.setNatRules(nodeId, mem.natRules || undefined);
+    simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
+    simEngineRef.current.computeDynamicRoutes();
+  }, []);
+
   // Check tutorial on first visit (only for touch devices)
   useEffect(() => {
     // 0) Topologi dari link berbagi (param ?lab=...) punya prioritas tertinggi
@@ -222,7 +235,7 @@ export default function App() {
         vendorDispatcher.restoreMemory(payload.configs);
         const mem = vendorDispatcher.serializeMemory();
         for (const nodeId of Object.keys(mem)) {
-          simEngineRef.current.applyNodeConfig(nodeId, mem[nodeId].configuredIps, mem[nodeId].routes);
+          syncNodeToEngine(nodeId);
         }
         syncDhcpPools();
         showToast('Topologi dari link berhasil dimuat');
@@ -255,16 +268,16 @@ export default function App() {
       });
     }
 
-    // Restore CLI-configured device state (IPs/routes/BGP) from storage
+    // Restore CLI-configured device state (IPs/routes/BGP/routing/ACL/NAT/VLAN) from storage
     StorageEngine.loadDeviceConfigs().then((configs) => {
       vendorDispatcher.restoreMemory(configs);
       const mem = vendorDispatcher.serializeMemory();
       for (const nodeId of Object.keys(mem)) {
-        simEngineRef.current.applyNodeConfig(nodeId, mem[nodeId].configuredIps, mem[nodeId].routes);
+        syncNodeToEngine(nodeId);
       }
       syncDhcpPools();
     });
-  }, [syncDhcpPools, showToast]);
+  }, [syncDhcpPools, syncNodeToEngine, showToast]);
 
   // Auto-save project changes (hanya setelah proyek tersimpan dimuat ulang)
   useEffect(() => {
@@ -721,9 +734,8 @@ export default function App() {
     let responseText = '';
 
     if (node) {
-      // Sync CLI-configured IPs/routes into the simulation engine, then run.
-      const mem = vendorDispatcher.getNodeMemory(nodeId);
-      simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+      // Sync CLI-configured state into the simulation engine, then run.
+      syncNodeToEngine(nodeId);
 
       responseText = vendorDispatcher.dispatch(vendor, cmd, {
         nodeId,
@@ -733,6 +745,11 @@ export default function App() {
           const result = simEngineRef.current.simulatePing(nodeId, host);
           return formatPingOutput(vendorId, host, result);
         },
+        tracerouteSimulator: (host: string, vendorId: string) => {
+          const result = simEngineRef.current.simulateTraceroute(nodeId, host);
+          return formatTracerouteOutput(vendorId, host, result);
+        },
+        routeProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.routes || [],
         dhcpClientGrant: (iface: string, addDefaultRoute: boolean) => {
           const granted = simEngineRef.current.grantDhcpLease(nodeId, iface);
           return granted
@@ -741,8 +758,8 @@ export default function App() {
         },
       });
 
-      // Pick up config changes made by this command (add_ip / add_route)
-      simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+      // Pick up config changes made by this command (IP, routes, routing, ACL, NAT, VLAN)
+      syncNodeToEngine(nodeId);
       syncDhcpPools();
       setStatsVersion((v) => v + 1);
 

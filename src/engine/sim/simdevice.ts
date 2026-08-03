@@ -16,8 +16,8 @@ export interface SimRoute {
   gateway: string | null;
   /** exit interface name (null for static routes resolved later) */
   iface: string | null;
-  /** connection type: 'connected' | 'static' */
-  kind: 'connected' | 'static';
+  /** connection type: 'connected' | 'static' | 'dynamic' */
+  kind: 'connected' | 'static' | 'dynamic';
 }
 
 /**
@@ -41,6 +41,8 @@ export class SimDevice {
 
   private routes: SimRoute[] = [];
   private staticRoutes: SimRoute[] = [];
+  /** routes learned from dynamic routing protocols (OSPF/RIP/EIGRP/BGP) */
+  private dynamicRoutes: SimRoute[] = [];
 
   constructor(
     id: string,
@@ -98,7 +100,7 @@ export class SimDevice {
         });
       }
     }
-    this.routes = [...connected, ...this.staticRoutes];
+    this.routes = [...connected, ...this.staticRoutes, ...this.dynamicRoutes];
   }
 
   setName(name: string): void {
@@ -169,6 +171,31 @@ export class SimDevice {
     this.rebuildConnectedRoutes();
   }
 
+  /** Add a route learned from a dynamic routing protocol (OSPF/RIP/EIGRP/BGP). */
+  addDynamicRoute(dst: string, gateway: string, proto: string): void {
+    const parsed = parseCidr(dst);
+    const dstNorm = parsed ? `${parsed.address}/${parsed.prefix}` : dst;
+    if (!this.dynamicRoutes.some((r) => r.dst === dstNorm && r.gateway === gateway)) {
+      this.dynamicRoutes.push({
+        dst: dstNorm,
+        gateway,
+        iface: null,
+        kind: 'dynamic',
+      });
+    }
+    this.rebuildConnectedRoutes();
+  }
+
+  /** Remove all protocol-learned routes (called before recomputation). */
+  clearDynamicRoutes(): void {
+    this.dynamicRoutes = [];
+    this.rebuildConnectedRoutes();
+  }
+
+  getDynamicRoutes(): SimRoute[] {
+    return [...this.dynamicRoutes];
+  }
+
   getRoutes(): SimRoute[] {
     return [...this.routes];
   }
@@ -186,7 +213,8 @@ export class SimDevice {
       const [net, p] = r.dst.split('/');
       const prefix = parseInt(p, 10);
       if (isNaN(prefix)) continue;
-      if (prefix >= bestLen && networkOf(net, prefix) === networkOf(dstIp, prefix)) {
+      // strict ">" keeps the first matching route: connected > static > dynamic
+      if (prefix > bestLen && networkOf(net, prefix) === networkOf(dstIp, prefix)) {
         best = r;
         bestLen = prefix;
       }

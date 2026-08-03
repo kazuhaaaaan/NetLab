@@ -252,9 +252,13 @@ export class CiscoVendorAdapter implements IVendorAdapter {
     if (cmdResult.type === 'show_ip_route') {
       const routes = cmdResult.routes || [];
       const header = 'Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP\n       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area\n\nGateway of last resort is not set\n';
-      const rows = routes.map((r: any) =>
-        `C    ${r.dst || '0.0.0.0/0'} is directly connected, ${r.iface || 'GigabitEthernet0/0'}`
-      ).join('\n');
+      const rows = routes.map((r: any) => {
+        const code = r.kind === 'static' ? 'S' : r.kind === 'dynamic' ? 'O' : 'C';
+        if (r.kind === 'connected') {
+          return `${code}    ${r.dst || '0.0.0.0/0'} is directly connected, ${r.iface || 'GigabitEthernet0/0'}`;
+        }
+        return `${code}    ${r.dst || '0.0.0.0/0'} [1/0] via ${r.gateway || '0.0.0.0'}${r.iface ? `, ${r.iface}` : ''}`;
+      }).join('\n');
       return header + (rows || '      -- no routes --');
     }
     if (cmdResult.type === 'show_version') {
@@ -1178,8 +1182,16 @@ export class VendorDispatcher {
         dhcpPools: [],
         dhcpClients: [],
         natRules: [],
+        acls: [],
+        portVlans: {},
+        routing: {
+          ospf: { enabled: false, networks: [] },
+          rip: { enabled: false, networks: [] },
+          eigrp: { enabled: false, asn: 0, networks: [] },
+        },
         currentStaticDst: '',
         currentDhcpPool: '',
+        currentProto: '',
       });
     }
     return this.nodeMemory.get(nodeId);
@@ -1216,9 +1228,19 @@ export class VendorDispatcher {
       if (Array.isArray(mem.dhcpPools)) target.dhcpPools = mem.dhcpPools;
       if (Array.isArray(mem.dhcpClients)) target.dhcpClients = mem.dhcpClients;
       if (Array.isArray(mem.natRules)) target.natRules = mem.natRules;
+      if (Array.isArray(mem.acls)) target.acls = mem.acls;
+      if (mem.portVlans && typeof mem.portVlans === 'object') target.portVlans = { ...target.portVlans, ...mem.portVlans };
+      if (mem.routing && typeof mem.routing === 'object') {
+        target.routing = {
+          ospf: { enabled: false, networks: [], ...(mem.routing.ospf || {}) },
+          rip: { enabled: false, networks: [], ...(mem.routing.rip || {}) },
+          eigrp: { enabled: false, asn: 0, networks: [], ...(mem.routing.eigrp || {}) },
+        };
+      }
       if (typeof mem.currentStaticDst === 'string') target.currentStaticDst = mem.currentStaticDst;
       if (typeof mem.currentDhcpPool === 'string') target.currentDhcpPool = mem.currentDhcpPool;
       if (typeof mem.currentIface === 'string') target.currentIface = mem.currentIface;
+      if (typeof mem.currentProto === 'string') target.currentProto = mem.currentProto;
     }
   }
 
@@ -1532,6 +1554,117 @@ export class VendorDispatcher {
       } else {
         cmdResult = { raw: '% Usage: /ip firewall nat add chain=srcnat out-interface=<port> action=masquerade' };
       }
+    } else if (/^\/ip\s+firewall\s+filter\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ip firewall filter add chain=input protocol=icmp action=drop"
+      const raw = rawInput.trim();
+      const action = raw.match(/action=(\S+)/i)?.[1];
+      if (action) {
+        mem.acls.push({
+          action: action === 'drop' || action === 'reject' ? 'deny' : 'permit',
+          proto: raw.match(/protocol=(\S+)/i)?.[1] || 'any',
+          src: raw.match(/src-address=(\S+)/i)?.[1] || 'any',
+          dst: raw.match(/dst-address=(\S+)/i)?.[1] || 'any',
+        });
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /ip firewall filter add chain=<chain> protocol=<proto> action=drop|accept' };
+      }
+    } else if (/^\/ip\s+firewall\s+filter\s+print/i.test(rawInput.trim()) || (normalized.target === 'ip_firewall_filter' && normalized.action === 'print')) {
+      cmdResult = { type: 'acl_print', rules: mem.acls };
+    } else if (/^show\s+access-lists/i.test(rawInput.trim())) {
+      cmdResult = { type: 'acl_print', rules: mem.acls };
+    } else if (/^access-list\s+\d+\s+(permit|deny)\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "access-list 100 deny icmp any any"
+      const m = rawInput.trim().match(/^access-list\s+(\d+)\s+(permit|deny)\s+(.*)$/i);
+      if (m) {
+        const tokens = m[3].trim().split(/\s+/).filter(Boolean);
+        let proto = 'ip';
+        let src = 'any';
+        let dst = 'any';
+        if (tokens.length > 0 && /^(ip|icmp|tcp|udp|any)$/i.test(tokens[0])) proto = tokens.shift()!.toLowerCase();
+        if (tokens.length > 0 && tokens[0].toLowerCase() === 'host') tokens.shift();
+        if (tokens.length > 0) src = tokens.shift()!;
+        if (tokens.length > 0 && tokens[0].toLowerCase() === 'host') tokens.shift();
+        if (tokens.length > 0) dst = tokens.shift()!;
+        mem.acls.push({ action: m[2].toLowerCase() as 'permit' | 'deny', proto, src, dst });
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: access-list <id> permit|deny <proto> <src> <dst>' };
+      }
+    } else if (/^router\s+(ospf|rip|eigrp)\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "router ospf 1" / "router rip" / "router eigrp 100"
+      const proto = rawInput.trim().match(/^router\s+(ospf|rip|eigrp)\b/i)?.[1]?.toLowerCase() as 'ospf' | 'rip' | 'eigrp';
+      const asn = rawInput.trim().match(/\b(eigrp|ospf)\s+(\d+)/i)?.[2];
+      mem.routing[proto].enabled = true;
+      if (proto === 'eigrp' && asn) mem.routing.eigrp.asn = parseInt(asn, 10);
+      mem.currentProto = proto;
+      cmdResult = { raw: '' };
+    } else if (/^network\s+(\d+\.\d+\.\d+\.\d+)(?:\s+(\d+\.\d+\.\d+\.\d+))?(?:\s+area\s+\S+)?$/i.test(rawInput.trim()) && mem.currentProto && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+      // Cisco/Huawei: "network 10.0.0.0 0.0.0.255 area 0" / "network 192.168.0.0" (RIP)
+      const m = rawInput.trim().match(/^network\s+(\d+\.\d+\.\d+\.\d+)(?:\s+(\d+\.\d+\.\d+\.\d+))?/i);
+      if (m) {
+        const net = m[2] ? `${m[1]} ${m[2]}` : m[1];
+        if (!mem.routing[mem.currentProto].networks.includes(net)) {
+          mem.routing[mem.currentProto].networks.push(net);
+        }
+        cmdResult = { raw: '' };
+      }
+    } else if (/^(ospf|rip)\b/i.test(rawInput.trim()) && vendorId === 'huawei') {
+      // Huawei: "ospf 1" / "rip" (system view) → masuk mode protocol
+      const proto = rawInput.trim().match(/^(ospf|rip)\b/i)?.[1]?.toLowerCase() as 'ospf' | 'rip';
+      mem.routing[proto].enabled = true;
+      mem.currentProto = proto;
+      cmdResult = { raw: '' };
+    } else if (/^\/routing\s+(ospf|rip)\s+(instance|network)\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/routing ospf instance add name=x router-id=1.1.1.1" / "/routing ospf network add network=10.0.0.0/24 area=0"
+      const raw = rawInput.trim();
+      const m = raw.match(/^\/routing\s+(ospf|rip)\s+(instance|network)\s+add\s+/i);
+      const proto = m![1].toLowerCase() as 'ospf' | 'rip';
+      const kind = m![2].toLowerCase();
+      if (kind === 'instance') {
+        mem.routing[proto].enabled = true;
+        cmdResult = { raw: '' };
+      } else {
+        const net = raw.match(/network=(\S+)/i)?.[1];
+        if (net) {
+          if (!mem.routing[proto].networks.includes(net)) mem.routing[proto].networks.push(net);
+          cmdResult = { raw: '' };
+        } else {
+          cmdResult = { raw: `% Usage: /routing ${proto} network add network=<jaringan/prefix>` };
+        }
+      }
+    } else if (/^\/routing\s+bgp\s+network\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      const net = rawInput.trim().match(/network=(\S+)/i)?.[1];
+      if (net) {
+        if (!mem.bgp.networks) mem.bgp.networks = [];
+        if (!mem.bgp.networks.includes(net)) mem.bgp.networks.push(net);
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /routing bgp network add network=<jaringan/prefix>' };
+      }
+    } else if (/^set\s+protocols\s+(ospf|rip)\b/i.test(rawInput.trim()) && (vendorId === 'juniper' || vendorId === 'vyos' || vendorId === 'ubiquiti')) {
+      // Juniper/VyOS/EdgeOS: "set protocols ospf area 0 interface eth0" / "set protocols ospf area 0 network 10.0.0.0/24"
+      const proto = rawInput.trim().match(/^set\s+protocols\s+(ospf|rip)\b/i)?.[1]?.toLowerCase() as 'ospf' | 'rip';
+      const m = rawInput.trim().match(/(?:interface|network)\s+(\S+)/i);
+      mem.routing[proto].enabled = true;
+      if (m && !mem.routing[proto].networks.includes(m[1])) {
+        mem.routing[proto].networks.push(m[1]);
+      }
+      cmdResult = { raw: '' };
+    } else if (/^switchport\s+(mode\s+access|access\s+vlan\s+\d+)$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco switch: "switchport mode access" / "switchport access vlan 10"
+      const vlan = rawInput.trim().match(/access\s+vlan\s+(\d+)/i)?.[1];
+      if (vlan) mem.portVlans[mem.currentIface] = parseInt(vlan, 10);
+      cmdResult = { raw: '' };
+    } else if (/^port\s+(link-type\s+access|default\s+vlan\s+\d+)$/i.test(rawInput.trim()) && mem.currentIface && vendorId === 'huawei') {
+      // Huawei switch: "port link-type access" / "port default vlan 10"
+      const vlan = rawInput.trim().match(/default\s+vlan\s+(\d+)/i)?.[1];
+      if (vlan) mem.portVlans[mem.currentIface] = parseInt(vlan, 10);
+      cmdResult = { raw: '' };
+    } else if (/^\/routing\s+(ospf|rip|bgp)\s+(instance|network)?\s*(print)?/i.test(rawInput.trim()) && vendorId === 'mikrotik' && /print/i.test(rawInput.trim())) {
+      cmdResult = { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
+    } else if (/^show\s+ip\s+protocols/i.test(rawInput.trim()) || /^display\s+ospf\s+peer/i.test(rawInput.trim())) {
+      cmdResult = { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
     } else if (normalized.action === 'set_config') {
       // Juniper / EdgeOS / VyOS: "set interfaces <if> ... address <ip/mask>" or static routes
       const path = ((normalized.payload as any)?.path || []).map(String).map(s => s.toLowerCase());
@@ -1626,14 +1759,22 @@ export class VendorDispatcher {
       const ports = mergeIps(context?.ports, mem.configuredIps);
       cmdResult = { type: normalized.action, ports };
     } else if (normalized.action === 'show_ip_route' || normalized.action === 'show_route' || normalized.action === 'display_routing' || normalized.action === 'ip_route') {
+      const dynamicRoutes = typeof context.routeProvider === 'function' ? context.routeProvider() : [];
       const connectedRoutes = (context?.ports || [])
         .filter((p: any) => p.ipAddress)
-        .map((p: any) => ({ dst: p.ipAddress, iface: p.name, gateway: '', prefSrc: p.ipAddress?.split('/')[0] }));
-      cmdResult = { type: normalized.action, routes: [...connectedRoutes, ...mem.routes] };
+        .map((p: any) => ({ dst: p.ipAddress, iface: p.name, gateway: '', prefSrc: p.ipAddress?.split('/')[0], kind: 'connected' }));
+      const staticRoutes = mem.routes.map((r: any) => ({ dst: r.dst, iface: '', gateway: r.gateway || '', prefSrc: '', kind: 'static' }));
+      const dynamic = dynamicRoutes
+        .filter((r: any) => r.kind === 'dynamic')
+        .map((r: any) => ({ dst: r.dst, iface: r.iface || '', gateway: r.gateway || '', prefSrc: '', kind: 'dynamic' }));
+      cmdResult = { type: normalized.action, routes: [...connectedRoutes, ...staticRoutes, ...dynamic] };
     } else if (normalized.action === 'ping' || (normalized.target === 'tool' && (normalized.payload as any)?.ast?.subCommands?.[0]?.toLowerCase() === 'ping')) {
       const ast = (normalized.payload as any)?.ast;
       const host = (normalized.payload as any).host || ast?.subCommands?.[1] || ast?.subCommands?.[0] || '';
       cmdResult = { type: 'ping', host, target: host };
+    } else if (normalized.action === 'traceroute' || normalized.action === 'tracert' || (normalized.target === 'tool' && (normalized.payload as any)?.ast?.subCommands?.[0]?.toLowerCase() === 'traceroute')) {
+      const host = rawInput.trim().split(/\s+/).pop() || '';
+      cmdResult = { type: 'traceroute', host, target: host };
     } else if (normalized.action === 'show_version' || normalized.action === 'display_version' || normalized.action === 'resource' || normalized.action === 'version' || (normalized.target === 'system_resource' && normalized.action === 'print')) {
       cmdResult = { type: 'show_version', model: mem.modelLabel, hostname: mem.hostname || context?.name };
     } else if (normalized.action === 'configure_terminal' || normalized.action === 'configure' || normalized.action === 'system_view') {
@@ -1684,6 +1825,12 @@ export class VendorDispatcher {
     ) {
       response = context.pingSimulator(cmdResult.host || '', vendorId);
     }
+    if (
+      cmdResult?.type === 'traceroute' &&
+      typeof context.tracerouteSimulator === 'function'
+    ) {
+      response = context.tracerouteSimulator(cmdResult.host || '', vendorId);
+    }
 
     return response;
   }
@@ -1722,6 +1869,33 @@ function formatExtended(cmdResult: any): string {
     const servers = cmdResult.servers || [];
     if (servers.length === 0) return 'servers: (none)';
     return 'servers: ' + servers.join(', ');
+  }
+  if (cmdResult.type === 'acl_print') {
+    const rules = cmdResult.rules || [];
+    if (rules.length === 0) return 'Flags: X - disabled, P - permit, D - deny\n #    ACTION    PROTOCOL    SOURCE            DESTINATION\n -- no entries --';
+    const rows = rules.map((r: any, i: number) =>
+      ` ${i} ${(r.action === 'deny' ? 'D' : 'P')}   ${r.action.padEnd(6)} ${(r.proto || 'any').padEnd(10)} ${(r.src || 'any').padEnd(17)} ${r.dst || 'any'}`
+    ).join('\n');
+    return 'Flags: X - disabled, P - permit, D - deny\n #    ACTION    PROTOCOL    SOURCE            DESTINATION\n' + rows;
+  }
+  if (cmdResult.type === 'proto_print') {
+    const lines: string[] = [];
+    const routing = cmdResult.routing || {};
+    const bgp = cmdResult.bgp || {};
+    for (const proto of ['ospf', 'rip', 'eigrp']) {
+      const p = routing[proto];
+      if (!p || !p.enabled) continue;
+      const asn = proto === 'eigrp' ? ` as=${p.asn || ''}` : '';
+      lines.push(`Routing Protocol is "${proto.toUpperCase()}"${asn}`);
+      lines.push(`  Networks: ${(p.networks && p.networks.length > 0) ? p.networks.join(', ') : 'none'}`);
+    }
+    if (bgp.asn) {
+      lines.push(`Routing Protocol is "BGP" (as=${bgp.asn})`);
+      lines.push(`  Networks: ${(bgp.networks && bgp.networks.length > 0) ? bgp.networks.join(', ') : 'connected only'}`);
+      lines.push(`  Peers: ${(bgp.peers || []).map((x: any) => `${x.remoteAddr} (as${x.remoteAs})`).join(', ') || 'none'}`);
+    }
+    if (lines.length === 0) return 'Routing Protocol is "none"';
+    return lines.join('\n');
   }
   if (cmdResult.type === 'nat_print') {
     const rules = cmdResult.rules || [];

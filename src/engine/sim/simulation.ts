@@ -7,6 +7,7 @@ import {
   intToIp,
   networkOf,
   parseCidr,
+  maskToPrefix,
 } from './ip';
 
 export interface SimLink {
@@ -29,7 +30,7 @@ export interface PingSimResult {
   ttlAtDestination: number;
   /** true when the source obtained an IP automatically via DHCP */
   dhcpGranted?: boolean;
-  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self';
+  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked';
 }
 
 interface PathResult {
@@ -37,7 +38,7 @@ interface PathResult {
   path?: SimDevice[];
   edges?: string[];
   ttl?: number;
-  reason?: 'ttl' | 'unreachable';
+  reason?: 'ttl' | 'unreachable' | 'blocked';
 }
 
 export interface DhcpPoolInfo {
@@ -72,6 +73,57 @@ export interface DhcpLeaseGrant {
   poolNodeId: string;
 }
 
+/** Routing protocol state as configured via CLI (per device). */
+export interface RoutingMemoryShape {
+  ospf?: { enabled?: boolean; networks?: string[] };
+  rip?: { enabled?: boolean; networks?: string[] };
+  eigrp?: { enabled?: boolean; asn?: number; networks?: string[] };
+}
+
+export interface BgpPeerConfig {
+  remoteAs: number;
+  remoteAddr: string;
+}
+
+export interface BgpConfig {
+  asn: number;
+  peers: BgpPeerConfig[];
+  networks: string[];
+}
+
+/** Access-list / firewall filter rule (global on the device). */
+export interface AclRule {
+  action: 'permit' | 'deny';
+  proto?: string;
+  src?: string;
+  dst?: string;
+}
+
+export interface NatRule {
+  chain: string;
+  outInterface?: string;
+  action: string;
+  srcAddress?: string;
+}
+
+interface TableEntry {
+  dst: string;
+  gateway: string;
+  metric: number;
+}
+
+export interface TracerouteHop {
+  name: string;
+  ttl: number;
+  ip: string | null;
+}
+
+export interface TracerouteResult {
+  ok: boolean;
+  hops: TracerouteHop[];
+  reason?: PingSimResult['reason'];
+}
+
 /**
  * MikroLab real network simulation engine.
  *
@@ -90,6 +142,17 @@ export class SimulationEngine {
   private dhcpPools = new Map<string, DhcpPoolInfo[]>();
   /** client nodeId → granted lease */
   private leases = new Map<string, DhcpLeaseGrant>();
+
+  /** dynamic routing protocols (OSPF/RIP/EIGRP) per device, as configured via CLI */
+  private routings = new Map<string, RoutingMemoryShape>();
+  /** BGP per device */
+  private bgps = new Map<string, BgpConfig>();
+  /** ACL / firewall filter rules per device */
+  private acls = new Map<string, AclRule[]>();
+  /** NAT rules per device */
+  private nats = new Map<string, NatRule[]>();
+  /** access-VLAN per port: nodeId → ifaceName → vlanId */
+  private portVlans = new Map<string, Map<string, number>>();
 
   syncTopology(project: LabProject): void {
     const seen = new Set<string>();
@@ -112,6 +175,11 @@ export class SimulationEngine {
       if (!seen.has(id)) {
         this.devices.delete(id);
         this.leases.delete(id);
+        this.routings.delete(id);
+        this.bgps.delete(id);
+        this.acls.delete(id);
+        this.nats.delete(id);
+        this.portVlans.delete(id);
       }
     }
 
@@ -134,6 +202,9 @@ export class SimulationEngine {
         },
       ];
     });
+
+    // Topology changed → protocol-learned routes are stale
+    this.computeDynamicRoutes();
   }
 
   getDevice(nodeId: string): SimDevice | undefined {
@@ -179,6 +250,319 @@ export class SimulationEngine {
         this.dhcpPools.set(nodeId, pools);
       }
     }
+  }
+
+  // ============================================================
+  // Dynamic routing, ACL, NAT & VLAN configuration (from CLI)
+  // ============================================================
+
+  setRouting(nodeId: string, cfg: RoutingMemoryShape | undefined): void {
+    const enabled = cfg && (cfg.ospf?.enabled || cfg.rip?.enabled || cfg.eigrp?.enabled);
+    if (enabled) this.routings.set(nodeId, cfg);
+    else this.routings.delete(nodeId);
+  }
+
+  setBgp(nodeId: string, cfg: BgpConfig | undefined): void {
+    if (cfg && cfg.asn) this.bgps.set(nodeId, cfg);
+    else this.bgps.delete(nodeId);
+  }
+
+  setAcls(nodeId: string, rules: AclRule[] | undefined): void {
+    if (rules && rules.length > 0) this.acls.set(nodeId, rules);
+    else this.acls.delete(nodeId);
+  }
+
+  setNatRules(nodeId: string, rules: NatRule[] | undefined): void {
+    if (rules && rules.length > 0) this.nats.set(nodeId, rules);
+    else this.nats.delete(nodeId);
+  }
+
+  setPortVlans(nodeId: string, vlanByIface: Record<string, number> | undefined): void {
+    const has = vlanByIface && Object.keys(vlanByIface).length > 0;
+    if (has) {
+      this.portVlans.set(nodeId, new Map(Object.entries(vlanByIface as Record<string, number>)));
+    } else {
+      this.portVlans.delete(nodeId);
+    }
+  }
+
+  /**
+   * Recompute all routes learned from dynamic routing protocols.
+   * Simple distance-vector over the L2 adjacency graph:
+   * - OSPF/RIP/EIGRP: routers announce the subnets of their participating
+   *   interfaces (matched against "network" statements); neighbors are
+   *   routers sharing an L2 segment (direct link or via switches).
+   * - BGP: neighbors are configured peers that are IP-reachable; each
+   *   router announces its connected subnets + its BGP networks.
+   */
+  computeDynamicRoutes(): void {
+    for (const dev of this.devices.values()) dev.clearDynamicRoutes();
+
+    const segments = this.buildSegments();
+    this.computeProtocolRoutes(segments);
+    this.computeBgpRoutes();
+  }
+
+  /** L2 segments as a map: link-port → segment key. */
+  private computeProtocolRoutes(segments: Map<string, string>): void {
+    // IP of device `devId` on the port that lies on segment `key`
+    const ipOnSegment = (devId: string, key: string): string | null => {
+      const dev = this.devices.get(devId);
+      if (!dev) return null;
+      for (const link of this.linksOfDevice(devId)) {
+        const keyOf = this.segmentKeyOfLink(link, devId, segments);
+        if (keyOf !== key) continue;
+        const myPort = link.nodeIdA === devId ? link.portNameA : link.portNameB;
+        const iface = dev.getIfaceByName(myPort);
+        if (iface?.ip) return iface.ip.address;
+      }
+      return null;
+    };
+
+    const tables = new Map<string, TableEntry[]>();
+    const devices = [...this.devices.values()].filter((d) => !d.isSwitch);
+
+    // seed: connected subnets of participating interfaces
+    for (const dev of devices) {
+      const cfg = this.routings.get(dev.id);
+      if (!cfg) continue;
+      const proto = cfg.ospf?.enabled ? 'ospf' : cfg.rip?.enabled ? 'rip' : cfg.eigrp?.enabled ? 'eigrp' : null;
+      if (!proto) continue;
+      const nets = cfg[proto]?.networks || [];
+      const normalized = nets
+        .map((n) => this.normalizeNetworkEntry(dev, n))
+        .filter((n): n is string => !!n);
+      if (normalized.length === 0) continue;
+      const entries: TableEntry[] = [];
+      for (const iface of dev.getInterfaces()) {
+        if (!iface.ip || !iface.up) continue;
+        const subnet = `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`;
+        const participates = normalized.some((net) => {
+          const p = net.split('/');
+          return inSameSubnet(iface.ip.address, iface.ip.prefix, p[0]);
+        });
+        if (participates) entries.push({ dst: subnet, gateway: '', metric: 0 });
+      }
+      if (entries.length > 0) tables.set(dev.id, entries);
+    }
+
+    // distance-vector rounds (Bellman-Ford style)
+    for (let round = 0; round < devices.length; round++) {
+      const candidates: { peerId: string; dst: string; gateway: string; metric: number }[] = [];
+      for (const dev of devices) {
+        const myEntries = tables.get(dev.id);
+        if (!myEntries) continue;
+        const myKeys = new Set<string>();
+        for (const link of this.linksOfDevice(dev.id)) {
+          myKeys.add(this.segmentKeyOfLink(link, dev.id, segments));
+        }
+        for (const key of myKeys) {
+          const myIp = ipOnSegment(dev.id, key);
+          if (!myIp) continue;
+          for (const other of devices) {
+            if (other.id === dev.id) continue;
+            if (!this.routings.has(other.id)) continue;
+            const otherIp = ipOnSegment(other.id, key);
+            if (!otherIp) continue;
+            for (const e of myEntries) {
+              candidates.push({ peerId: other.id, dst: e.dst, gateway: myIp, metric: e.metric + 1 });
+            }
+          }
+        }
+      }
+      if (candidates.length === 0) break;
+      let changed = false;
+      for (const c of candidates) {
+        const peer = this.devices.get(c.peerId);
+        if (!peer) continue;
+        if (peer.hasIp(c.gateway)) continue; // don't route back to itself
+        const list = tables.get(c.peerId) || [];
+        const existing = list.find((t) => t.dst === c.dst);
+        if (!existing || c.metric < existing.metric) {
+          if (!existing) list.push({ dst: c.dst, gateway: c.gateway, metric: c.metric });
+          else {
+            existing.gateway = c.gateway;
+            existing.metric = c.metric;
+          }
+          tables.set(c.peerId, list);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    // install routes
+    for (const [devId, entries] of tables) {
+      const dev = this.devices.get(devId);
+      if (!dev) continue;
+      for (const e of entries) {
+        if (!e.gateway) continue;
+        dev.addDynamicRoute(e.dst, e.gateway, 'dynamic');
+      }
+    }
+  }
+
+  /**
+   * L2 segments as a map: link-port → segment key.
+   * - switch↔switch ports share a "switch cloud" key (union-find)
+   * - a non-switch device plugged into a switch joins that cloud
+   * - point-to-point links (router↔router, router↔host, host↔host)
+   *   are their own segment, so a router never bridges two clouds.
+   */
+  private buildSegments(): Map<string, string> {
+    const parent = new Map<string, string>();
+    const find = (a: string): string => {
+      let r = parent.get(a) || a;
+      if (parent.has(r)) {
+        r = find(r);
+        parent.set(a, r);
+      }
+      return r;
+    };
+    const union = (a: string, b: string) => {
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+
+    const isSwitchNode = (id: string) => this.devices.get(id)?.isSwitch ?? false;
+    for (const link of this.links) {
+      if (isSwitchNode(link.nodeIdA) && isSwitchNode(link.nodeIdB)) {
+        union(link.nodeIdA, link.nodeIdB);
+      }
+    }
+
+    const keyOfPort = (devId: string, portName: string): string => {
+      for (const link of this.linksOfDevice(devId)) {
+        const myPort = link.nodeIdA === devId ? link.portNameA : link.portNameB;
+        if (myPort !== portName) continue;
+        const peerId = link.nodeIdA === devId ? link.nodeIdB : link.nodeIdA;
+        const aSw = isSwitchNode(devId);
+        const bSw = isSwitchNode(peerId);
+        if (aSw && bSw) return `cloud:${find(devId)}`;
+        if (aSw) return `cloud:${find(devId)}`;
+        if (bSw) return `cloud:${find(peerId)}`;
+        return `ptp:${link.id}`;
+      }
+      return `unplugged:${devId}:${portName}`;
+    };
+
+    const segments = new Map<string, string>();
+    for (const dev of this.devices.values()) {
+      for (const iface of dev.getInterfaces()) {
+        segments.set(`${dev.id}:${iface.name}`, keyOfPort(dev.id, iface.name));
+      }
+    }
+    return segments;
+  }
+
+  private segmentKeyOfLink(link: SimLink, fromId: string, segments: Map<string, string>): string {
+    const myPort = link.nodeIdA === fromId ? link.portNameA : link.portNameB;
+    return segments.get(`${fromId}:${myPort}`) || `ptp:${link.id}`;
+  }
+
+  private computeBgpRoutes(): void {
+    const bgpRouters = [...this.bgps.entries()].filter(([, cfg]) => cfg.asn && cfg.peers.length > 0);
+    if (bgpRouters.length === 0) return;
+
+    const tables = new Map<string, TableEntry[]>();
+    for (const [devId, cfg] of bgpRouters) {
+      const dev = this.devices.get(devId);
+      if (!dev) continue;
+      const entries: TableEntry[] = [];
+      for (const iface of dev.getInterfaces()) {
+        if (iface.ip && iface.up) {
+          entries.push({ dst: `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`, gateway: '', metric: 0 });
+        }
+      }
+      for (const n of cfg.networks) {
+        const norm = this.normalizeNetworkEntry(dev, n);
+        if (norm && !entries.some((e) => e.dst === norm)) entries.push({ dst: norm, gateway: '', metric: 0 });
+      }
+      tables.set(devId, entries);
+    }
+
+    // adjacency: A ↔ B when A has peer B.remoteAddr and B can be reached
+    const peersOf = (devId: string): string[] => {
+      const out: string[] = [];
+      const cfg = this.bgps.get(devId);
+      if (!cfg) return out;
+      for (const p of cfg.peers) {
+        const peerId = this.deviceIdByIp(p.remoteAddr);
+        if (peerId && this.canReach(devId, p.remoteAddr) && this.bgps.has(peerId)) out.push(peerId);
+      }
+      return out;
+    };
+
+    for (let round = 0; round < bgpRouters.length; round++) {
+      const candidates: { peerId: string; dst: string; gateway: string; metric: number }[] = [];
+      for (const [devId] of bgpRouters) {
+        const myEntries = tables.get(devId);
+        if (!myEntries) continue;
+        const myIp = this.devices.get(devId)?.getIpAddress();
+        if (!myIp) continue;
+        for (const peerId of peersOf(devId)) {
+          for (const e of myEntries) {
+            candidates.push({ peerId, dst: e.dst, gateway: myIp, metric: e.metric + 1 });
+          }
+        }
+      }
+      if (candidates.length === 0) break;
+      let changed = false;
+      for (const c of candidates) {
+        const peer = this.devices.get(c.peerId);
+        if (!peer || peer.hasIp(c.gateway)) continue;
+        const list = tables.get(c.peerId) || [];
+        const existing = list.find((t) => t.dst === c.dst);
+        if (!existing || c.metric < existing.metric) {
+          if (!existing) list.push({ dst: c.dst, gateway: c.gateway, metric: c.metric });
+          else {
+            existing.gateway = c.gateway;
+            existing.metric = c.metric;
+          }
+          tables.set(c.peerId, list);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    for (const [devId, entries] of tables) {
+      const dev = this.devices.get(devId);
+      if (!dev) continue;
+      for (const e of entries) {
+        if (!e.gateway) continue;
+        dev.addDynamicRoute(e.dst, e.gateway, 'dynamic');
+      }
+    }
+  }
+
+  private deviceIdByIp(ip: string): string | null {
+    for (const dev of this.devices.values()) {
+      if (dev.hasIp(ip)) return dev.id;
+    }
+    return null;
+  }
+
+  /** Normalize a network statement: CIDR, 'ip mask', or interface name. */
+  private normalizeNetworkEntry(dev: SimDevice, entry: string): string | null {
+    const trimmed = entry.trim();
+    const parsed = parseCidr(trimmed);
+    if (parsed && (trimmed.includes('/') || trimmed.includes(' '))) {
+      return `${parsed.address}/${parsed.prefix}`;
+    }
+    // Huawei-style wildcard: "network 10.0.0.0 0.0.0.255"
+    const wm = trimmed.match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
+    if (wm && isValidIp(wm[2]) && wm[2].startsWith('0')) {
+      const inverted = ipToInt(wm[2]) ^ 0xffffffff;
+      return `${wm[1]}/${maskToPrefix(inverted >>> 0)}`;
+    }
+    // interface name → its subnet
+    const iface = dev.getIfaceByName(trimmed);
+    if (iface?.ip) {
+      return `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`;
+    }
+    return null;
   }
 
   getLeases(): DhcpLeaseInfo[] {
@@ -241,6 +625,7 @@ export class SimulationEngine {
   private findPath(
     src: SimDevice,
     dstIp: string,
+    srcIp: string,
     ttl: number,
     visited: Set<string>,
     edges: string[]
@@ -249,6 +634,8 @@ export class SimulationEngine {
 
     const localIface = src.hasIp(dstIp);
     if (localIface) {
+      // the destination device itself may filter ICMP via ACL / firewall
+      if (this.aclBlocks(src, srcIp, dstIp)) return { ok: false, reason: 'blocked' };
       return { ok: true, path: [src], edges: [...edges], ttl };
     }
 
@@ -259,20 +646,25 @@ export class SimulationEngine {
 
     if (src.isSwitch) {
       let best: PathResult = { ok: false, reason: 'unreachable' };
+      const ingressEdgeId = edges.length > 0 ? edges[edges.length - 1] : undefined;
       for (const link of this.linksOfDevice(src.id)) {
         const peer = this.devices.get(link.nodeIdA === src.id ? link.nodeIdB : link.nodeIdA);
         if (!peer) continue;
-        const r = this.findPath(peer, dstIp, ttl - 1, next, [...edges, link.id]);
+        if (this.vlanBlocks(src.id, link, ingressEdgeId)) continue;
+        const r = this.findPath(peer, dstIp, srcIp, ttl - 1, next, [...edges, link.id]);
         if (r.ok) {
           this.learnHop(src, peer, link);
           return { ok: true, path: [src, ...(r.path || [])], edges: r.edges, ttl: r.ttl };
         }
         if (r.reason === 'ttl') best = r;
+        if (r.reason === 'blocked') best = r;
       }
       return best;
     }
 
-    // L3 device
+    // L3 device — ACL / firewall filter applies before forwarding
+    if (this.aclBlocks(src, srcIp, dstIp)) return { ok: false, reason: 'blocked' };
+
     const nh = src.nextHop(dstIp);
     if (!nh || !nh.iface) return { ok: false, reason: 'unreachable' };
 
@@ -284,12 +676,55 @@ export class SimulationEngine {
     );
     if (!link) return { ok: false, reason: 'unreachable' };
 
-    const r = this.findPath(peer, dstIp, ttl - 1, next, [...edges, link.id]);
+    const r = this.findPath(peer, dstIp, srcIp, ttl - 1, next, [...edges, link.id]);
     if (r.ok) {
       this.learnHop(src, peer, link);
       return { ok: true, path: [src, ...(r.path || [])], edges: r.edges, ttl: r.ttl };
     }
     return r;
+  }
+
+  /** First-match ACL evaluation: deny → the packet is dropped. */
+  private aclBlocks(dev: SimDevice, srcIp: string, dstIp: string): boolean {
+    const rules = this.acls.get(dev.id);
+    if (!rules || rules.length === 0) return false;
+    for (const rule of rules) {
+      const protoOk = !rule.proto || rule.proto === 'any' || rule.proto === 'ip' || rule.proto === 'icmp';
+      if (!protoOk) continue;
+      const srcOk = this.aclAddrMatches(rule.src, srcIp);
+      const dstOk = this.aclAddrMatches(rule.dst, dstIp);
+      if (srcOk && dstOk) return rule.action === 'deny';
+    }
+    return false;
+  }
+
+  private aclAddrMatches(pattern: string | undefined, ip: string): boolean {
+    if (!pattern || pattern === 'any') return true;
+    if (pattern.includes('/')) {
+      const parsed = parseCidr(pattern);
+      if (!parsed) return false;
+      return inSameSubnet(ip, parsed.prefix, parsed.address);
+    }
+    return pattern === ip;
+  }
+
+  /**
+   * Access-VLAN isolation on switches: the packet is forwarded only when
+   * the ingress and egress ports of THIS switch share the same access VLAN.
+   * Ports without a configured VLAN default to VLAN 1.
+   */
+  private vlanBlocks(switchId: string, egressLink: SimLink, ingressEdgeId: string | undefined): boolean {
+    const vlans = this.portVlans.get(switchId);
+    if (!vlans || vlans.size === 0) return false;
+    const egressPort = egressLink.nodeIdA === switchId ? egressLink.portNameA : egressLink.portNameB;
+    let ingressPort: string | undefined;
+    if (ingressEdgeId) {
+      const il = this.links.find((l) => l.id === ingressEdgeId);
+      if (il) ingressPort = il.nodeIdA === switchId ? il.portNameA : il.portNameB;
+    }
+    const inVlan = ingressPort === undefined ? 1 : (vlans.get(ingressPort) ?? 1);
+    const outVlan = vlans.get(egressPort) ?? 1;
+    return inVlan !== outVlan;
   }
 
   /**
@@ -317,15 +752,49 @@ export class SimulationEngine {
       dhcpGranted = true;
     }
 
-    const result = this.findPath(src, dstIp, 64, new Set(), []);
+    const result = this.findPath(src, dstIp, src.getIpAddress() || '', 64, new Set(), []);
     if (result.ok && result.path) {
+      // NAT masquerade: the first router on the path with a srcnat
+      // masquerade rule on its exit interface rewrites the source IP.
+      let natIp: string | null = null;
+      let natDev: SimDevice | null = null;
+      for (let i = 1; i < result.path.length - 1; i++) {
+        const dev = result.path[i];
+        const nh = dev.nextHop(dstIp);
+        if (!nh || !nh.iface) continue;
+        const rules = this.nats.get(dev.id) || [];
+        const rule = rules.find(
+          (r) => r.action === 'masquerade' && r.chain === 'srcnat' && (!r.outInterface || r.outInterface === nh.iface)
+        );
+        if (rule) {
+          const outIface = dev.getIfaceByName(nh.iface);
+          if (outIface?.ip) {
+            natIp = outIface.ip.address;
+            natDev = dev;
+            break;
+          }
+        }
+      }
+
       // A real ICMP exchange also requires the return path to work:
       // the destination must be able to route the reply back to the source.
       const dstDev = this.devices.get(result.path[result.path.length - 1].id);
       const srcIp = src.getIpAddress() || '';
       if (dstDev && srcIp) {
-        const back = this.findPath(dstDev, srcIp, 64, new Set(), []);
-        if (!back.ok) {
+        const backTarget = natIp || srcIp;
+        const back = this.findPath(dstDev, backTarget, dstDev.getIpAddress() || '', 64, new Set(), []);
+        if (back.ok && natIp && natDev) {
+          // de-NAT: the NAT router must still reach the original source on its LAN
+          if (!this.findPath(natDev, srcIp, natIp, 64, new Set(), []).ok) {
+            return {
+              success: false,
+              path: [],
+              edgeIds: [],
+              ttlAtDestination: 0,
+              reason: 'unreachable',
+            };
+          }
+        } else if (!back.ok) {
           return {
             success: false,
             path: [],
@@ -349,6 +818,29 @@ export class SimulationEngine {
       edgeIds: [],
       ttlAtDestination: 0,
       reason: result.reason || 'unreachable',
+    };
+  }
+
+  /**
+   * Hop-by-hop traceroute: reuses the path finder and reports every L3 hop.
+   * Returns one hop per device; unreachable destinations produce empty hops.
+   */
+  simulateTraceroute(srcNodeId: string, dstIp: string): TracerouteResult {
+    const src = this.devices.get(srcNodeId);
+    if (!src) return { ok: false, hops: [], reason: 'not-found' };
+    if (!isValidIp(dstIp)) return { ok: false, hops: [], reason: 'invalid' };
+
+    const result = this.findPath(src, dstIp, src.getIpAddress() || '', 64, new Set(), []);
+    if (!result.ok || !result.path) {
+      return { ok: false, hops: [], reason: result.reason || 'unreachable' };
+    }
+    return {
+      ok: true,
+      hops: result.path.map((dev, i) => ({
+        name: dev.name,
+        ttl: i + 1,
+        ip: dev.getIpAddress(),
+      })),
     };
   }
 

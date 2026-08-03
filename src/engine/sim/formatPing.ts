@@ -1,4 +1,4 @@
-import { PingSimResult } from './simulation';
+import { PingSimResult, TracerouteResult } from './simulation';
 
 const REASON_TEXT: Record<string, string> = {
   'no-ip': 'no usable source IP configured on this device (set one first, e.g. /ip address add)',
@@ -7,6 +7,7 @@ const REASON_TEXT: Record<string, string> = {
   unreachable: 'destination host unreachable (no route to network)',
   ttl: 'time to live exceeded in transit (routing loop or too many hops)',
   self: 'pinging this device itself',
+  blocked: 'request rejected by access-list / firewall filter (permit/deny)',
 };
 
 function errorLines(vendorId: string, host: string, r: PingSimResult): string[] {
@@ -111,4 +112,48 @@ export function formatPingOutput(
     `rtt min/avg/max/mdev = ${ms(0)}/${ms(1)}/${ms(2)}/0.010 ms`,
     `  path: ${r.path.join(' -> ')}`,
   ].join('\n');
+}
+
+/**
+ * Format a real simulated traceroute into vendor-flavored CLI output.
+ */
+export function formatTracerouteOutput(
+  vendorId: string,
+  host: string,
+  r: TracerouteResult
+): string {
+  const rows = (lines: string[]) => lines.join('\n');
+
+  if (vendorId === 'mikrotik') {
+    if (!r.ok) return `  ADDRESS                                    RT  RTT\n  ${host.padEnd(45)} *   *   *   * (unreachable: ${r.reason || 'no route'})`;
+    const hopLines = r.hops.map((h, i) =>
+      ` ${(i + 1).toString().padStart(2)} ${(h.ip || '0.0.0.0').padEnd(45)} 1ms  1ms  1ms  (${h.name})`
+    );
+    return rows(['  ADDRESS                                    RT  RTT', ...hopLines, `  traceroute to ${host} — ${r.hops.length} hop(s)`]);
+  }
+  if (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba') {
+    if (!r.ok) return `Type escape sequence to abort.\n 1  * * *\n 2  * * *\nTracing route to ${host}: unreachable (${r.reason || 'no route'})`;
+    const hopLines = r.hops.map((h, i) =>
+      ` ${(i + 1).toString().padStart(2)}  ${(h.ip || '*').padEnd(15)} ${h.name}  1 msec  1 msec  1 msec`
+    );
+    return rows(['Type escape sequence to abort.', ...hopLines, `Tracing route to ${host}: ${r.hops.length} hop(s)`]);
+  }
+  if (vendorId === 'huawei') {
+    if (!r.ok) return `  traceroute to ${host} (${host}), 30 hops max, 60 byte packets\n 1  * * *\n  (unreachable: ${r.reason || 'no route'})`;
+    const hopLines = r.hops.map((h, i) =>
+      ` ${(i + 1).toString().padStart(2)}  ${(h.ip || '*').padEnd(16)} ${h.name}  1 ms  1 ms  1 ms`
+    );
+    return rows([`  traceroute to ${host} (${host}), 30 hops max, 60 byte packets`, ...hopLines]);
+  }
+  // linux-like
+  if (!r.ok) return rows([
+    `traceroute to ${host} (${host}), 30 hops max, 60 byte packets`,
+    ` 1  * * *`,
+    ` 2  * * *`,
+    `  (unreachable: ${r.reason || 'no route'})`,
+  ]);
+  const hopLines = r.hops.map((h, i) =>
+    ` ${(i + 1).toString().padStart(2)}  ${(h.ip || '*').padEnd(15)} (${h.name})  0.4 ms  0.4 ms  0.4 ms`
+  );
+  return rows([`traceroute to ${host} (${host}), 30 hops max, 60 byte packets`, ...hopLines]);
 }

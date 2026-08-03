@@ -121,8 +121,22 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       children: [
         { command: '/ip firewall nat add chain=srcnat out-interface=<port> action=masquerade', description: 'NAT: buat semua perangkat LAN bisa internet lewat 1 IP' },
         { command: '/ip firewall nat print', description: 'Lihat aturan NAT' },
+        { command: '/ip firewall filter add chain=forward protocol=icmp action=drop', description: 'Blokir ping ICMP yang lewat router' },
+        { command: '/ip firewall filter print', description: 'Lihat aturan filter' },
       ]
     },
+    {
+      command: '/routing',
+      description: 'Routing dinamis (OSPF/RIP/BGP)',
+      children: [
+        { command: '/routing ospf instance add name=ospf1 router-id=1.1.1.1', description: 'Nyalakan OSPF' },
+        { command: '/routing ospf network add network=192.168.88.0/24 area=0', description: 'Advertise subnet ke OSPF' },
+        { command: '/routing rip instance add name=rip1', description: 'Nyalakan RIP' },
+        { command: '/routing rip network add network=10.0.0.0/24', description: 'Advertise subnet ke RIP' },
+        { command: '/routing bgp network add network=192.168.88.0/24', description: 'Advertise subnet ke BGP' },
+      ]
+    },
+    { command: '/tool traceroute <host>', description: 'Telusuri jalur paket hop demi hop' },
     {
       command: '/interface vlan',
       description: 'VLAN (memecah satu switch jadi banyak jaringan)',
@@ -168,6 +182,16 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
         { command: 'router ospf 1', description: 'Configure OSPF routing process' },
         { command: 'router rip', description: 'Configure RIP routing process' },
         { command: 'router eigrp <asn>', description: 'Configure EIGRP routing process' },
+        { command: 'network <ip> <mask> area 0', description: 'Advertise subnet via routing protocol (setelah router ospf)' },
+      ]
+    },
+    {
+      command: 'access-list',
+      description: 'Filter paket (ACL)',
+      children: [
+        { command: 'access-list 100 deny icmp any any', description: 'Blokir semua ping ICMP ke/dari device' },
+        { command: 'access-list 100 permit ip any any', description: 'Izinkan semua lalu lintas' },
+        { command: 'show access-lists', description: 'Lihat daftar ACL' },
       ]
     },
     {
@@ -213,8 +237,10 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
       children: [
         { command: 'interface Gi0/1', description: 'Masuk ke mode port (misal Gi0/1)' },
         { command: 'ip address dhcp', description: 'Jadikan port ini DHCP client — minta IP dari server' },
+        { command: 'switchport access vlan 10', description: 'Masukkan port ke VLAN 10 (khusus switch)' },
       ]
     },
+    { command: 'traceroute <host>', description: 'Telusuri jalur paket hop demi hop' },
     { command: 'show hosts', description: 'Lihat DNS server yang dipakai' },
   ],
 
