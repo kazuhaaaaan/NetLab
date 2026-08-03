@@ -81,6 +81,18 @@ function getPortAnchor(node: LabNode, portId: string): { x: number; y: number } 
   };
 }
 
+/** Cable endpoint on a node: clamped inside the device body so cables
+ *  visually plug INTO the device instead of floating at the port dot
+ *  (ports on the lower slots stick out below the node otherwise). */
+function getEdgeAnchor(node: LabNode, portId: string): { x: number; y: number } {
+  const a = getPortAnchor(node, portId);
+  const inset = 6;
+  return {
+    x: Math.min(Math.max(a.x, node.position.x + inset), node.position.x + NODE_W - inset),
+    y: Math.min(Math.max(a.y, node.position.y + inset), node.position.y + NODE_H - inset),
+  };
+}
+
 import { GestureType, GestureDetail, InteractionEngine } from "../engine/InteractionEngine";
 import { PacketAnimation } from "../types";
 
@@ -233,8 +245,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           const sNode = nodes.find((n) => n.id === edge.sourceNodeId);
           const tNode = nodes.find((n) => n.id === edge.targetNodeId);
           if (!sNode || !tNode) continue;
-          const { x: x1, y: y1 } = getPortAnchor(sNode, edge.sourcePortId);
-          const { x: x2, y: y2 } = getPortAnchor(tNode, edge.targetPortId);
+          const { x: x1, y: y1 } = getEdgeAnchor(sNode, edge.sourcePortId);
+          const { x: x2, y: y2 } = getEdgeAnchor(tNode, edge.targetPortId);
           const dx = x2 - x1;
           const dy = y2 - y1;
           let cx1: number, cy1: number, cx2: number, cy2: number;
@@ -390,7 +402,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (gesture.nodeId && gesture.portId) {
         const sourceNode = nodes.find((n) => n.id === gesture.nodeId);
         if (sourceNode) {
-          const from = getPortAnchor(sourceNode, gesture.portId);
+          const from = getEdgeAnchor(sourceNode, gesture.portId);
           setCableDrag({
             x1: from.x,
             y1: from.y,
@@ -509,8 +521,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           const sourceNode = nodes.find((n) => n.id === edge.sourceNodeId);
           const targetNode = nodes.find((n) => n.id === edge.targetNodeId);
           if (!sourceNode || !targetNode) return null;
-          const { x: x1, y: y1 } = getPortAnchor(sourceNode, edge.sourcePortId);
-          const { x: x2, y: y2 } = getPortAnchor(targetNode, edge.targetPortId);
+          const { x: x1, y: y1 } = getEdgeAnchor(sourceNode, edge.sourcePortId);
+          const { x: x2, y: y2 } = getEdgeAnchor(targetNode, edge.targetPortId);
           const dx = x2 - x1;
           const dy = y2 - y1;
           
@@ -676,7 +688,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         {cableWizard && cableWizard.sourcePortId && cableWizard.cableType && pointerWorld && (() => {
           const srcNode = nodes.find((n) => n.id === cableWizard.sourceNodeId);
           if (!srcNode) return null;
-          const anchor = getPortAnchor(srcNode, cableWizard.sourcePortId);
+          const anchor = getEdgeAnchor(srcNode, cableWizard.sourcePortId);
           const tgtNode = cableWizard.targetNodeId ? nodes.find((n) => n.id === cableWizard.targetNodeId) : null;
           const end = tgtNode
             ? { x: tgtNode.position.x + NODE_W / 2, y: tgtNode.position.y + NODE_H / 2 }
@@ -710,8 +722,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           const sNode = nodes.find((n) => n.id === edge.sourceNodeId);
           const tNode = nodes.find((n) => n.id === edge.targetNodeId);
           if (!sNode || !tNode) return null;
-          const { x: x1, y: y1 } = getPortAnchor(sNode, edge.sourcePortId);
-          const { x: x2, y: y2 } = getPortAnchor(tNode, edge.targetPortId);
+          const { x: x1, y: y1 } = getEdgeAnchor(sNode, edge.sourcePortId);
+          const { x: x2, y: y2 } = getEdgeAnchor(tNode, edge.targetPortId);
           const dx = x2 - x1;
           const dy = y2 - y1;
           let cx1, cy1, cx2, cy2;
@@ -772,8 +784,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         const sNode = nodes.find((n) => n.id === edge.sourceNodeId);
         const tNode = nodes.find((n) => n.id === edge.targetNodeId);
         if (!sNode || !tNode) return null;
-        const { x: ax, y: ay } = getPortAnchor(sNode, edge.sourcePortId);
-        const { x: bx, y: by } = getPortAnchor(tNode, edge.targetPortId);
+        const { x: ax, y: ay } = getEdgeAnchor(sNode, edge.sourcePortId);
+        const { x: bx, y: by } = getEdgeAnchor(tNode, edge.targetPortId);
         const adx = bx - ax;
         const ady = by - ay;
         let acx1, acy1, acx2, acy2;
