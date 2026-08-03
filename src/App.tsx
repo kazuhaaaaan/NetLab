@@ -12,6 +12,7 @@ import { MobileToolbar } from './components/MobileToolbar';
 import { PingPanel, PingResult } from './components/PingPanel';
 import { SplashScreen } from './components/SplashScreen';
 import { LandingPage } from './components/LandingPage';
+import { MobileWarning } from './components/MobileWarning';
 import { StorageEngine } from './storage/db';
 import { VENDOR_MAP } from './data/vendors';
 import { getDefaultModel, getModelsForVendor, getPortsForModel } from './data/deviceModels';
@@ -691,6 +692,7 @@ export default function App() {
     return (
       <>
         <LandingPage onLaunch={goToCanvas} onOpenDonate={() => setIsDonateOpen(true)} />
+        <MobileWarning />
         {showSplash && <SplashScreen onDone={handleSplashDone} />}
 
         {/* Donate Modal (QRIS) — tampil juga di homepage */}
@@ -901,6 +903,9 @@ export default function App() {
 
       {/* First-Time Experience Tutorial Modal */}
       <TutorialModal isOpen={isTutorialOpen} onClose={() => setIsTutorialOpen(false)} />
+
+      {/* Mobile desktop-optimization warning */}
+      <MobileWarning />
 
       {/* Monorepo Package Explorer Modal */}
       <MonorepoExplorerModal isOpen={isMonorepoOpen} onClose={() => setIsMonorepoOpen(false)} />
