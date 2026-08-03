@@ -13,7 +13,10 @@ import {
   Heart,
   Undo2,
   Redo2,
-  Home
+  Home,
+  Share2,
+  Image,
+  FileImage
 } from 'lucide-react';
 import { LabProject } from '../types';
 
@@ -29,6 +32,9 @@ interface NavbarProps {
   onLoadTemplate: (templateName: string) => void;
   onOpenDonate: () => void;
   onGoHome: () => void;
+  onShare: () => void;
+  onExportPng: () => void;
+  onExportSvg: () => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -47,6 +53,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onLoadTemplate,
   onOpenDonate,
   onGoHome,
+  onShare,
+  onExportPng,
+  onExportSvg,
   canUndo,
   canRedo,
   onUndo,
@@ -213,6 +222,36 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <FileCode className="w-3.5 h-3.5 text-indigo-400" />
           <span className="hidden md:inline">Export</span>
+        </button>
+
+        {/* Share link */}
+        <button
+          onClick={onShare}
+          title="Bagikan topologi lewat link"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden lg:inline">Share</span>
+        </button>
+
+        {/* Export PNG */}
+        <button
+          onClick={onExportPng}
+          title="Export Topologi sebagai Gambar (PNG)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <Image className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="hidden lg:inline">PNG</span>
+        </button>
+
+        {/* Export SVG */}
+        <button
+          onClick={onExportSvg}
+          title="Export Topologi sebagai Vektor (SVG)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <FileImage className="w-3.5 h-3.5 text-fuchsia-400" />
+          <span className="hidden lg:inline">SVG</span>
         </button>
 
         {/* Monorepo Architecture Explorer */}

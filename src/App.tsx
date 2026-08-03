@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X } from 'lucide-react';
-import { LabProject, LabNode, LabEdge, Viewport, TerminalLog, VendorType, ActiveTool } from './types';
+import { LabProject, LabNode, LabEdge, Viewport, TerminalLog, VendorType, ActiveTool, PacketAnimation } from './types';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
@@ -18,6 +18,8 @@ import { VENDOR_MAP } from './data/vendors';
 import { getDefaultModel, getModelsForVendor, getPortsForModel } from './data/deviceModels';
 import { VendorDispatcher } from '../packages/vendors/src/index';
 import { SimulationEngine, formatPingOutput } from './engine/sim';
+import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
+import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 
 const vendorDispatcher = new VendorDispatcher();
 
@@ -178,6 +180,11 @@ export default function App() {
   const [pingSource, setPingSource] = useState<string | null>(null); // first-click node
   const [isPingPanelOpen, setIsPingPanelOpen] = useState(true);
 
+  // Packet animation (paket ICMP melintasi kabel di canvas)
+  const [packetAnimations, setPacketAnimations] = useState<PacketAnimation[]>([]);
+  // Penanda pembaruan state engine → panel statistik perlu di-refresh
+  const [statsVersion, setStatsVersion] = useState(0);
+
   // Undo / Redo history
   const historyRef = useRef<LabProject[]>([TEMPLATE_BASIC]);
   const historyIndexRef = useRef<number>(0);
@@ -187,27 +194,66 @@ export default function App() {
   // Selesai memuat proyek tersimpan → auto-save baru aktif setelah ini (hindari menimpa proyek lama dgn template default saat reload)
   const projectLoadedRef = useRef<boolean>(false);
 
+  /** Sinkronkan pool DHCP dari konfigurasi CLI (MikroTik/Cisco/etc.) ke simulation engine. */
+  const syncDhcpPools = useCallback(() => {
+    const mem = vendorDispatcher.serializeMemory();
+    const poolsByNode: Record<string, any[]> = {};
+    for (const [nodeId, m] of Object.entries(mem)) {
+      if (m && Array.isArray(m.dhcpPools) && m.dhcpPools.length > 0) {
+        poolsByNode[nodeId] = m.dhcpPools;
+      }
+    }
+    simEngineRef.current.setDhcpPools(poolsByNode);
+  }, []);
+
   // Check tutorial on first visit (only for touch devices)
   useEffect(() => {
-    // Panduan muncul otomatis saat pertama kali membuka (semua perangkat),
-    // lalu ditandai sudah dilihat supaya tidak muncul lagi saat reload
-    if (!StorageEngine.hasSeenTutorial()) {
-      setIsTutorialOpen(true);
-      StorageEngine.setTutorialSeen(true);
-    }
-
-    // Load saved project from IndexedDB if present
-    StorageEngine.loadProject().then((saved) => {
-      if (saved) {
-        setProject(saved);
-        // Undo history dimulai dari proyek tersimpan, bukan template default
-        historyRef.current = [saved];
+    // 0) Topologi dari link berbagi (param ?lab=...) punya prioritas tertinggi
+    const urlParams = new URLSearchParams(window.location.search);
+    const shared = urlParams.get(SHARE_PARAM);
+    if (shared) {
+      const payload = decodeSharePayload(shared);
+      if (payload?.project) {
+        setProject(payload.project);
+        historyRef.current = [payload.project];
         historyIndexRef.current = 0;
         setCanUndo(false);
         setCanRedo(false);
+        vendorDispatcher.restoreMemory(payload.configs);
+        const mem = vendorDispatcher.serializeMemory();
+        for (const nodeId of Object.keys(mem)) {
+          simEngineRef.current.applyNodeConfig(nodeId, mem[nodeId].configuredIps, mem[nodeId].routes);
+        }
+        syncDhcpPools();
+        showToast('Topologi dari link berhasil dimuat');
+        projectLoadedRef.current = true;
+        try {
+          history.replaceState(null, '', window.location.pathname);
+        } catch {
+          // abaikan — URL bersih opsional
+        }
       }
-      projectLoadedRef.current = true;
-    });
+    } else {
+      // Panduan muncul otomatis saat pertama kali membuka (semua perangkat),
+      // lalu ditandai sudah dilihat supaya tidak muncul lagi saat reload
+      if (!StorageEngine.hasSeenTutorial()) {
+        setIsTutorialOpen(true);
+        StorageEngine.setTutorialSeen(true);
+      }
+
+      // Load saved project from IndexedDB if present
+      StorageEngine.loadProject().then((saved) => {
+        if (saved) {
+          setProject(saved);
+          // Undo history dimulai dari proyek tersimpan, bukan template default
+          historyRef.current = [saved];
+          historyIndexRef.current = 0;
+          setCanUndo(false);
+          setCanRedo(false);
+        }
+        projectLoadedRef.current = true;
+      });
+    }
 
     // Restore CLI-configured device state (IPs/routes/BGP) from storage
     StorageEngine.loadDeviceConfigs().then((configs) => {
@@ -216,8 +262,9 @@ export default function App() {
       for (const nodeId of Object.keys(mem)) {
         simEngineRef.current.applyNodeConfig(nodeId, mem[nodeId].configuredIps, mem[nodeId].routes);
       }
+      syncDhcpPools();
     });
-  }, []);
+  }, [syncDhcpPools, showToast]);
 
   // Auto-save project changes (hanya setelah proyek tersimpan dimuat ulang)
   useEffect(() => {
@@ -586,10 +633,35 @@ export default function App() {
       if (simResult.success) {
         status = 'success';
         message = `Reply from ${ping.dstIp}: bytes=32 time=<1ms TTL=${simResult.ttlAtDestination || 64}${path}`;
+        if (simResult.dhcpGranted) {
+          message = `DHCP lease didapat otomatis — ${message}`;
+        }
+
+        // Animasi paket: request berjalan sumber → tujuan, lalu reply kembali
+        if (simResult.edgeIds.length > 0) {
+          const reqId = `${pingId}-req`;
+          const repId = `${pingId}-rep`;
+          setPacketAnimations((prev) => [
+            ...prev.filter((a) => a.id !== reqId && a.id !== repId),
+            { id: reqId, edgeIds: simResult.edgeIds },
+          ]);
+          window.setTimeout(() => {
+            setPacketAnimations((prev) => [
+              ...prev.filter((a) => a.id !== reqId && a.id !== repId),
+              { id: reqId, edgeIds: simResult.edgeIds },
+              { id: repId, edgeIds: simResult.edgeIds, reverse: true },
+            ]);
+          }, 550);
+          window.setTimeout(() => {
+            setPacketAnimations((prev) =>
+              prev.filter((a) => a.id !== reqId && a.id !== repId)
+            );
+          }, 3600);
+        }
       } else {
         status = 'failed';
         const reasons: Record<string, string> = {
-          'no-ip': 'Sumber belum punya IP (atur lewat CLI, contoh: /ip address add …)',
+          'no-ip': 'Sumber belum punya IP & tidak ada DHCP server tersedia (atur lewat CLI, contoh: /ip address add …)',
           invalid: `Alamat tujuan tidak valid: ${ping.dstIp}`,
           'not-found': 'Node sumber tidak ditemukan',
           ttl: 'Time to live exceeded (loop rute / hop terlalu banyak)',
@@ -602,6 +674,7 @@ export default function App() {
       setPingResults((prev) =>
         prev.map((r) => (r.id === pingId ? { ...r, status, message } : r))
       );
+      setStatsVersion((v) => v + 1);
     }, 600);
   };
 
@@ -664,6 +737,8 @@ export default function App() {
 
       // Pick up config changes made by this command (add_ip / add_route)
       simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+      syncDhcpPools();
+      setStatsVersion((v) => v + 1);
 
       // Persist CLI state so a refresh keeps the configured topology
       StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory());
@@ -686,6 +761,27 @@ export default function App() {
   };
 
   const selectedNode = project.nodes.find((n) => n.id === selectedNodeId) || null;
+
+  // Bagikan topologi lewat link (base64 di URL)
+  const handleShare = useCallback(() => {
+    try {
+      const payload = encodeSharePayload({
+        project,
+        configs: vendorDispatcher.serializeMemory(),
+      });
+      const url = `${window.location.origin}${window.location.pathname}?${SHARE_PARAM}=${payload}`;
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(
+          () => showToast('Link topologi disalin ke clipboard!'),
+          () => window.prompt('Salin link ini:', url)
+        );
+      } else {
+        window.prompt('Salin link ini:', url);
+      }
+    } catch {
+      showToast('Gagal membuat link — topologi terlalu besar', 'error');
+    }
+  }, [project, showToast]);
 
   // ── Landing page (pre-canvas) ──────────────────────────────────────────
   if (view === 'landing') {
@@ -755,6 +851,9 @@ export default function App() {
           if (tpl === 'enterprise') setProjectWithHistory(TEMPLATE_ENTERPRISE);
         }}
         onOpenDonate={() => setIsDonateOpen(true)}
+        onShare={handleShare}
+        onExportPng={() => exportTopologyPng(project, theme)}
+        onExportSvg={() => exportTopologySvg(project, theme)}
         canUndo={canUndo}
         canRedo={canRedo}
         onUndo={handleUndo}
@@ -822,6 +921,7 @@ export default function App() {
             theme={theme}
             viewPorts={viewPorts}
             onToggleViewPorts={() => setViewPorts((v) => !v)}
+            packetAnimations={packetAnimations}
           />
 
           {/* Context Menu Popup */}
@@ -876,6 +976,9 @@ export default function App() {
           isOpen={isPingPanelOpen}
           onToggle={() => setIsPingPanelOpen(!isPingPanelOpen)}
           onRunPing={handleRunPing}
+          getStats={(nodeId) => simEngineRef.current.getDeviceStats(nodeId)}
+          statsVersion={statsVersion}
+          leases={simEngineRef.current.getLeases()}
         />
       )}
 

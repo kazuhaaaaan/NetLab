@@ -85,3 +85,12 @@ export interface TerminalLog {
 }
 
 export type ActiveTool = 'select' | 'cable' | 'pan' | 'ping';
+
+/** Animasi paket yang melintasi kabel di canvas (hasil simulasi ping). */
+export interface PacketAnimation {
+  id: string;
+  /** edge ids dalam urutan lintasan (sumber → tujuan) */
+  edgeIds: string[];
+  /** true = arah balik (reply) */
+  reverse?: boolean;
+}

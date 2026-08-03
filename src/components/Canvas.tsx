@@ -82,6 +82,7 @@ function getPortAnchor(node: LabNode, portId: string): { x: number; y: number } 
 }
 
 import { GestureType, GestureDetail, InteractionEngine } from "../engine/InteractionEngine";
+import { PacketAnimation } from "../types";
 
 interface CanvasProps {
   nodes: LabNode[];
@@ -112,6 +113,8 @@ interface CanvasProps {
   onDeleteEdge?: (edgeId: string) => void;
   viewPorts?: boolean;
   onToggleViewPorts?: () => void;
+  /** Animasi paket ping yang melintasi kabel (dari hasil simulasi). */
+  packetAnimations?: PacketAnimation[];
 }
 
 /** Popover interaktif di atas canvas — blokir gesture engine (preventDefault + TAP) agar klik asli & dropdown tetap berfungsi. */
@@ -161,6 +164,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   onDeleteEdge,
   viewPorts = false,
   onToggleViewPorts,
+  packetAnimations = [],
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const handleGestureRef = useRef<(gesture: GestureDetail) => void>(() => {});
@@ -183,6 +187,97 @@ export const Canvas: React.FC<CanvasProps> = ({
     nodeId: string;
     portId: string;
   } | null>(null);
+
+  // ── Animasi paket ping melintasi kabel ──
+  const PACKET_DURATION = 1200;
+  const [packetRuns, setPacketRuns] = useState<
+    (PacketAnimation & { startedAt: number })[]
+  >([]);
+  const [packetPositions, setPacketPositions] = useState<
+    Record<string, { x: number; y: number }>
+  >({});
+
+  useEffect(() => {
+    if (!packetAnimations || packetAnimations.length === 0) return;
+    const now = Date.now();
+    const fresh = packetAnimations.filter(
+      (a) => !packetRuns.some((r) => r.id === a.id)
+    );
+    if (fresh.length > 0) {
+      setPacketRuns((prev) => [
+        ...prev,
+        ...fresh.map((a) => ({ ...a, startedAt: now })),
+      ]);
+    }
+  }, [packetAnimations]);
+
+  useEffect(() => {
+    if (packetRuns.length === 0) {
+      setPacketPositions({});
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      const now = Date.now();
+      const positions: Record<string, { x: number; y: number }> = {};
+      let alive = 0;
+      for (const run of packetRuns) {
+        const elapsed = now - run.startedAt;
+        if (elapsed >= PACKET_DURATION) continue;
+        alive++;
+        const edgeIds = run.reverse ? [...run.edgeIds].reverse() : run.edgeIds;
+        const pts: { x: number; y: number }[] = [];
+        for (const eid of edgeIds) {
+          const edge = edges.find((e) => e.id === eid);
+          if (!edge) continue;
+          const sNode = nodes.find((n) => n.id === edge.sourceNodeId);
+          const tNode = nodes.find((n) => n.id === edge.targetNodeId);
+          if (!sNode || !tNode) continue;
+          const { x: x1, y: y1 } = getPortAnchor(sNode, edge.sourcePortId);
+          const { x: x2, y: y2 } = getPortAnchor(tNode, edge.targetPortId);
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          let cx1: number, cy1: number, cx2: number, cy2: number;
+          if (Math.abs(dy) > Math.abs(dx)) {
+            const bulge = Math.max(50, Math.abs(dy) * 0.3);
+            cx1 = x1 + bulge;
+            cy1 = y1 + dy * 0.25;
+            cx2 = x2 + bulge;
+            cy2 = y2 - dy * 0.25;
+          } else {
+            cx1 = x1 + dx * 0.5;
+            cy1 = y1;
+            cx2 = x1 + dx * 0.5;
+            cy2 = y2;
+          }
+          for (let i = 0; i <= 10; i++) {
+            const t = i / 10;
+            const mt = 1 - t;
+            pts.push({
+              x:
+                mt * mt * mt * x1 +
+                3 * mt * mt * t * cx1 +
+                3 * mt * t * t * cx2 +
+                t * t * t * x2,
+              y:
+                mt * mt * mt * y1 +
+                3 * mt * mt * t * cy1 +
+                3 * mt * t * t * cy2 +
+                t * t * t * y2,
+            });
+          }
+        }
+        if (pts.length === 0) continue;
+        const t = Math.min(1, elapsed / PACKET_DURATION);
+        const idx = Math.min(pts.length - 1, Math.floor(t * (pts.length - 1)));
+        positions[run.id] = pts[idx];
+      }
+      setPacketPositions(positions);
+      if (alive > 0) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [packetRuns, edges, nodes]);
 
   useEffect(() => {
     handleGestureRef.current = (gesture: GestureDetail) => {
@@ -652,6 +747,21 @@ export const Canvas: React.FC<CanvasProps> = ({
             </g>
           );
         })()}
+
+        {/* Paket ping yang melintasi kabel */}
+        {Object.entries(packetPositions).map(([id, pos]) => (
+          <circle
+            key={id}
+            cx={(pos as { x: number; y: number }).x}
+            cy={(pos as { x: number; y: number }).y}
+            r="5"
+            fill="#22d3ee"
+            stroke="#0B0C0E"
+            strokeWidth="1"
+            className="animate-pulse"
+            style={{ filter: "drop-shadow(0 0 6px rgba(34,211,238,0.9))" }}
+          />
+        ))}
       </svg>
 
       {/* Cable hover tooltip: tampilkan perangkat & port yang dihubungkan kabel */}
