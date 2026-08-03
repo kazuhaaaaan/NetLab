@@ -82,58 +82,58 @@ export const TEMPLATE_ENTERPRISE: LabProject = {
   viewport: { x: 40, y: 40, zoom: 0.85 },
   nodes: [
     // ── Tier ISP ───────────────────────────────────────────────
-    mkNode('isp-a-edge', 'ISP-A-Edge', 'juniper', 'MX480', 'router', 120, 120, {
+    mkNode('isp-a-edge', 'ISP-A-Edge', 'juniper', 'MX480', 'router', 140, 100, {
       ips: { 'ge-0/0/1': '172.16.0.1/30' }
     }),
-    mkNode('isp-b-edge', 'ISP-B-Edge', 'cisco_ios', 'ASR 900 Series', 'router', 980, 120, {
-      ips: { 'Gi0/0/0': '172.16.0.9/30' }
-    }),
-    mkNode('isp-c-edge', 'ISP-C-Edge', 'huawei', 'AR3260', 'router', 560, 120, {
+    mkNode('isp-c-edge', 'ISP-C-Edge', 'huawei', 'AR3260', 'router', 420, 100, {
       ips: { 'GigabitEthernet0/0/1': '172.16.0.5/30' }
     }),
+    mkNode('isp-b-edge', 'ISP-B-Edge', 'cisco_ios', 'ASR 900 Series', 'router', 980, 100, {
+      ips: { 'Gi0/0/0': '172.16.0.9/30' }
+    }),
     // ── Perimeter DC ───────────────────────────────────────────
-    mkNode('dc-fw', 'DC-Firewall', 'fortinet', 'FortiGate 60E', 'firewall', 120, 300, {
+    mkNode('dc-fw', 'DC-Firewall', 'fortinet', 'FortiGate 60E', 'firewall', 140, 280, {
       ips: { port1: '172.16.0.2/30' },
       up: ['port2']
     }),
-    mkNode('dc-core-1', 'DC-Core-SW1', 'cisco_nxos', 'Nexus 93180YC-EX', 'switch', 380, 300, {
+    mkNode('dc-core-1', 'DC-Core-SW1', 'cisco_nxos', 'Nexus 93180YC-EX', 'switch', 420, 280, {
       ips: { 'Eth1/1': '172.16.0.6/30' },
       up: ['Eth1/2', 'Eth1/3', 'Eth1/4', 'Eth1/5']
     }),
-    mkNode('dc-core-2', 'DC-Core-SW2', 'cisco_nxos', 'Nexus 9364C', 'switch', 760, 300, {
+    mkNode('dc-core-2', 'DC-Core-SW2', 'cisco_nxos', 'Nexus 9364C', 'switch', 700, 280, {
       up: ['Eth1/1', 'Eth1/2', 'Eth1/3']
     }),
     // ── Distribution ───────────────────────────────────────────
-    mkNode('dc-dist-1', 'DC-Dist-SW1', 'cisco_ios', 'Catalyst 9200', 'switch', 140, 480, {
+    mkNode('dc-dist-1', 'DC-Dist-SW1', 'cisco_ios', 'Catalyst 9200', 'switch', 140, 460, {
       up: ['Gi1/0/1', 'Gi1/0/2', 'Gi1/0/3']
     }),
-    mkNode('dc-dist-2', 'DC-Dist-SW2', 'aruba', 'Aruba 6300M-48G4X', 'switch', 460, 480, {
+    mkNode('dc-dist-2', 'DC-Dist-SW2', 'aruba', 'Aruba 6300M-48G4X', 'switch', 420, 460, {
       up: ['1/1/1', '1/1/2', '1/1/3']
     }),
-    mkNode('dc-dist-3', 'DC-Dist-SW3', 'huawei', 'S5720', 'switch', 780, 480, {
+    mkNode('dc-dist-3', 'DC-Dist-SW3', 'huawei', 'S5720', 'switch', 700, 460, {
       up: ['GigabitEthernet0/0/1', 'GigabitEthernet0/0/2']
     }),
     // ── Access ─────────────────────────────────────────────────
-    mkNode('acc-a1', 'Access-A1', 'cisco_ios', 'Catalyst 2960-X', 'switch', 100, 640, {
+    mkNode('acc-a1', 'Access-A1', 'cisco_ios', 'Catalyst 2960-X', 'switch', 140, 640, {
       up: ['Gi0/1', 'Gi0/2']
     }),
-    mkNode('acc-a2', 'Access-A2', 'aruba', 'Aruba 2930F', 'switch', 360, 640, {
+    mkNode('acc-a2', 'Access-A2', 'aruba', 'Aruba 2930F', 'switch', 420, 640, {
       up: ['1/1/1', '1/1/2']
     }),
-    mkNode('acc-a3', 'Access-A3', 'mikrotik', 'CRS326-24G-2S+', 'switch', 640, 640, {
+    mkNode('acc-a3', 'Access-A3', 'mikrotik', 'CRS326-24G-2S+', 'switch', 700, 640, {
       up: ['ether1', 'ether2', 'ether3', 'ether4']
     }),
     // ── Server & pelanggan ─────────────────────────────────────
-    mkNode('srv-1', 'Server-Web', 'linux', 'Ubuntu Server 22.04 LTS', 'server', 100, 800, {
+    mkNode('srv-1', 'Server-Web', 'linux', 'Ubuntu Server 22.04 LTS', 'server', 140, 820, {
       ips: { eth1: '10.1.10.10/24' }
     }),
-    mkNode('srv-2', 'Server-DB', 'linux', 'Debian 12 (Bookworm)', 'server', 360, 800, {
+    mkNode('srv-2', 'Server-DB', 'linux', 'Debian 12 (Bookworm)', 'server', 420, 820, {
       ips: { eth1: '10.1.10.11/24' }
     }),
     mkNode('cust-gw', 'Customer-GW', 'ubiquiti', 'EdgeRouter 4', 'router', 980, 640, {
       ips: { eth0: '10.1.20.1/24', eth1: '172.16.0.10/30' }
     }),
-    mkNode('cust-pc', 'Customer-PC', 'linux', 'Debian 12 (Bookworm)', 'pc', 980, 800, {
+    mkNode('cust-pc', 'Customer-PC', 'linux', 'Debian 12 (Bookworm)', 'pc', 980, 820, {
       ips: { eth1: '10.1.20.10/24' }
     })
   ],
