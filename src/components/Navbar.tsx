@@ -1,0 +1,334 @@
+import React, { useRef, useState } from 'react';
+import {
+  Network,
+  Download,
+  Upload,
+  FileCode,
+  HelpCircle,
+  Sun,
+  Moon,
+  Plus,
+  PackageCheck,
+  FolderTree,
+  Heart,
+  Undo2,
+  Redo2,
+  Home,
+  Share2,
+  Image,
+  FileImage,
+  ClipboardCheck,
+  Bot
+} from 'lucide-react';
+import { LabProject } from '../types';
+
+interface NavbarProps {
+  project: LabProject;
+  onNewProject: () => void;
+  onExportMlab: () => void;
+  onImportMlab: (file: File) => void;
+  onOpenMonorepo: () => void;
+  onOpenTutorial: () => void;
+  onOpenGrading: () => void;
+  onOpenAiChat: () => void;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
+  onLoadTemplate: (templateName: string) => void;
+  onOpenDonate: () => void;
+  onGoHome: () => void;
+  onShare: () => void;
+  onExportPng: () => void;
+  onExportSvg: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+}
+
+export const Navbar: React.FC<NavbarProps> = ({
+  project,
+  onNewProject,
+  onExportMlab,
+  onImportMlab,
+  onOpenMonorepo,
+  onOpenTutorial,
+  onOpenGrading,
+  onOpenAiChat,
+  theme,
+  onToggleTheme,
+  onLoadTemplate,
+  onOpenDonate,
+  onGoHome,
+  onShare,
+  onExportPng,
+  onExportSvg,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo
+}) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const tplBtnRef = useRef<HTMLButtonElement>(null);
+  const [isTemplateOpen, setIsTemplateOpen] = useState(false);
+  const [tplMenuPos, setTplMenuPos] = useState<{ left: number; top: number } | null>(null);
+
+  const toggleTemplateMenu = () => {
+    const btn = tplBtnRef.current;
+    if (!btn) return;
+    if (isTemplateOpen) {
+      setIsTemplateOpen(false);
+      setTplMenuPos(null);
+      return;
+    }
+    const r = btn.getBoundingClientRect();
+    setTplMenuPos({ left: Math.min(r.left, window.innerWidth - 250), top: r.bottom + 6 });
+    setIsTemplateOpen(true);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      onImportMlab(e.target.files[0]);
+    }
+  };
+
+  return (
+    <header className="h-14 border-b border-[#2B2D31] bg-[#0F1015] px-4 flex items-center justify-between text-slate-200 select-none z-30">
+      {/* Brand & Project Info */}
+      <div className="flex items-center space-x-3 flex-shrink-0">
+        <div className="flex items-center space-x-2 bg-[#1A1D24] border border-[#2B2D31] px-2 sm:px-3 py-1.5 rounded-md text-slate-200 font-bold tracking-tight shadow-sm">
+          <Network className="w-5 h-5 animate-pulse" />
+          <span className="hidden sm:inline text-base font-extrabold tracking-wider">MikroLab</span>
+        </div>
+        <div className="hidden lg:block text-xs px-2 py-0.5 rounded border border-blue-500/40 bg-blue-500/10 text-blue-400 font-mono">
+          v1.0 Foundation
+        </div>
+        <div className="h-4 w-px bg-slate-700 hidden md:block" />
+        <div className="hidden md:flex flex-col">
+          <span className="text-sm font-semibold text-slate-100">{project.metadata.name}</span>
+          <span className="text-[10px] text-slate-400 font-mono">{project.nodes.length} Nodes • {project.edges.length} Cables</span>
+        </div>
+      </div>
+
+      {/* Toolbar Controls */}
+      <div className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto scrollbar-hide px-2">
+        <button
+          onClick={onGoHome}
+          title="Back to Home Page"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <Home className="w-3.5 h-3.5 text-sky-400" />
+          <span className="hidden sm:inline">Home</span>
+        </button>
+
+        <button
+          onClick={onNewProject}
+          title="New Topology"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <Plus className="w-3.5 h-3.5 text-blue-400" />
+          <span className="hidden sm:inline">New</span>
+        </button>
+
+        {/* Undo / Redo */}
+        <div className="flex items-center space-x-0.5 flex-shrink-0">
+          <button
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            className={`p-1.5 rounded-md border transition ${
+              canUndo
+                ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                : 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'
+            }`}
+          >
+            <Undo2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onRedo}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Y)"
+            className={`p-1.5 rounded-md border transition ${
+              canRedo
+                ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                : 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'
+            }`}
+          >
+            <Redo2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Template Selector (popover ke bawah, klik & sentuh) */}
+        <div className="relative flex-shrink-0">
+          <button
+            ref={tplBtnRef}
+            onClick={toggleTemplateMenu}
+            className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium border transition ${
+              isTemplateOpen
+                ? 'bg-slate-700 text-slate-100 border-emerald-500/50'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+          >
+            <FolderTree className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Templates</span>
+          </button>
+          {isTemplateOpen && tplMenuPos && (
+            <>
+              <div className="fixed inset-0 z-[55]" onClick={toggleTemplateMenu} />
+              <div
+                className="fixed z-[60] w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl p-1 font-sans animate-in fade-in zoom-in-95 duration-150"
+                style={{ left: tplMenuPos.left, top: tplMenuPos.top }}
+              >
+                <button
+                  onClick={() => {
+                    onLoadTemplate('basic');
+                    toggleTemplateMenu();
+                  }}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
+                >
+                  <div className="font-semibold text-slate-100">Mudah: Router + Switch + PC</div>
+                  <div className="text-[10px] text-slate-400">MikroTik gateway, switch Cisco, 1 PC</div>
+                </button>
+                <button
+                  onClick={() => {
+                    onLoadTemplate('enterprise');
+                    toggleTemplateMenu();
+                  }}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
+                >
+                  <div className="font-semibold text-slate-100">ISP / Data Center Lab</div>
+                  <div className="text-[10px] text-slate-400">16 perangkat: ISP, firewall, core, server</div>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Import .mlab */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileChange}
+          accept=".mlab,.json"
+          className="hidden"
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          title="Import .mlab Project"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <Upload className="w-3.5 h-3.5 text-amber-400" />
+          <span className="hidden md:inline">Import</span>
+        </button>
+
+        {/* Export .mlab */}
+        <button
+          onClick={onExportMlab}
+          title="Export Topology (.mlab)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <FileCode className="w-3.5 h-3.5 text-indigo-400" />
+          <span className="hidden md:inline">Export</span>
+        </button>
+
+        {/* Share link */}
+        <button
+          onClick={onShare}
+          title="Bagikan topologi lewat link"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden lg:inline">Share</span>
+        </button>
+
+        {/* Export PNG */}
+        <button
+          onClick={onExportPng}
+          title="Export Topologi sebagai Gambar (PNG)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <Image className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="hidden lg:inline">PNG</span>
+        </button>
+
+        {/* Export SVG */}
+        <button
+          onClick={onExportSvg}
+          title="Export Topologi sebagai Vektor (SVG)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+        >
+          <FileImage className="w-3.5 h-3.5 text-fuchsia-400" />
+          <span className="hidden lg:inline">SVG</span>
+        </button>
+
+        {/* AI Mentor */}
+        <button
+          onClick={onOpenAiChat}
+          title="Tanya AI Mentor — kenapa jaringan gagal, cara kerja, perbaikan"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-violet-950 hover:bg-violet-900 text-violet-200 border border-violet-700 transition"
+        >
+          <Bot className="w-3.5 h-3.5 text-violet-400" />
+          <span className="hidden xl:inline">AI Mentor</span>
+        </button>
+
+        {/* Auto-Grading */}
+        <button
+          onClick={onOpenGrading}
+          title="Auto-grading: validasi lab otomatis (skripsi/praktikum)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-violet-950 hover:bg-violet-900 text-violet-200 border border-violet-800 transition"
+        >
+          <ClipboardCheck className="w-3.5 h-3.5 text-violet-400" />
+          <span className="hidden xl:inline">Grading</span>
+        </button>
+
+        {/* Monorepo Architecture Explorer */}
+        <button
+          onClick={onOpenMonorepo}
+          title="Monorepo Packages & Architecture"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-blue-950 hover:bg-blue-900 text-blue-200 border border-blue-800 transition"
+        >
+          <PackageCheck className="w-3.5 h-3.5 text-blue-400" />
+          <span className="hidden xl:inline">Monorepo Docs</span>
+        </button>
+
+        {/* Download Foundation ZIP */}
+        <a
+          href="/MikroLab-Foundation-v1.zip"
+          download="MikroLab-Foundation-v1.zip"
+          title="Download Complete Foundation Monorepo ZIP"
+          className="flex-shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 shadow-sm transition"
+        >
+          <Download className="w-3.5 h-3.5" />
+          <span>ZIP</span>
+        </a>
+
+        {/* Donate (QRIS) */}
+        <button
+          onClick={onOpenDonate}
+          title="Donate / Dukung Kreator"
+          className="flex-shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 shadow-sm transition"
+        >
+          <Heart className="w-3.5 h-3.5 fill-white" />
+          <span className="hidden xl:inline">Donate</span>
+        </button>
+
+        {/* Help Tutorial */}
+        <button
+          onClick={onOpenTutorial}
+          title="Panduan Penggunaan NetLab"
+          className="flex-shrink-0 p-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+        >
+          <HelpCircle className="w-4 h-4 text-cyan-400" />
+        </button>
+
+        {/* Dark/Light Toggle */}
+        <button
+          onClick={onToggleTheme}
+          title="Toggle Dark / Light Theme"
+          className="flex-shrink-0 p-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+        >
+          {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-400" />}
+        </button>
+      </div>
+    </header>
+  );
+};

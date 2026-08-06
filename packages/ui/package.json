@@ -1,0 +1,14 @@
+{
+  "name": "@mikrolab/ui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@mikrolab/shared": "workspace:*",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.1",
+    "motion": "^12.23.24"
+  }
+}

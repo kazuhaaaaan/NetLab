@@ -1,0 +1,34 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "name": "Basic MikroTik Router & Switch Lab",
+    "author": "MikroLab Architect",
+    "description": "Simple 2-node lab featuring MikroTik RouterOS connected to a Cisco Switch."
+  },
+  "nodes": [
+    {
+      "id": "node-1",
+      "name": "MikroTik-GW",
+      "vendor": "mikrotik",
+      "model": "RB3011UiAS-RM",
+      "position": { "x": 250, "y": 200 }
+    },
+    {
+      "id": "node-2",
+      "name": "Cisco-SW1",
+      "vendor": "cisco_ios",
+      "model": "Catalyst 2960",
+      "position": { "x": 550, "y": 200 }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "sourceNodeId": "node-1",
+      "sourcePortId": "ether1",
+      "targetNodeId": "node-2",
+      "targetPortId": "GigabitEthernet0/1",
+      "cableType": "copper_straight"
+    }
+  ]
+}

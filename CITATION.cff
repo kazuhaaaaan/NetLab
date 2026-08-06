@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+title: NetLab
+message: If you use NetLab in your research, please cite it.
+authors:
+  - family-names: Ardhana
+    given-names: Nouva Prasetya
+repository-code: https://github.com/kazuhaaaaan/NetLab
+license: MIT
