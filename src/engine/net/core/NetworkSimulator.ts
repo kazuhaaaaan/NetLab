@@ -13,12 +13,17 @@ import { Topology, LabProjectLike, transmissionDelay } from './Topology';
 import { NetworkDevice } from '../devices/NetworkDevice';
 import { DeviceProcessor, SimulatorCore, processorKind } from '../devices/DeviceProcessor';
 import { SwitchProcessor } from '../devices/SwitchProcessor';
+import { WirelessProcessor } from '../devices/WirelessProcessor';
 import { RouterProcessor } from '../devices/RouterProcessor';
 import { HostProcessor } from '../devices/HostProcessor';
 import { arpResolveAndSend } from '../devices/sendUtils';
 import { RoutingProtocolEngine } from '../services/RoutingProtocolEngine';
+import { computeStp, StpConfig, StpPortState } from '../services/StpService';
+import { computeWireless, WirelessIfaceCfg, WirelessProfileCfg } from '../services/WirelessService';
+import { applyMangle, applyQos, freshQosState, MangleRule, qosStatsOf, SimpleQueue } from '../services/QosService';
 import { Packet, RunResult, SimEvent, SimEventType } from './types';
 import { isValidIp, inSameSubnet } from './ip';
+import { isIpv6Address } from './ipv6';
 import { buildTcpSegment, TCP_SYN } from '../layer4/Tcp';
 import { AclRule, DnsRecord, NatRule } from './types';
 import {
@@ -33,6 +38,9 @@ import {
   OspfNeighborInfo,
   PingSimResult,
   RoutingMemoryShape,
+  SnmpAgentConfig,
+  SnmpQueryOptions,
+  SnmpQueryResult,
   TcpConnectResult,
   TcpConnectionInfo,
   TracerouteResult,
@@ -52,6 +60,7 @@ interface Run extends RunResult {
   fwdPath: string[];
   fwdEdges: string[];
   handshake?: { seq: number; ack: number; flags: string }[];
+  snmp?: Record<string, unknown>;
 }
 
 export interface SimRunOptions {
@@ -78,9 +87,11 @@ export class NetworkSimulator implements SimulatorCore {
 
   // ── State konfigurasi CLI (bertahan antar sync topology) ──────
   private configs = new Map<string, { ips: Record<string, string>; routes: { dst: string; gateway: string | null }[] }>();
+  private configs6 = new Map<string, { ips6: Record<string, string>; routes6: { dst: string; gateway: string | null }[] }>();
   private dhcpPools = new Map<string, DhcpPoolInfo[]>();
   private routings = new Map<string, RoutingMemoryShape>();
   private bgps = new Map<string, BgpConfig>();
+  private snmps = new Map<string, SnmpAgentConfig>();
   private acls = new Map<string, AclRule[]>();
   private nats = new Map<string, NatRule[]>();
   private portVlans = new Map<string, Map<string, number>>();
@@ -91,6 +102,9 @@ export class NetworkSimulator implements SimulatorCore {
   private dnsRecords = new Map<string, DnsRecord[]>();
   private dnsServers = new Map<string, string[]>();
   private webServers = new Map<string, WebServerInfo>();
+  private stps = new Map<string, StpConfig>();
+  private wirelessCfgs = new Map<string, { interfaces: Record<string, WirelessIfaceCfg>; profiles: Record<string, WirelessProfileCfg> }>();
+  private qoses = new Map<string, { queues: SimpleQueue[]; mangleRules: MangleRule[] }>();
 
   // ── SimulatorCore ──────────────────────────────────────────────
   get now(): number {
@@ -153,6 +167,18 @@ export class NetworkSimulator implements SimulatorCore {
     if (iface && iface.type === 'vlan' && iface.vlanId) pkt.vlan = iface.vlanId;
     const neighbor = this.topology.links.neighborOf(device.id, portId);
     if (!neighbor) return false;
+    // Perangkat tujuan mati = link down: frame hilang di kabel tanpa
+    // menggagalkan run (fisiknya memang tidak sampai ke perangkat).
+    if (!this.isNodePowered(neighbor.nodeId)) return false;
+
+    // QoS: mangle (mark-packet/change-mss) lalu simple queue (token bucket).
+    if (pkt.protocol !== 'arp') {
+      applyMangle(device, pkt);
+      if (!applyQos(device, pkt, this.time.now())) {
+        this.drop(device, pkt, 'qos', traceId);
+        return false;
+      }
+    }
     const link = this.topology.links.linkById(neighbor.linkId);
     const cableType = link?.cableType || 'copper_straight';
     const delay = transmissionDelay(cableType, pkt);
@@ -312,7 +338,8 @@ export class NetworkSimulator implements SimulatorCore {
     for (const [id, dev] of nodes) {
       const kind = processorKind(dev);
       let proc: DeviceProcessor;
-      if (kind === 'switch' || kind === 'wireless') proc = new SwitchProcessor(dev);
+      if (kind === 'wireless') proc = new WirelessProcessor(dev);
+      else if (kind === 'switch') proc = new SwitchProcessor(dev);
       else if (kind === 'host') proc = new HostProcessor(dev);
       else proc = new RouterProcessor(dev);
       this.processors.set(id, proc);
@@ -331,6 +358,8 @@ export class NetworkSimulator implements SimulatorCore {
     for (const dev of this.nodes.values()) {
       const cfg = this.configs.get(dev.id);
       if (cfg) this.applyConfigToDevice(dev, cfg);
+      const cfg6 = this.configs6.get(dev.id);
+      if (cfg6) this.applyConfig6ToDevice(dev, cfg6);
       if (this.poweredOff.has(dev.id)) dev.powered = false;
       const shut = this.shutIfaces.get(dev.id);
       if (shut) for (const n of shut) dev.setIfaceUp(n, false);
@@ -356,8 +385,49 @@ export class NetworkSimulator implements SimulatorCore {
       if (routing) dev.routingCfg = { ...routing };
       const bgp = this.bgps.get(dev.id);
       if (bgp) dev.bgpCfg = { asn: bgp.asn, peers: bgp.peers, networks: bgp.networks };
+      const snmp = this.snmps.get(dev.id);
+      if (snmp && snmp.enabled) {
+        dev.snmpAgent = { ...snmp };
+        dev.snmpUptimeBase = this.time.now();
+      } else {
+        dev.snmpAgent = null;
+      }
+      const stp = this.stps.get(dev.id);
+      if (stp) dev.stpConfig = { ...dev.stpConfig, ...stp };
+      const wl = this.wirelessCfgs.get(dev.id);
+      if (wl) {
+        dev.wirelessCfg = { ...wl.interfaces };
+        dev.wirelessSecurityProfiles = { ...wl.profiles };
+      }
+      const qos = this.qoses.get(dev.id);
+      if (qos) {
+        dev.queues = [...qos.queues];
+        dev.mangleRules = [...qos.mangleRules];
+        dev.qosState = freshQosState();
+      }
     }
+    this.recomputeProtocols();
   }
+
+  /** Hitung ulang STP / FHRP / wireless setelah topologi & konfigurasi berubah. */
+  private recomputeProtocols(): void {
+    const devices = [...this.nodes.values()];
+    const powered = (id: string) => this.isNodePowered(id);
+    const stp = computeStp(devices, this.topology.links, powered);
+    for (const dev of devices) {
+      const prev = dev.stpPorts;
+      dev.stpState = stp.get(dev.id) || null;
+      dev.stpPorts = dev.stpState ? new Map(dev.stpState.ports) : new Map();
+      // RSTP: topology change → flush MAC table agar tidak ada entry stale
+      // yang menunjuk ke jalur lama (port yang berubah role/state).
+      if (dev.isSwitch && !samePortStates(prev, dev.stpPorts)) {
+        dev.macTable.clear();
+      }
+    }
+    this.computeFhrp();
+    this.computeWireless();
+  }
+  private computeFhrp(): void {}
 
   private applyConfigToDevice(dev: NetworkDevice, cfg: { ips: Record<string, string>; routes: { dst: string; gateway: string | null }[] }): void {
     for (const [ifaceName, cidr] of Object.entries(cfg.ips)) dev.setIpByName(ifaceName, cidr);
@@ -387,10 +457,131 @@ export class NetworkSimulator implements SimulatorCore {
     else this.poweredOff.add(nodeId);
     const dev = this.nodes.get(nodeId);
     if (dev) dev.powered = on;
+    this.recomputeProtocols();
   }
 
   isNodePowered(nodeId: string): boolean {
     return !this.poweredOff.has(nodeId) && (this.nodes.get(nodeId)?.powered ?? true);
+  }
+
+  /** Konfigurasi STP (via CLI): { enabled, priority, mode }. */
+  setStp(nodeId: string, cfg: StpConfig | undefined): void {
+    if (cfg) this.stps.set(nodeId, cfg);
+    else this.stps.delete(nodeId);
+    const dev = this.nodes.get(nodeId);
+    if (dev) {
+      dev.stpConfig = cfg ? { ...dev.stpConfig, ...cfg } : { enabled: true, priority: 32768, mode: 'rstp' };
+    }
+    this.recomputeProtocols();
+  }
+
+  /** Konfigurasi wireless (via CLI): { interfaces, profiles }. */
+  setWireless(nodeId: string, cfg: { interfaces: Record<string, WirelessIfaceCfg>; profiles: Record<string, WirelessProfileCfg> } | undefined): void {
+    if (cfg) {
+      this.wirelessCfgs.set(nodeId, cfg);
+    } else {
+      this.wirelessCfgs.delete(nodeId);
+    }
+    const dev = this.nodes.get(nodeId);
+    if (dev) {
+      if (cfg) {
+        dev.wirelessCfg = { ...cfg.interfaces };
+        dev.wirelessSecurityProfiles = { ...cfg.profiles };
+      } else {
+        dev.wirelessCfg = {};
+        dev.wirelessSecurityProfiles = {};
+      }
+    }
+    this.recomputeProtocols();
+  }
+
+  /** Hitung ulang asosiasi wireless AP↔station. */
+  private computeWireless(): void {
+    const devices = [...this.nodes.values()];
+    const st = computeWireless(devices, this.topology.links, (id) => this.isNodePowered(id));
+    for (const dev of devices) {
+      dev.wirelessState = st.get(dev.id) || null;
+    }
+  }
+
+  /** Snapshot wireless perangkat (provider CLI registration-table/monitor). */
+  getWirelessInfo(nodeId: string): {
+    isStation: boolean;
+    mode: string;
+    ssid: string;
+    security: string;
+    associations: { mac: string; name: string; ssid: string; iface: string; signal: number }[];
+    link: { apId: string; apName: string; iface: string; ssid: string } | null;
+  } | null {
+    const dev = this.nodes.get(nodeId);
+    if (!dev || dev.kind !== 'wireless') return null;
+    const st = dev.wirelessState || { ap: true, associations: [], link: null };
+    const firstCfg = Object.values(dev.wirelessCfg)[0] || {};
+    const security = firstCfg.securityProfile ? `wpa2-psk (${firstCfg.securityProfile})` : firstCfg.security || 'open';
+    return {
+      isStation: !!st.link,
+      mode: firstCfg.mode || 'ap-bridge',
+      ssid: firstCfg.ssid || '',
+      security,
+      associations: st.associations.map((a) => ({ mac: a.stationMac, name: a.stationName, ssid: a.ssid, iface: a.iface, signal: a.signal })),
+      link: st.link,
+    };
+  }
+
+  /** Konfigurasi QoS (via CLI): queues + mangle rules. */
+  setQos(nodeId: string, queues: SimpleQueue[] | undefined, mangleRules: MangleRule[] | undefined): void {
+    if ((queues && queues.length > 0) || (mangleRules && mangleRules.length > 0)) {
+      this.qoses.set(nodeId, { queues: queues || [], mangleRules: mangleRules || [] });
+    } else {
+      this.qoses.delete(nodeId);
+    }
+    const dev = this.nodes.get(nodeId);
+    if (dev) {
+      dev.queues = queues || [];
+      dev.mangleRules = mangleRules || [];
+      dev.qosState = freshQosState();
+    }
+  }
+
+  /** Statistik live queue (provider `/queue simple print`). */
+  getQosStats(nodeId: string): { name: string; bytes: number; packets: number; dropped: number }[] {
+    const dev = this.nodes.get(nodeId);
+    if (!dev) return [];
+    return qosStatsOf(dev);
+  }
+
+  getStpConfig(nodeId: string): StpConfig | undefined {
+    return this.stps.get(nodeId);
+  }  /** Snapshot STP per port (provider CLI `show spanning-tree`). */
+  getStpInfo(nodeId: string): {
+    enabled: boolean;
+    mode: string;
+    priority: number;
+    rootId: string;
+    rootName: string;
+    bridgeId: string;
+    rootPort: string | null;
+    ports: { port: string; role: string; state: string; cost: number }[];
+  } | null {
+    const dev = this.nodes.get(nodeId);
+    if (!dev || !dev.isSwitch) return null;
+    const st = dev.stpState;
+    if (!st) return null;
+    return {
+      enabled: dev.stpConfig.enabled,
+      mode: dev.stpConfig.mode,
+      priority: dev.stpConfig.priority,
+      rootId: st.rootId,
+      rootName: st.rootName,
+      bridgeId: st.bridgeId,
+      rootPort: st.rootPort,
+      ports: [...st.ports.entries()].map(([portId, p]) => ({
+        port: dev.getIfaceByPortId(portId)?.name || portId,
+        role: p.role,
+        state: p.state,
+        cost: p.cost,
+      })),
+    };
   }
 
   applyNodeConfig(nodeId: string, ips: Record<string, string>, routes: Array<{ dst: string; gateway: string }>): void {
@@ -402,6 +593,27 @@ export class NetworkSimulator implements SimulatorCore {
     this.configs.set(nodeId, cfg);
     const dev = this.nodes.get(nodeId);
     if (dev) this.applyConfigToDevice(dev, cfg);
+  }
+
+  /** Konfigurasi IPv6 per node (alamat interface + rute statis v6). */
+  applyNodeConfig6(nodeId: string, ips6: Record<string, string>, routes6: Array<{ dst: string; gateway: string }>): void {
+    const existing = this.configs6.get(nodeId);
+    const cfg = {
+      ips6: { ...(existing?.ips6 || {}), ...ips6 },
+      routes6: routes6.map((r) => ({ dst: r.dst, gateway: r.gateway || null })),
+    };
+    this.configs6.set(nodeId, cfg);
+    const dev = this.nodes.get(nodeId);
+    if (dev) this.applyConfig6ToDevice(dev, cfg);
+  }
+
+  private applyConfig6ToDevice(dev: NetworkDevice, cfg: { ips6: Record<string, string>; routes6: { dst: string; gateway: string | null }[] }): void {
+    for (const [iface, cidr] of Object.entries(cfg.ips6)) {
+      dev.configuredIpv6s.set(iface, cidr);
+      dev.setIpv6ByName(iface, cidr);
+    }
+    dev.ipv6StaticRoutes = cfg.routes6.map((r) => ({ dst: r.dst, gateway: r.gateway, iface: null, kind: 'static' }));
+    for (const r of dev.ipv6StaticRoutes) dev.ipv6Routing.addRoute(r);
   }
 
   setDhcpPools(poolsByNode: Record<string, DhcpPoolInfo[]>): void {
@@ -428,6 +640,24 @@ export class NetworkSimulator implements SimulatorCore {
     else this.bgps.delete(nodeId);
     const dev = this.nodes.get(nodeId);
     if (dev) dev.bgpCfg = cfg && cfg.asn ? { asn: cfg.asn, peers: cfg.peers, networks: cfg.networks } : null;
+  }
+
+  setSnmp(nodeId: string, cfg: SnmpAgentConfig | undefined): void {
+    if (cfg && cfg.enabled) {
+      this.snmps.set(nodeId, {
+        enabled: true,
+        community: cfg.community || 'public',
+        communityRW: cfg.communityRW || 'private',
+        sysContact: cfg.sysContact || '',
+        sysLocation: cfg.sysLocation || '',
+      });
+    } else {
+      this.snmps.delete(nodeId);
+    }
+    const dev = this.nodes.get(nodeId);
+    if (dev) {
+      dev.snmpAgent = cfg && cfg.enabled ? { enabled: true, community: cfg.community || 'public', communityRW: cfg.communityRW || 'private', sysContact: cfg.sysContact || '', sysLocation: cfg.sysLocation || '' } : null;
+    }
   }
 
   setAcls(nodeId: string, rules: AclRule[] | undefined): void {
@@ -590,6 +820,7 @@ export class NetworkSimulator implements SimulatorCore {
   simulatePing(srcNodeId: string, dstIp: string): PingSimResult {
     const src = this.nodes.get(srcNodeId);
     if (!src) return this.pingFail('not-found');
+    if (isIpv6Address(dstIp)) return this.simulatePing6(srcNodeId, dstIp);
     if (!isValidIp(dstIp)) return this.pingFail('invalid');
     if (!this.isNodePowered(src.id)) return this.pingFail('power');
     if (src.hasIp(dstIp)) {
@@ -640,8 +871,70 @@ export class NetworkSimulator implements SimulatorCore {
     return this.pingFail(mapReason(run.reason));
   }
 
-  simulateTraceroute(srcNodeId: string, dstIp: string): TracerouteResult {
+  /** Ping IPv6 (ICMPv6 echo). Tanpa DHCP — host harus punya alamat v6. */
+  simulatePing6(srcNodeId: string, dstIp: string): PingSimResult {
     const src = this.nodes.get(srcNodeId);
+    if (!src) return this.pingFail('not-found');
+    if (!isIpv6Address(dstIp)) return this.pingFail('invalid');
+    if (!this.isNodePowered(src.id)) return this.pingFail('power');
+    if (src.hasIpv6(dstIp)) {
+      return { success: true, path: [src.name], edgeIds: [], ttlAtDestination: DEFAULT_TTL, reason: 'self' };
+    }
+    const iface = src.getInterfaces().find((i) => i.ipv6 && i.up);
+    if (!iface || !iface.ipv6) return this.pingFail('no-ip');
+
+    const traceId = `ping6-${++this.runSeq}`;
+    const run = this.beginRun(traceId);
+    run.fwdPath = [src.name];
+    const req = this.createPacket({
+      protocol: 'icmp',
+      srcIp: iface.ipv6.address,
+      dstIp,
+      srcMac: iface.mac,
+      dstMac: '',
+      srcPort: 0,
+      dstPort: 0,
+      ttl: DEFAULT_TTL,
+      traceId,
+      flags: { dir: 'req', icmpType: 128, v6: true },
+      payload: { type: 128, code: 0, seq: 1, id: (Math.random() * 0xffff) & 0xffff, v6: true },
+    });
+    run.rootPktId = req.id;
+
+    if (!this.inject(src, req, traceId)) return this.pingFail('unreachable');
+    this.processUntil(traceId);
+
+    if (run.status === 'ok') {
+      const path = run.fwdPath.length > 0 ? run.fwdPath : [src.name];
+      return {
+        success: true,
+        path,
+        edgeIds: run.fwdEdges,
+        ttlAtDestination: run.ttlAtDst ?? DEFAULT_TTL,
+      };
+    }
+    return this.pingFail(mapReason(run.reason));
+  }
+
+  /** Info IPv6 perangkat untuk CLI (alamat, rute, neighbor NDP). */
+  getIpv6Info(nodeId: string): {
+    addresses: { iface: string; address: string; prefix: number }[];
+    routes: { dst: string; gateway: string | null }[];
+    neighbors: { ip: string; mac: string; iface: string }[];
+  } | null {
+    const dev = this.nodes.get(nodeId);
+    if (!dev) return null;
+    return {
+      addresses: dev
+        .getInterfaces()
+        .filter((i) => i.ipv6)
+        .map((i) => ({ iface: i.name, address: i.ipv6!.address, prefix: i.ipv6!.prefix })),
+      routes: dev.getIpv6Routes().map((r) => ({ dst: r.dst, gateway: r.gateway })),
+      neighbors: dev.ipv6Neighbors.entriesList().map((e) => ({ ip: e.ip, mac: e.mac, iface: e.iface })),
+    };
+  }
+
+  simulateTraceroute(srcNodeId: string, dstIp: string): TracerouteResult {    const src = this.nodes.get(srcNodeId);
     if (!src) return { ok: false, hops: [], reason: 'not-found' };
     if (!isValidIp(dstIp)) return { ok: false, hops: [], reason: 'invalid' };
     const ping = this.simulatePing(srcNodeId, dstIp);
@@ -703,6 +996,74 @@ export class NetworkSimulator implements SimulatorCore {
       };
     }
     return { ok: false, reason: mapReason(run.reason), handshake: [] };
+  }
+
+  /**
+   * Query SNMP antar-perangkat (udp/161): kirim paket nyata melewati
+   * ARP/routing, agent target merespons sesuai MIB yang di-bangun dari
+   * state-nya (community, get/walk/set). Mirip simulatePing/TcpConnect.
+   */
+  simulateSnmpQuery(
+    srcNodeId: string,
+    dstIp: string,
+    community: string,
+    oid: string,
+    opts: SnmpQueryOptions = {}
+  ): SnmpQueryResult {
+    const src = this.nodes.get(srcNodeId);
+    if (!src) return { ok: false, reason: 'not-found' };
+    if (!isValidIp(dstIp)) return { ok: false, reason: 'invalid' };
+    if (!this.isNodePowered(src.id)) return { ok: false, reason: 'power' };
+
+    let dhcpGranted = false;
+    if (!src.getIpAddress()) {
+      const lease = this.ensureLease(srcNodeId);
+      if (!lease) return { ok: false, reason: 'no-ip' };
+      dhcpGranted = true;
+    }
+
+    const iface = src.getInterfaces().find((i) => i.ip && i.up);
+    if (!iface || !iface.ip) return { ok: false, reason: 'no-ip' };
+
+    const traceId = `snmp-${++this.runSeq}`;
+    const run = this.beginRun(traceId);
+    const clientPort = 50000 + Math.floor(Math.random() * 5000);
+    const req = this.createPacket({
+      protocol: 'udp',
+      srcIp: iface.ip.address,
+      dstIp,
+      srcMac: iface.mac,
+      dstMac: '',
+      srcPort: clientPort,
+      dstPort: 161,
+      ttl: 64,
+      traceId,
+      payload: {
+        snmpOp: opts.walk ? 'walk' : opts.setValue !== undefined ? 'set' : 'get',
+        oid: String(oid || '.1.3.6.1.2.1.1.1.0'),
+        community: String(community || ''),
+        setValue: opts.setValue,
+      },
+    });
+    run.rootPktId = req.id;
+
+    if (!this.inject(src, req, traceId)) return { ok: false, reason: 'unreachable' };
+    this.processUntil(traceId);
+
+    if (run.status === 'ok') {
+      const res = (run.snmp || {}) as Record<string, unknown> & {
+        ok?: boolean;
+        error?: string;
+        oids?: SnmpQueryResult['oids'];
+      };
+      if (res.ok === false) {
+        return { ok: false, reason: (res.reason as SnmpQueryResult['reason']) || (res.error ? 'auth' : 'timeout'), error: res.error, device: String(res.device || '') };
+      }
+      return { ok: true, device: String(res.device || ''), oids: res.oids || [] };
+    }
+    const raw = run.reason === 'no-agent' ? 'no-agent' : run.reason === 'auth' ? 'auth' : mapReason(run.reason);
+    const reason: SnmpQueryResult['reason'] = (raw === 'ttl' || raw === 'self' || raw === 'blocked' || raw === 'refused') ? 'timeout' : raw;
+    return { ok: false, reason, error: run.reason === 'auth' ? 'Bad community name' : undefined };
   }
 
   /** Suntik paket dari perangkat sumber ke jaringan (rute + ARP). */
@@ -856,8 +1217,7 @@ export class NetworkSimulator implements SimulatorCore {
   }
 }
 
-function clonePacket(pkt: Packet): Packet {
-  return {
+function clonePacket(pkt: Packet): Packet {  return {
     ...pkt,
     flags: { ...pkt.flags },
     payload: pkt.payload ? { ...pkt.payload } : null,
@@ -883,4 +1243,14 @@ function mapReason(reason: string | undefined): PingSimResult['reason'] {
     default:
       return 'unreachable';
   }
+}
+
+/** True bila dua peta state STP identik (tidak ada topology change). */
+function samePortStates(a: Map<string, unknown>, b: Map<string, unknown>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    const o = b.get(k);
+    if (!o || JSON.stringify(o) !== JSON.stringify(v)) return false;
+  }
+  return true;
 }

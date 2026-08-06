@@ -16,7 +16,7 @@ export interface PortDef {
   /** nama port; pakai {n} untuk nomor berurutan, mis. ether{n} → ether1, ether2 */
   name: string;
   speedMbps: number;
-  type?: 'copper' | 'fiber' | 'serial';
+  type?: 'copper' | 'fiber' | 'serial' | 'radio';
   /** jumlah port (default 1) */
   count?: number;
   /** nomor awal untuk placeholder {n} (default 1) */
@@ -43,7 +43,7 @@ export interface DeviceModel {
 const p = (
   name: string,
   speedMbps: number,
-  type: 'copper' | 'fiber' | 'serial' = 'copper',
+  type: 'copper' | 'fiber' | 'serial' | 'radio' = 'copper',
   count = 1,
   start = 1
 ): PortDef[] =>
@@ -106,7 +106,7 @@ export const DEVICE_MODELS: Record<string, DeviceModel[]> = {
       types: ['router', 'wireless'],
       description: 'Router + WiFi untuk rumah/kantor kecil. Ada antena 2.4GHz dan 5GHz.',
       specs: { cpu: 'IPQ4018 717MHz quad-core', ram: '128MB', flash: '16MB', ports: '5x Gigabit Ethernet' },
-      ports: [...p('ether{n}', 1000, 'copper', 5)],
+      ports: [...p('ether{n}', 1000, 'copper', 5), ...p('wlan{n}', 300, 'radio', 2)],
     },
     {
       id: 'rb3011uias',
@@ -138,7 +138,7 @@ export const DEVICE_MODELS: Record<string, DeviceModel[]> = {
       types: ['router', 'switch', 'wireless'],
       description: 'MikroTik virtual yang jalan di atas komputer server — bebas bereksperimen.',
       specs: { cpu: 'Virtual x86-64', ram: '256MB+', ports: 'Tidak terbatas' },
-      ports: [...p('ether{n}', 1000, 'copper', 8)],
+      ports: [...p('ether{n}', 1000, 'copper', 8), ...p('wlan{n}', 300, 'radio', 2)],
     },
   ],
   cisco_ios: [
@@ -404,7 +404,7 @@ export const DEVICE_MODELS: Record<string, DeviceModel[]> = {
       types: ['router', 'wireless'],
       description: 'Router mini yang langsung support OpenWrt, sering buat VPN.',
       specs: { cpu: 'MT7621A 880MHz', ram: '256MB', flash: '16MB', ports: '3x GbE' },
-      ports: [...p('eth{n}', 1000, 'copper', 3)],
+      ports: [...p('eth{n}', 1000, 'copper', 3), ...p('wlan{n}', 300, 'radio', 2)],
     },
     {
       id: 'tplink_archerc7',
@@ -412,7 +412,7 @@ export const DEVICE_MODELS: Record<string, DeviceModel[]> = {
       types: ['router', 'wireless'],
       description: 'Router WiFi rumahan yang umum di-flash OpenWrt.',
       specs: { cpu: 'QCA9558 720MHz', ram: '128MB', flash: '16MB', ports: '4x GbE' },
-      ports: [...p('eth{n}', 1000, 'copper', 4)],
+      ports: [...p('eth{n}', 1000, 'copper', 4), ...p('wlan{n}', 300, 'radio', 2)],
     },
   ],
   linux: [

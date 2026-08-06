@@ -7,6 +7,7 @@ import { NetworkDevice } from './NetworkDevice';
 import { DeviceProcessor, SimulatorCore } from './DeviceProcessor';
 import { MAC_BROADCAST, Packet } from '../core/types';
 import { isBroadcastMac } from '../layer2/EthernetFrame';
+import { isPortForwarding } from '../services/StpService';
 
 type NetIface = ReturnType<NetworkDevice['getInterfaces']>[number];
 
@@ -24,6 +25,13 @@ export class SwitchProcessor implements DeviceProcessor {
     if (!inIface || !inIface.up) {
       core.emit('PACKET_DROPPED', traceId, { reason: 'iface-down' }, dev.id, inPort);
       core.drop(dev, pkt, 'iface-down', traceId);
+      return;
+    }
+
+    // STP: port blocking/alternate tidak menerima frame (loop protection).
+    if (!isPortForwarding(dev, inIface.portId)) {
+      core.emit('PACKET_DROPPED', traceId, { reason: 'stp' }, dev.id, inPort);
+      core.drop(dev, pkt, 'stp', traceId);
       return;
     }
 
@@ -55,6 +63,11 @@ export class SwitchProcessor implements DeviceProcessor {
     const entry = dev.macTable.lookup(pkt.dstMac);
     if (entry && entry.port && entry.port !== inPort) {
       const egressIface = dev.getIfaceByPortId(entry.port) || dev.getIfaceByName(entry.port);
+      if (!egressIface || !isPortForwarding(dev, egressIface.portId)) {
+        core.emit('PACKET_DROPPED', traceId, { reason: 'stp' }, dev.id, entry.port);
+        core.drop(dev, pkt, 'stp', traceId);
+        return;
+      }
       if (!egressIface || !this.vlanAllows(frameVlan, egressIface, trunkIn, dev)) {
         core.emit('PACKET_DROPPED', traceId, { reason: 'vlan' }, dev.id, entry.port);
         core.drop(dev, pkt, 'vlan', traceId);
@@ -81,6 +94,7 @@ export class SwitchProcessor implements DeviceProcessor {
     for (const iface of dev.getInterfaces()) {
       const port = iface.portId;
       if (port === inPort || iface.name === inName) continue;
+      if (!isPortForwarding(dev, port)) continue;
       if (!this.vlanAllows(vlan, iface, trunkIn, dev)) continue;
       if (core.transmit(dev, pkt, port, traceId)) sent++;
     }

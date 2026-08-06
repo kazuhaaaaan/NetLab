@@ -33,7 +33,7 @@ app.use((req, res, next) => {
 });
 
 const SYSTEM_PROMPT = [
-  'Kamu adalah MikroAi, asisten AI untuk MikroAi — simulator jaringan multi-vendor ',
+  'Kamu adalah MikroAi, asisten AI untuk Mikrolab — simulator jaringan multi-vendor ',
   '(MikroTik, Cisco IOS/NX-OS, Juniper, Huawei, Fortinet, VyOS/Ubiquiti, OpenWrt, Linux).',
   'Pengguna sedang belajar jaringan dan memakai terminal/chat simulator ini.',
   '',

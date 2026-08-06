@@ -9,6 +9,8 @@ export class NetworkInterfaceModel {
   name: string;
   mac: string;
   ip?: IpConfig;
+  /** Alamat IPv6 (opsional) — pendamping `ip`. */
+  ipv6?: IpConfig;
   up: boolean;
   type: IfaceType;
   vlanId?: number;
@@ -21,6 +23,7 @@ export class NetworkInterfaceModel {
     name: string;
     mac: string;
     ip?: IpConfig;
+    ipv6?: IpConfig;
     up?: boolean;
     type?: IfaceType;
     vlanId?: number;
@@ -32,6 +35,7 @@ export class NetworkInterfaceModel {
     this.name = opts.name;
     this.mac = opts.mac;
     this.ip = opts.ip;
+    this.ipv6 = opts.ipv6;
     this.up = opts.up ?? false;
     this.type = opts.type ?? 'ethernet';
     this.vlanId = opts.vlanId;

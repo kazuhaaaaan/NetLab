@@ -12,6 +12,8 @@ import { Packet, MAC_BROADCAST } from '../core/types';
 import { buildLease } from '../services/DhcpService';
 import { UDP_BOOTPC } from '../layer4/Udp';
 import { inSameSubnet } from '../core/ip';
+import { isIpv6Address, inSameIpv6Subnet } from '../core/ipv6';
+import { ndpResolveAndSend } from './ndpUtils';
 
 export class HostProcessor extends RouterProcessor {
   constructor(device: NetworkDevice) {
@@ -21,6 +23,7 @@ export class HostProcessor extends RouterProcessor {
   /** Kirim paket IP dari host: pilih interface, tentukan next-hop (dst langsung / default gateway). */
   send(pkt: Packet, traceId: string, core: SimulatorCore): boolean {
     const dev = this.device;
+    if (isIpv6Address(pkt.dstIp)) return this.send6(pkt, traceId, core);
     const iface = dev.getInterfaces().find((i) => i.up && i.ip) || dev.getInterfaces().find((i) => i.up);
     if (!iface || !iface.mac) return false;
     pkt.srcMac = iface.mac;
@@ -28,6 +31,23 @@ export class HostProcessor extends RouterProcessor {
     const nextHop = this.nextHopFor(dev, iface, pkt.dstIp);
     if (!nextHop) return false;
     return arpResolveAndSend(dev, pkt, iface.name, nextHop, core, traceId);
+  }
+
+  private send6(pkt: Packet, traceId: string, core: SimulatorCore): boolean {
+    const dev = this.device;
+    const iface = dev.getInterfaces().find((i) => i.up && i.ipv6) || dev.getInterfaces().find((i) => i.up && i.ip);
+    if (!iface || !iface.ipv6 || !iface.mac) return false;
+    pkt.srcMac = iface.mac;
+    pkt.srcIp = iface.ipv6.address;
+    let nextHop: string | null = null;
+    if (inSameIpv6Subnet(iface.ipv6.address, iface.ipv6.prefix, pkt.dstIp)) {
+      nextHop = pkt.dstIp;
+    } else {
+      const def = dev.ipv6StaticRoutes.find((r) => r.dst === '::/0' || r.dst === '::0');
+      nextHop = def?.gateway || null;
+    }
+    if (!nextHop) return false;
+    return ndpResolveAndSend(dev, pkt, iface.name, nextHop, core, traceId);
   }
 
   private nextHopFor(dev: NetworkDevice, iface: { ip?: { address: string; prefix: number } | null; name: string }, dstIp: string): string | null {

@@ -7,9 +7,15 @@ import { NetworkInterfaceModel } from '../interfaces/NetworkInterface';
 import { ArpCache } from '../layer2/ArpCache';
 import { MacTable } from '../layer2/MacTable';
 import { RoutingTable } from '../layer3/RoutingTable';
+import { Ipv6RoutingTable } from '../layer3/Ipv6RoutingTable';
 import { NatTranslator } from '../layer4/Nat';
-import { AclRule, DeviceKind, DhcpPool, DnsRecord, IpConfig, NatRule, NetLease, NetRoute } from '../core/types';
-import { parseCidr } from '../core/ip';
+import { AclRule, DeviceKind, DhcpPool, DnsRecord, NatRule, NetLease, NetRoute } from '../core/types';
+import { parseCidr, networkOf, intToIp } from '../core/ip';
+import { parseIpv6Cidr, ipv6NetworkString, inSameIpv6Subnet } from '../core/ipv6';
+import { DEFAULT_STP_MODE, DEFAULT_STP_PRIORITY, StpBridgeState, StpConfig, StpPortState } from '../services/StpService';
+import { WirelessIfaceCfg, WirelessProfileCfg, WirelessState } from '../services/WirelessService';
+import { freshQosState, MangleRule, QosState, SimpleQueue } from '../services/QosService';
+import type { SnmpAgentConfig } from '../compat';
 
 export interface WebServerState {
   enabled: boolean;
@@ -30,13 +36,20 @@ export class NetworkDevice {
   private nameIndex = new Map<string, string>();
 
   readonly arpCache = new ArpCache();
+  /** Neighbor cache IPv6 (NDP) — ipv6 → mac. */
+  readonly ipv6Neighbors = new ArpCache();
   readonly macTable = new MacTable();
   readonly routing = new RoutingTable();
+  readonly ipv6Routing = new Ipv6RoutingTable();
   readonly nat = new NatTranslator();
 
   /** CLI-derived state */
   configuredIps = new Map<string, string>();
+  /** ifaceName → cidr IPv6 dari CLI (/ipv6 address add / ipv6 address). */
+  configuredIpv6s = new Map<string, string>();
   routes: NetRoute[] = [];
+  /** Rute statis IPv6 (dst, gateway) dari CLI. */
+  ipv6StaticRoutes: NetRoute[] = [];
   shutdownIfaces = new Set<string>();
   portVlans = new Map<string, number>();
   trunkPorts = new Set<string>();
@@ -50,6 +63,29 @@ export class NetworkDevice {
   webServer: WebServerState | null = null;
   routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[] }> = {};
   bgpCfg: { asn: number; peers: { remoteAs: number; remoteAddr: string }[]; networks: string[] } | null = null;
+  /** Agent SNMP (community, hidup/mati) — diisi via CLI + engine. */
+  snmpAgent: SnmpAgentConfig | null = null;
+  /** Basis uptime (ticks) untuk sysUpTime.0. */
+  snmpUptimeBase = 0;
+
+  // ── STP/RSTP ──────────────────────────────────────────────────
+  stpConfig: StpConfig = { enabled: true, priority: DEFAULT_STP_PRIORITY, mode: DEFAULT_STP_MODE };
+  /** portId → role/state STP (diisi computeStp). */
+  stpPorts: Map<string, StpPortState> = new Map();
+  stpState: StpBridgeState | null = null;
+
+  // ── Wireless (AP/station) ────────────────────────────────────
+  /** nama interface → konfigurasi wireless (ssid/mode/band/security). */
+  wirelessCfg: Record<string, WirelessIfaceCfg> = {};
+  /** nama profil keamanan → { authenticationTypes, key }. */
+  wirelessSecurityProfiles: Record<string, WirelessProfileCfg> = {};
+  /** Hasil komputasi asosiasi (diisi computeWireless). */
+  wirelessState: WirelessState | null = null;
+
+  // ── QoS (queue simple + mangle) ──────────────────────────────
+  queues: SimpleQueue[] = [];
+  mangleRules: MangleRule[] = [];
+  qosState: QosState = freshQosState();
 
   /** Lease DHCP yang aktif: iface → lease */
   leases = new Map<string, NetLease>();
@@ -112,6 +148,7 @@ export class NetworkDevice {
       }
     }
     this.rebuildConnectedRoutes();
+    this.rebuildConnectedRoutes6();
   }
 
   private rebuildConnectedRoutes(): void {
@@ -119,7 +156,7 @@ export class NetworkDevice {
     for (const iface of this.interfaces.values()) {
       if (!iface.ip || !iface.up) continue;
       this.routing.addRoute({
-        dst: cidrString(iface.ip),
+        dst: `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`,
         gateway: null,
         iface: iface.name,
         kind: 'connected',
@@ -132,6 +169,62 @@ export class NetworkDevice {
     for (const r of this.routes) {
       if (r.kind === 'static') this.routing.addRoute(r);
     }
+  }
+
+  /** Route connected + statis untuk IPv6 (dipanggil setelah syncPorts/setIpv6ByName). */
+  private rebuildConnectedRoutes6(): void {
+    this.ipv6Routing.removeByKind('connected');
+    for (const iface of this.interfaces.values()) {
+      if (!iface.ipv6 || !iface.up) continue;
+      this.ipv6Routing.addRoute({
+        dst: ipv6NetworkString(iface.ipv6.address, iface.ipv6.prefix),
+        gateway: null,
+        iface: iface.name,
+        kind: 'connected',
+      });
+    }
+    for (const r of this.ipv6StaticRoutes) {
+      if (r.kind === 'static') this.ipv6Routing.addRoute(r);
+    }
+  }
+
+  /** Pasang alamat IPv6 pada interface (cidr: '2001:db8::1/64'). */
+  setIpv6ByName(ifaceName: string, cidr: string): boolean {
+    const key = this.nameIndex.get(ifaceName.toLowerCase());
+    const iface = key ? this.interfaces.get(key) : null;
+    const parsed = parseIpv6Cidr(cidr);
+    if (!iface || !parsed) return false;
+    iface.ipv6 = parsed;
+    iface.up = true;
+    this.rebuildConnectedRoutes6();
+    return true;
+  }
+
+  getIpv6Address(): string | null {
+    for (const iface of this.interfaces.values()) {
+      if (iface.ipv6) return iface.ipv6.address;
+    }
+    return null;
+  }
+
+  hasIpv6(ip: string): NetworkInterfaceModel | null {
+    for (const iface of this.interfaces.values()) {
+      if (iface.ipv6 && iface.ipv6.address === ip) return iface;
+    }
+    return null;
+  }
+
+  getIpv6Routes(): NetRoute[] {
+    return this.ipv6Routing.getRoutes();
+  }
+
+  /** Interface keluar untuk next-hop IPv6 (mirip resolveEgressIface). */
+  resolveEgressIface6(gateway: string): NetworkInterfaceModel | null {
+    for (const iface of this.interfaces.values()) {
+      if (!iface.ipv6 || !iface.up) continue;
+      if (inSameIpv6Subnet(gateway, iface.ipv6.prefix, iface.ipv6.address)) return iface;
+    }
+    return null;
   }
 
   setIpByName(ifaceName: string, cidr: string): boolean {
@@ -241,10 +334,6 @@ export class NetworkDevice {
     }
     return null;
   }
-}
-
-function cidrString(ip: IpConfig): string {
-  return `${ip.address}/${ip.prefix}`;
 }
 
 function ipNum(ip: string): number {

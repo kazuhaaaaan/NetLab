@@ -182,6 +182,7 @@ export interface RunResult {
   handshake?: { seq: number; ack: number; flags: string }[];
   statusCode?: number;
   body?: string;
+  snmp?: any;
 }
 
 export const MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff';

@@ -272,7 +272,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
             <LogoMark />
             <div className="flex flex-col leading-none">
               <span className="text-[15px] font-bold tracking-tight text-slate-100">
-                MikroAi
+                Mikrolab
               </span>
               <span className="text-[10px] font-mono text-slate-500 tracking-[0.18em] uppercase">
                 by KazuDev
@@ -418,7 +418,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
               <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" />
               <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" />
               <span className="ml-3 text-[11px] font-mono text-slate-500">
-                MikroAi â€” Enterprise Multi-Vendor Core Lab
+                Mikrolab â€” Enterprise Multi-Vendor Core Lab
               </span>
               <span className="ml-auto flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
                 <span className="w-1 h-1 rounded-full bg-emerald-400" style={{ animation: 'netlab-blink 1.2s ease-in-out infinite' }} />
@@ -538,7 +538,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
               Everything a network engineer needs.
             </h2>
             <p className="mt-4 text-sm sm:text-[15px] text-slate-400 leading-relaxed">
-              MikroAi menggabungkan canvas topologi visual dengan mesin simulasi
+              Mikrolab menggabungkan canvas topologi visual dengan mesin simulasi
               jaringan sungguhan â€” seperti GNS3 di dalam browser, tanpa beban
               setup apa pun.
             </p>
@@ -920,7 +920,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
           <div className="flex items-center gap-3">
             <LogoMark size={30} />
             <div className="flex flex-col leading-none">
-              <span className="text-[13px] font-bold tracking-tight text-slate-200">MikroAi</span>
+              <span className="text-[13px] font-bold tracking-tight text-slate-200">Mikrolab</span>
               <span className="text-[10px] font-mono text-slate-600">Open-source network lab Â· by KazuDev</span>
             </div>
           </div>

@@ -456,7 +456,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (!cableType) return false;
     if (cableType === "fiber") return portType === "fiber";
     if (cableType === "serial") return portType === "serial";
-    return portType === "copper";
+    // kabel copper bisa ke port copper maupun radio (link wireless)
+    return portType === "copper" || portType === "radio";
   };
 
   const getNodeIcon = (deviceType: string) => {    switch (deviceType) {

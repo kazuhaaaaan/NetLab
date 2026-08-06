@@ -1,5 +1,5 @@
 /**
- * Klien LLM MikroAi — dua mode:
+ * Klien LLM Mikrolab — dua mode:
  *  1. Langsung (browser → Gemini REST): bila VITE_GEMINI_API_KEY tersedia,
  *     chat bekerja tanpa server Node sama sekali (CORS diizinkan Google).
  *  2. Proxy server (server/index.mjs → POST /api/ai): fallback bila mode

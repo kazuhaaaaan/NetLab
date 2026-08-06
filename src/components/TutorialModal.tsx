@@ -34,7 +34,7 @@ interface GuideStep {
 const GUIDE_STEPS: GuideStep[] = [
   {
     icon: <Rocket className="w-5 h-5" />,
-    title: 'Selamat Datang di MikroAi',
+    title: 'Selamat Datang di Mikrolab',
     desc: 'Simulator jaringan enterprise yang berjalan sepenuhnya di browser â€” tanpa install, tanpa server. Semua yang kamu kerjakan tersimpan otomatis.',
     points: [
       { label: 'Simpan Otomatis', text: 'Topologi, konfigurasi CLI, dan log terminal tetap tersimpan saat halaman di-reload.' },
@@ -116,7 +116,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ isOpen, onClose })
               <Network className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-lg font-bold">Panduan MikroAi</h2>
+              <h2 className="text-lg font-bold">Panduan Mikrolab</h2>
               <p className="text-xs text-slate-400">Cara memakai simulator jaringan di browser</p>
             </div>
           </div>

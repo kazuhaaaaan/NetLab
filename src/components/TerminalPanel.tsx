@@ -344,7 +344,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       {/* Terminal Scroll Viewport */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2 text-xs leading-relaxed text-slate-200 font-mono">
         <div className="text-slate-500 text-[11px]">
-          [MikroAi Multi-Vendor Terminal Engine connected to {activeNode?.name} ({vendorInfo?.name})]
+          [Mikrolab Multi-Vendor Terminal Engine connected to {activeNode?.name} ({vendorInfo?.name})]
         </div>
         <div className="text-slate-600 text-[11px]">
           Type <span className="text-yellow-400 font-bold">?</span> or append <span className="text-yellow-400 font-bold">?</span> after a word for help. Press <span className="text-cyan-400 font-bold">Tab</span> to autocomplete.

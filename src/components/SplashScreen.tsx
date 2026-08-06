@@ -198,7 +198,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onDone }) => {
               WebkitTextFillColor: 'transparent',
               backgroundClip: 'text',
             }}>
-            MikroAi
+            Mikrolab
           </span>
         </div>
 

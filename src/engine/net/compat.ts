@@ -152,3 +152,43 @@ export interface SimRoute {
   iface: string | null;
   kind: 'connected' | 'static' | 'dynamic';
 }
+
+/** Konfigurasi agent SNMP sebuah perangkat (di-set lewat CLI). */
+export interface SnmpAgentConfig {
+  enabled: boolean;
+  community: string;
+  communityRW?: string;
+  sysContact?: string;
+  sysLocation?: string;
+}
+
+/** Satu entri MIB: nilai + tipe ASN.1 SNMP (STRING/INTEGER/Timeticks/...). */
+export interface SnmpOidValue {
+  oid: string;
+  value: string;
+  type: string;
+}
+
+export interface SnmpQueryResult {
+  ok: boolean;
+  reason?:
+    | 'no-ip'
+    | 'unreachable'
+    | 'invalid'
+    | 'not-found'
+    | 'timeout'
+    | 'auth'
+    | 'no-agent'
+    | 'readonly'
+    | 'not-found-oid'
+    | 'power'
+    | 'ttl';
+  device?: string;
+  error?: string;
+  oids?: SnmpOidValue[];
+}
+
+export interface SnmpQueryOptions {
+  walk?: boolean;
+  setValue?: string;
+}

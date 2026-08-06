@@ -32,7 +32,7 @@ export interface PortSpec {
   status: 'up' | 'down';
   ipAddress?: string;
   macAddress: string;
-  type?: 'copper' | 'fiber' | 'serial';
+  type?: 'copper' | 'fiber' | 'serial' | 'radio';
 }
 
 export interface LabNode {

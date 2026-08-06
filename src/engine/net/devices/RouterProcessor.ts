@@ -12,7 +12,9 @@ import { aclBlocks } from '../services/FirewallService';
 import { NatTranslator } from '../layer4/Nat';
 import { allocateIp, findServingPool, LeaseGrant } from '../services/DhcpService';
 import { staticRecord } from '../services/DnsService';
-import { parseCidr, ipToInt, networkOf, inSameSubnet } from '../core/ip';
+import { parseCidr, ipToInt, networkOf, inSameSubnet, isValidIp } from '../core/ip';
+import { isIpv6Address, isIpv6Multicast, inSameIpv6Subnet } from '../core/ipv6';
+import { ndpResolveAndSend, NDP_NS, NDP_NA, ICMPV6_ECHO_REQUEST, ICMPV6_ECHO_REPLY } from './ndpUtils';
 import {
   ICMP_DEST_UNREACHABLE,
   ICMP_ECHO_REPLY,
@@ -23,7 +25,10 @@ import {
   buildTimeExceeded,
 } from '../layer4/Icmp';
 import { TCP_SYN, TCP_ACK, TcpSegment, buildTcpSegment, isSyn, isAck } from '../layer4/Tcp';
-import { UDP_BOOTPS, UDP_BOOTPC, UDP_DNS } from '../layer4/Udp';
+import { UDP_BOOTPS, UDP_BOOTPC, UDP_DNS, UDP_SNMP } from '../layer4/Udp';
+import { buildMib, mibLookup, normalizeOid } from '../services/SnmpService';
+
+const PREFIX = '.1.3.6.1.2.1';
 
 export class RouterProcessor implements DeviceProcessor {
   constructor(protected device: NetworkDevice) {}
@@ -37,6 +42,10 @@ export class RouterProcessor implements DeviceProcessor {
     }
     if (pkt.protocol === 'arp') {
       this.handleArp(pkt, inPort, core, traceId);
+      return;
+    }
+    if (isIpv6Address(pkt.dstIp)) {
+      this.handleIpv6(pkt, inPort, core, traceId);
       return;
     }
     this.handleIp(pkt, inPort, core, traceId);
@@ -136,7 +145,10 @@ export class RouterProcessor implements DeviceProcessor {
     }
 
     if (myIface) {
-      this.localDelivery(pkt, inPort, myIface.name, core, traceId);
+      // Balas via interface tempat paket masuk (bukan interface yang IP-nya cocok),
+      // agar reply lintas-interface (mis. ping ke IP LAN lain) kembali ke sumber.
+      const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+      this.localDelivery(pkt, inPort, (inIface || myIface).name, core, traceId);
       return;
     }
 
@@ -207,6 +219,127 @@ export class RouterProcessor implements DeviceProcessor {
 
     // ARP untuk next hop → rewrite MAC, baru transmit
     arpResolveAndSend(dev, pkt, egress.name, nextHopIp, core, traceId);
+  }
+
+  // ── IPv6 (NDP + ICMPv6 echo + routing v6) ───────────────
+  private handleIpv6(pkt: Packet, inPort: string, core: SimulatorCore, traceId: string): void {
+    const dev = this.device;
+    core.emit('PACKET_RECEIVED', traceId, { packetId: pkt.id }, dev.id, inPort);
+    const p = (pkt.payload ?? {}) as { type?: number; ndp?: string; target?: string; seq?: number; id?: number };
+
+    // NDP: NS/NA datang ke solicited-node multicast MAC (33:33:ff:..) —
+    // harus ditangani sebelum filter L2.
+    if (p.type === NDP_NS && p.ndp === 'ns' && p.target) {
+      const mine = dev.hasIpv6(p.target);
+      dev.ipv6Neighbors.learn(pkt.srcIp, pkt.srcMac, inPort, core.now);
+      if (mine) {
+        const na = core.createPacket({
+          protocol: 'icmp',
+          srcMac: mine.mac,
+          dstMac: pkt.srcMac,
+          srcIp: p.target,
+          dstIp: pkt.srcIp,
+          ttl: 64,
+          traceId,
+          payload: { type: NDP_NA, code: 0, target: p.target, ndp: 'na' },
+        });
+        core.transmit(dev, na, inPort, traceId);
+      }
+      core.drop(dev, pkt, 'ndp-consumed', traceId);
+      return;
+    }
+    if (p.type === NDP_NA && p.ndp === 'na' && p.target) {
+      dev.ipv6Neighbors.learn(p.target, pkt.srcMac, inPort, core.now);
+      core.flushArp(dev, p.target, pkt.srcMac, traceId);
+      core.drop(dev, pkt, 'ndp-consumed', traceId);
+      return;
+    }
+
+    const forMyMac =
+      isBroadcastMac(pkt.dstMac) ||
+      pkt.dstMac.toLowerCase().startsWith('33:33') ||
+      [...dev.getInterfaces()].some((i) => i.mac.toLowerCase() === pkt.dstMac.toLowerCase());
+    if (!forMyMac) {
+      core.drop(dev, pkt, 'l2-filter', traceId);
+      return;
+    }
+
+    const myIface = dev.hasIpv6(pkt.dstIp);
+    if (myIface) {
+      const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+      if (pkt.protocol === 'icmp' && p.type === ICMPV6_ECHO_REQUEST) {
+        pkt.flags['ttlAtDst'] = pkt.ttl;
+        const reply = core.createPacket({
+          protocol: 'icmp',
+          srcMac: myIface.mac,
+          dstMac: pkt.srcMac,
+          srcIp: pkt.dstIp,
+          dstIp: pkt.srcIp,
+          ttl: 64,
+          traceId,
+          payload: { type: ICMPV6_ECHO_REPLY, code: 0, seq: p.seq, id: p.id, v6: true },
+        });
+        reply.hops = pkt.hops.slice();
+        reply.edgeIds = pkt.edgeIds.slice();
+        reply.trace = pkt.trace.slice();
+        core.transmit(dev, reply, (inIface || myIface).name, traceId);
+        core.emit('PING_REPLY', traceId, { seq: p.seq }, dev.id, (inIface || myIface).name);
+      } else if (pkt.protocol === 'icmp' && p.type === ICMPV6_ECHO_REPLY) {
+        core.emit('PING_REPLY', traceId, { seq: p.seq, arrived: true }, dev.id, (inIface || myIface).name);
+        const run = core.getRun(traceId);
+        if (run && run.status === 'running') {
+          run.status = 'ok';
+          run.ttlAtDst = (pkt.flags['ttlAtDst'] as number) || 64;
+        }
+      }
+      core.drop(dev, pkt, 'consumed', traceId);
+      return;
+    }
+
+    if (dev.kind === 'pc' || dev.kind === 'server') {
+      core.drop(dev, pkt, 'not-for-me', traceId);
+      return;
+    }
+
+    if (pkt.ttl <= 1) {
+      core.emit('TTL_EXCEEDED', traceId, { srcIp: pkt.srcIp, dstIp: pkt.dstIp }, dev.id, inPort);
+      const run = core.getRun(traceId);
+      if (run && run.status === 'running') {
+        run.ttlExpired = true;
+        run.status = 'fail';
+        run.reason = 'ttl';
+      }
+      this.sendIcmpError(pkt, inPort, buildTimeExceeded(), core, traceId);
+      core.drop(dev, pkt, 'ttl-expired', traceId);
+      return;
+    }
+    pkt.ttl -= 1;
+
+    const nh = dev.ipv6Routing.lookup(pkt.dstIp);
+    if (!nh) {
+      core.emit('ICMP_ERROR', traceId, { reason: 'no-route-v6' }, dev.id, inPort);
+      const run = core.getRun(traceId);
+      if (run && run.status === 'running') {
+        run.unreachable = true;
+        run.status = 'fail';
+        run.reason = 'unreachable';
+      }
+      core.drop(dev, pkt, 'no-route-v6', traceId);
+      return;
+    }
+
+    let egressName = nh.iface || (nh.gateway ? dev.resolveEgressIface6(nh.gateway)?.name || null : null);
+    if (!egressName) {
+      const firstUp = dev.getInterfaces().find((i) => i.up && i.ipv6);
+      egressName = firstUp?.name || null;
+    }
+    const egress = egressName ? dev.getIfaceByName(egressName) : null;
+    if (!egress || !egress.up || !egress.ipv6) {
+      core.drop(dev, pkt, 'egress-down', traceId);
+      return;
+    }
+    const nextHopIp = nh.gateway || pkt.dstIp;
+    ndpResolveAndSend(dev, pkt, egress.name, nextHopIp, core, traceId);
   }
 
   private sendIcmpError(pkt: Packet, inPort: string, error: IcmpPayload, core: SimulatorCore, traceId: string): void {
@@ -385,6 +518,10 @@ export class RouterProcessor implements DeviceProcessor {
 
   protected handleUdpLocal(pkt: Packet, inPort: string, iface: { name: string; mac: string }, core: SimulatorCore, traceId: string): void {
     const dev = this.device;
+    if (pkt.dstPort === UDP_SNMP) {
+      this.handleSnmpAgent(pkt, inPort, iface, core, traceId);
+      return;
+    }
     if (pkt.dstPort === UDP_DNS) {
       const name = String((pkt.payload as Record<string, unknown> | null)?.name || '');
       const rec = staticRecord(dev, name);
@@ -406,7 +543,124 @@ export class RouterProcessor implements DeviceProcessor {
       core.drop(dev, pkt, 'dns-consumed', traceId);
       return;
     }
+    // Respon SNMP yang datang ke host klien → finalisasi run dengan hasil query.
+    if (pkt.dstPort !== UDP_SNMP && (pkt.payload as Record<string, unknown> | null)?.snmpResult) {
+      const run = core.getRun(traceId);
+      if (run && run.status === 'running') {
+        run.status = 'ok';
+        run.snmp = (pkt.payload as { snmpResult: Record<string, unknown> }).snmpResult;
+      }
+      core.drop(dev, pkt, 'snmp-consumed', traceId);
+      return;
+    }
     core.drop(dev, pkt, 'udp-unknown', traceId);
+  }
+
+  /** Agent SNMP (udp/161): validasi community, jawab get / getnext / walk / set. */
+  private handleSnmpAgent(pkt: Packet, inPort: string, iface: { name: string; mac: string }, core: SimulatorCore, traceId: string): void {
+    const dev = this.device;
+    const run = core.getRun(traceId);
+    const req = (pkt.payload ?? {}) as {
+      snmpOp?: string;
+      oid?: string;
+      community?: string;
+      setValue?: string;
+    };
+    const agent = dev.snmpAgent;
+    if (!agent || !agent.enabled) {
+      core.emit('PACKET_DROPPED', traceId, { reason: 'no-snmp-agent' }, dev.id, inPort);
+      if (run && run.status === 'running') {
+        run.status = 'fail';
+        run.reason = 'no-agent';
+      }
+      core.drop(dev, pkt, 'no-snmp-agent', traceId);
+      return;
+    }
+    const community = String(req.community || '');
+    const isSet = req.snmpOp === 'set';
+    const okCommunity =
+      community === agent.community || (isSet && community === agent.communityRW);
+    if (!okCommunity) {
+      const reply = core.createPacket({
+        protocol: 'udp',
+        srcMac: iface.mac,
+        dstMac: pkt.srcMac,
+        srcIp: pkt.dstIp,
+        dstIp: pkt.srcIp,
+        srcPort: UDP_SNMP,
+        dstPort: pkt.srcPort,
+        ttl: 64,
+        traceId,
+        payload: { snmpResult: { ok: false, error: 'Bad community name', reason: 'auth' }, oid: req.oid },
+      });
+      core.transmit(dev, reply, iface.name, traceId);
+      if (run && run.status === 'running') {
+        run.status = 'fail';
+        run.reason = 'auth';
+      }
+      core.drop(dev, pkt, 'snmp-consumed', traceId);
+      return;
+    }
+
+    const mib = buildMib(dev);
+    const oid = normalizeOid(req.oid || '');
+    const walk = req.snmpOp === 'getnext' || req.snmpOp === 'walk';
+    const result: { ok: boolean; oids?: { oid: string; value: string; type: string }[]; readonly?: boolean } = { ok: true };
+
+    if (req.snmpOp === 'set') {
+      // set butuh community RW
+      if (community !== agent.communityRW) {
+        result.ok = false;
+        (result as { readonly?: boolean; reason?: string }).reason = 'readonly';
+      } else {
+        if (oid === `${PREFIX}.1.5.0`) {
+          dev.name = String(req.setValue || '');
+          mib.set(`${PREFIX}.1.5.0`, { value: dev.name, type: 'STRING' });
+        }
+        result.oids = [{ oid, value: mib.get(oid)?.value ?? '', type: mib.get(oid)?.type ?? 'STRING' }];
+      }
+    } else if (walk) {
+      const found: { oid: string; value: string; type: string }[] = [];
+      let cursor = oid;
+      for (let i = 0; i < 200; i++) {
+        const next = mibLookup(mib, cursor, true);
+        if (!next) break;
+        found.push({ oid: next.oid, value: next.entry.value, type: next.entry.type });
+        cursor = next.oid;
+        if (!cursor.startsWith(oid)) break;
+      }
+      result.oids = found;
+    } else {
+      const hit = mibLookup(mib, oid, false);
+      if (!hit) {
+        result.ok = false;
+        (result as { reason?: string }).reason = 'not-found-oid';
+        result.oids = [];
+      } else {
+        result.oids = [{ oid, value: hit.entry.value, type: hit.entry.type }];
+      }
+    }
+
+    const reply = core.createPacket({
+      protocol: 'udp',
+      srcMac: iface.mac,
+      dstMac: pkt.srcMac,
+      srcIp: pkt.dstIp,
+      dstIp: pkt.srcIp,
+      srcPort: UDP_SNMP,
+      dstPort: pkt.srcPort,
+      ttl: 64,
+      traceId,
+      payload: { snmpResult: { ...result, device: dev.name }, oid },
+    });
+    core.transmit(dev, reply, iface.name, traceId);
+
+    const done: Record<string, unknown> = { ...result, device: dev.name };
+    if (run && run.status === 'running' && req.snmpOp === 'set') {
+      run.status = 'ok';
+      run.snmp = done;
+    }
+    core.drop(dev, pkt, 'snmp-consumed', traceId);
   }
 
   // ── DHCP server (DORA) ───────────────────────────────────

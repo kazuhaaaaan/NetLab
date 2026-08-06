@@ -185,6 +185,7 @@ export class RoutingProtocolEngine {
   private computeBgpRoutes(devices: NetworkDevice[], links: LinkTable): void {
     const bgpRouters = devices.filter((d) => d.bgpCfg && d.bgpCfg.asn && d.bgpCfg.peers.length > 0);
     if (bgpRouters.length === 0) return;
+    const segments = this.buildSegments(devices, links);
 
     const tables = new Map<string, TableEntry[]>();
     for (const dev of bgpRouters) {
@@ -209,13 +210,16 @@ export class RoutingProtocolEngine {
       for (const dev of bgpRouters) {
         const myEntries = tables.get(dev.id);
         if (!myEntries) continue;
-        const myIp = dev.getIpAddress();
-        if (!myIp) continue;
         for (const p of dev.bgpCfg!.peers) {
           const peerId = deviceById(p.remoteAddr)?.id;
           if (!peerId || !bgpRouters.some((b) => b.id === peerId)) continue;
+          // Next-hop BGP = IP interface yang menghadap peer (langsung atau via path),
+          // bukan IP pertama perangkat — kalau tidak, rute belajar mengarah ke
+          // gateway yang tidak terjangkau.
+          const nextHop = this.egressIpToward(dev, p.remoteAddr, devices, links, segments) || dev.getIpAddress();
+          if (!nextHop) continue;
           for (const e of myEntries) {
-            candidates.push({ peerId, dst: e.dst, gateway: myIp, metric: e.metric + 1 });
+            candidates.push({ peerId, dst: e.dst, gateway: nextHop, metric: e.metric + 1 });
           }
         }
       }
@@ -246,5 +250,58 @@ export class RoutingProtocolEngine {
         if (e.gateway) dev.addDynamicRoute(e.dst, e.gateway);
       }
     }
+  }
+
+  /**
+   * IP lokal `dev` yang tepat untuk dijadikan next-hop menuju `targetIp`
+   * (peer BGP):
+   * 1. Jika peer di subnet langsung → IP interface pada subnet itu.
+   * 2. Jika peer trans-it (iBGP multi-hop) → IP interface pada segmen
+   *    pertama jalur menuju peer (via BFS di topologi).
+   */
+  private egressIpToward(
+    dev: NetworkDevice,
+    targetIp: string,
+    devices: NetworkDevice[],
+    links: LinkTable,
+    segments: Map<string, string>
+  ): string | null {
+    for (const iface of dev.getInterfaces()) {
+      if (iface.ip && iface.up && inSameSubnet(iface.ip.address, iface.ip.prefix, targetIp)) return iface.ip.address;
+    }
+    const parent = new Map<string, string>();
+    const visited = new Set<string>([dev.id]);
+    const queue: string[] = [dev.id];
+    let foundId: string | null = null;
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      for (const link of links.linksOf(id)) {
+        const nb = link.a.nodeId === id ? link.b.nodeId : link.a.nodeId;
+        if (visited.has(nb)) continue;
+        visited.add(nb);
+        parent.set(nb, id);
+        const nd = devices.find((x) => x.id === nb);
+        if (nd && nd.hasIp(targetIp)) {
+          foundId = nb;
+          break;
+        }
+        queue.push(nb);
+      }
+      if (foundId) break;
+    }
+    if (!foundId) return null;
+    let cur = foundId;
+    while (parent.get(cur) !== dev.id && parent.has(cur)) cur = parent.get(cur)!;
+    if (parent.get(cur) !== dev.id) return null;
+    for (const link of links.linksOf(dev.id)) {
+      const nb = link.a.nodeId === dev.id ? link.b.nodeId : link.a.nodeId;
+      if (nb !== cur) continue;
+      const myPort = link.a.nodeId === dev.id ? link.a.port : link.b.port;
+      const seg = segments.get(`${dev.id}:${myPort}`);
+      if (!seg) continue;
+      const ip = this.ipOnSegment(dev, seg, segments, links);
+      if (ip) return ip;
+    }
+    return null;
   }
 }

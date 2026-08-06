@@ -517,6 +517,432 @@ console.log('\n== 6. Network engine (TCP/NAT/ACL/DNS/VLAN) ==');
   }
 }
 
+// ── 7. BGP antar-perangkat: eBGP langsung & trans-it (next-hop benar) ─────
+console.log('\n== 7. BGP antar-perangkat ==');
+{
+  const ePorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const eNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor: deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik', model: deviceType, deviceType,
+    ports: ePorts(portCount, macSeed),
+  });
+  const eEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  // 7a. eBGP langsung — 2 AS tanpa rute statis
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, '21'), eNode('r1', 'R1', 'router', 3, '22'),
+        eNode('r2', 'R2', 'router', 3, '23'), eNode('svr2', 'SVR2', 'server', 1, '25'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'r1', 'port1'),
+        eEdge('e2', 'r1', 'port2', 'r2', 'port1'),
+        eEdge('e3', 'r2', 'port2', 'svr2', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('r1', { ether1: '10.0.1.1/24', ether2: '192.168.1.1/30' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    sim.applyNodeConfig('svr2', { ether1: '10.0.2.10/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.2.1' }]);
+    sim.setWebServer('svr2', { enabled: true, port: 80, content: 'Hello NetLab' });
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+
+    check('7a BGP neighbor R1 Established', sim.getBgpNeighborStates('r1').some((s) => s.state === 'Established'), JSON.stringify(sim.getBgpNeighborStates('r1')));
+    check('7a BGP neighbor R2 Established', sim.getBgpNeighborStates('r2').some((s) => s.state === 'Established'), JSON.stringify(sim.getBgpNeighborStates('r2')));
+    check('7a R1 belajar 10.0.2.0/24 via BGP', sim.getDeviceStats('r1')?.routes.some((r) => r.dst === '10.0.2.0/24' && r.kind === 'dynamic'));
+    check('7a R2 belajar 10.0.1.0/24 via BGP', sim.getDeviceStats('r2')?.routes.some((r) => r.dst === '10.0.1.0/24' && r.kind === 'dynamic'));
+    const g1 = sim.getDeviceStats('r2')?.routes.find((r) => r.dst === '10.0.1.0/24' && r.kind === 'dynamic');
+    check('7a next-hop R2 = peer-facing 192.168.1.1', g1?.gateway === '192.168.1.1', JSON.stringify(g1));
+    const g2 = sim.getDeviceStats('r1')?.routes.find((r) => r.dst === '10.0.2.0/24' && r.kind === 'dynamic');
+    check('7a next-hop R1 = peer-facing 192.168.1.2', g2?.gateway === '192.168.1.2', JSON.stringify(g2));
+    check('7a connected route = network (bukan host IP)', sim.getDeviceStats('r1')?.routes.some((r) => r.dst === '10.0.1.0/24' && r.kind === 'connected'));
+    const ping = sim.simulatePing('pc1', '10.0.2.10');
+    check('7a ping lintas AS via BGP', ping.success, JSON.stringify(ping));
+    const tcp = sim.simulateTcpConnect('pc1', '10.0.2.10', 80);
+    check('7a TCP lintas AS via BGP', tcp.ok && tcp.status === 200 && tcp.body === 'Hello NetLab', JSON.stringify(tcp));
+  }
+
+  // 7b. eBGP rangkaian — 3 AS, rute transit melalui R2
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('r1', 'R1', 'router', 3, '31'), eNode('r2', 'R2', 'router', 3, '32'), eNode('r3', 'R3', 'router', 3, '33'),
+        eNode('pc1', 'PC1', 'pc', 1, '34'), eNode('svr3', 'SVR3', 'server', 1, '35'),
+      ],
+      edges: [
+        eEdge('e1', 'r1', 'port1', 'r2', 'port1'),
+        eEdge('e2', 'r2', 'port2', 'r3', 'port1'),
+        eEdge('e3', 'pc1', 'port1', 'r1', 'port3'),
+        eEdge('e4', 'svr3', 'port1', 'r3', 'port3'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether3: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '192.168.2.1/30' }, []);
+    sim.applyNodeConfig('r3', { ether1: '192.168.2.2/30', ether3: '10.0.9.1/24' }, []);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    sim.applyNodeConfig('svr3', { ether1: '10.0.9.10/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.9.1' }]);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }, { remoteAs: 65003, remoteAddr: '192.168.2.2' }], networks: [] });
+    sim.setBgp('r3', { asn: 65003, peers: [{ remoteAs: 65002, remoteAddr: '192.168.2.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+
+    const gA = sim.getDeviceStats('r1')?.routes.find((r) => r.dst === '10.0.9.0/24' && r.kind === 'dynamic');
+    check('7b next-hop R1->LAN9 = R2 (192.168.1.2)', gA?.gateway === '192.168.1.2', JSON.stringify(gA));
+    const gB = sim.getDeviceStats('r3')?.routes.find((r) => r.dst === '10.0.1.0/24' && r.kind === 'dynamic');
+    check('7b next-hop R3->LAN1 = R2 (192.168.2.1)', gB?.gateway === '192.168.2.1', JSON.stringify(gB));
+    const ping = sim.simulatePing('pc1', '10.0.9.10');
+    check('7b ping transit BGP', ping.success, JSON.stringify(ping));
+    const pingb = sim.simulatePing('svr3', '10.0.1.2');
+    check('7b ping balik transit BGP', pingb.success, JSON.stringify(pingb));
+  }
+}
+
+// ── 8. SNMP: agent + snmpget/snmpwalk/snmpset lintas perangkat ────────────
+console.log('\n== 8. SNMP (agent + query) ==');
+{
+  const ePorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const eNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor: deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik', model: deviceType, deviceType,
+    ports: ePorts(portCount, macSeed),
+  });
+  const eEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  // 8a. Agent di router, query dari PC satu segment
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, '41'), eNode('sw1', 'SW1', 'switch', 4, '42'), eNode('r1', 'R1', 'router', 3, '43'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'sw1', 'port1'), eEdge('e2', 'sw1', 'port2', 'r1', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('r1', { ether1: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+
+    const noAgent = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.1.1.0');
+    check('8a agent dimatikan -> no-agent', !noAgent.ok && noAgent.reason === 'no-agent', JSON.stringify(noAgent));
+
+    sim.setSnmp('r1', { enabled: true, community: 'public', communityRW: 'private', sysContact: 'admin@lab', sysLocation: 'DC-1' });
+    sim.setSnmp('rx-nonexistent', undefined); // harus aman (node tidak ada)
+
+    const sys = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.1.1.0');
+    check('8a sysDescr terbaca', sys.ok && sys.oids?.[0]?.oid === '.1.3.6.1.2.1.1.1.0' && String(sys.oids[0].value).length > 0, JSON.stringify(sys));
+
+    const name = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.1.5.0');
+    check('8a sysName = R1', name.ok && name.oids?.[0]?.value === 'R1', JSON.stringify(name));
+
+    const contact = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.1.4.0');
+    check('8a sysContact = admin@lab', contact.ok && contact.oids?.[0]?.value === 'admin@lab', JSON.stringify(contact));
+
+    const walk = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.2', { walk: true });
+    check('8a walk ifTable >= 3 entri', walk.ok && (walk.oids?.length || 0) >= 3, JSON.stringify(walk));
+
+    const bad = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'nope', '.1.3.6.1.2.1.1.1.0');
+    check('8a community salah -> auth', !bad.ok && bad.reason === 'auth', JSON.stringify(bad));
+
+    const nosuch = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.1.99.1.0');
+    check('8a OID tak ada -> not-found-oid', !nosuch.ok && nosuch.reason === 'not-found-oid', JSON.stringify(nosuch));
+
+    const ro = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.1.5.0', { setValue: 'Hacked' });
+    check('8a set pakai community RO -> readonly', !ro.ok && ro.reason === 'readonly', JSON.stringify(ro));
+
+    const set = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'private', '.1.3.6.1.2.1.1.5.0', { setValue: 'Router-Utama' });
+    check('8a set pakai community RW -> ok', set.ok, JSON.stringify(set));
+    const after = sim.simulateSnmpQuery('pc1', '10.0.1.1', 'public', '.1.3.6.1.2.1.1.5.0');
+    check('8a sysName berubah jadi Router-Utama', after.oids?.[0]?.value === 'Router-Utama', JSON.stringify(after));
+  }
+
+  // 8b. Query lintas router (perlu rute BGP/statis) + uptime ifIndex
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, '51'), eNode('r1', 'R1', 'router', 3, '52'), eNode('r2', 'R2', 'router', 3, '53'),
+        eNode('sw2', 'SW2', 'switch', 4, '54'), eNode('pc2', 'PC2', 'pc', 1, '55'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'r1', 'port1'),
+        eEdge('e2', 'r1', 'port2', 'r2', 'port1'),
+        eEdge('e3', 'r2', 'port2', 'sw2', 'port1'),
+        eEdge('e4', 'sw2', 'port2', 'pc2', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('r1', { ether1: '10.0.1.1/24', ether2: '192.168.1.1/30' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.2.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.2.1' }]);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+    sim.setSnmp('r2', { enabled: true, community: 'public' });
+    sim.setSnmp('r1', { enabled: true, community: 'public' });
+
+    const ping = sim.simulatePing('pc1', '10.0.2.1');
+    check('8b prasyarat: ping lintas BGP sukses', ping.success, JSON.stringify(ping));
+
+    const cross = sim.simulateSnmpQuery('pc1', '10.0.2.1', 'public', '.1.3.6.1.2.1.1.5.0');
+    check('8b snmpget lintas router -> R2', cross.ok && cross.oids?.[0]?.value === 'R2', JSON.stringify(cross));
+
+    const walkIf = sim.simulateSnmpQuery('pc2', '10.0.1.1', 'public', '.1.3.6.1.2.1.2', { walk: true });
+    check('8b walk ifTable R1 dari segmen lain', walkIf.ok && (walkIf.oids?.length || 0) >= 2, JSON.stringify(walkIf));
+
+    const uptime = sim.simulateSnmpQuery('pc1', '10.0.2.1', 'public', '.1.3.6.1.2.1.1.3.0');
+    check('8b sysUpTime Timeticks', uptime.ok && /^\(\d+\)/.test(String(uptime.oids?.[0]?.value)), JSON.stringify(uptime));
+
+    const unr = sim.simulateSnmpQuery('pc1', '192.168.99.99', 'public', '.1.3.6.1.2.1.1.1.0');
+    check('8b IP tak terjangkau -> unreachable', !unr.ok && unr.reason === 'unreachable', JSON.stringify(unr));
+  }
+}
+
+// ── 9. STP/RSTP: loop handling + failover ───────────────────────────────
+console.log('\n== 9. STP (loop-breaking & failover) ==');
+{
+  const ePorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const eNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor: deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik', model: deviceType, deviceType,
+    ports: ePorts(portCount, macSeed),
+  });
+  const eEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+
+  // 9a. Segitiga switch (loop) — satu port harus blocking, ping tetap jalan
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, '31'), eNode('pc2', 'PC2', 'pc', 1, '32'),
+        eNode('sw1', 'SW1', 'switch', 3, '01'), eNode('sw2', 'SW2', 'switch', 3, '02'), eNode('sw3', 'SW3', 'switch', 3, '03'),
+      ],
+      edges: [
+        eEdge('e1', 'sw1', 'port1', 'sw2', 'port1'),
+        eEdge('e2', 'sw2', 'port2', 'sw3', 'port1'),
+        eEdge('e3', 'sw3', 'port2', 'sw1', 'port2'),
+        eEdge('e4', 'pc1', 'port1', 'sw3', 'port3'),
+        eEdge('e5', 'pc2', 'port1', 'sw2', 'port3'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.0.2/24' }, []);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.0.3/24' }, []);
+
+    // Root = bridge ID terkecil → SW1 (MAC seed 01, prioritas sama)
+    const st = sim.getStpInfo('sw3');
+    check('9a root adalah SW1', !!st && st.rootName === 'SW1', JSON.stringify(st));
+    // Edge SW2-SW3: SW2 (MAC lebih kecil) designated, SW3 alternate → blocking.
+    const rootPort = sim.getStpInfo('sw1');
+    check('9a SW1 tidak punya root port', !!rootPort && rootPort.rootPort === null, JSON.stringify(rootPort));
+    const sw3 = sim.getStpInfo('sw3');
+    const blocking = sw3?.ports.find((p) => p.state === 'blocking');
+    check('9a SW3 punya 1 port blocking (loop dipotong)', !!blocking && blocking.role === 'alternate', JSON.stringify(sw3?.ports));
+    check('9a hanya 1 sisi loop yang blokir', (sw3?.ports.filter((p) => p.state === 'blocking').length || 0) === 1);
+
+    // Broadcast/flood tetap bisa: ping lewat pohon
+    check('9a ping via spanning tree sukses', sim.simulatePing('pc1', '10.0.0.3').success);
+
+    // Failover: SW1 mati → STP recompute, SW2-SW3 jadi jalur aktif
+    sim.setNodePowered('sw1', false);
+    const sw3b = sim.getStpInfo('sw3');
+    check('9a failover: SW3 root berubah', !!sw3b && sw3b.rootName !== 'SW1', JSON.stringify(sw3b));
+    check('9a failover: tidak ada port blocking lagi', sw3b?.ports.every((p) => p.state === 'forwarding'), JSON.stringify(sw3b?.ports));
+    check('9a failover: ping tetap jalan', sim.simulatePing('pc1', '10.0.0.3').success);
+
+    // Prioritas lebih kecil → jadi root baru
+    sim.setNodePowered('sw1', true);
+    sim.setStp('sw2', { enabled: true, priority: 4096, mode: 'rstp' });
+    const root2 = sim.getStpInfo('sw3');
+    check('9a prioritas 4096: SW2 jadi root', !!root2 && root2.rootName === 'SW2', JSON.stringify(root2));
+    sim.setStp('sw2', undefined); // reset ke default
+
+    // STP dimatikan → semua port forwarding
+    sim.setStp('sw3', { enabled: false, priority: 32768, mode: 'rstp' });
+    const sw3c = sim.getStpInfo('sw3');
+    check('9a stp off: semua port forwarding', sw3c?.ports.every((p) => p.state === 'forwarding'), JSON.stringify(sw3c?.ports));
+  }
+
+  // 9b. STP tidak mengganggu topologi pohon tanpa loop (semua port forwarding)
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, '21'), eNode('sw1', 'SW1', 'switch', 3, '22'), eNode('pc2', 'PC2', 'pc', 1, '23'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'sw1', 'port1'),
+        eEdge('e2', 'sw1', 'port2', 'pc2', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.0.2/24' }, []);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.0.3/24' }, []);
+    const st = sim.getStpInfo('sw1');
+    check('9b linear: semua port forwarding', st?.ports.every((p) => p.state === 'forwarding'), JSON.stringify(st?.ports));
+    check('9b linear: ping sukses', sim.simulatePing('pc1', '10.0.0.3').success);
+  }
+}
+
+// ── 10. Wireless (asosiasi AP–station, keamanan, radio) ──────────────────
+{
+  const ePorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const eNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor: deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik', model: deviceType, deviceType,
+    ports: ePorts(portCount, macSeed),
+  });
+  const eEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  const apNode = (id: string, name: string, seed: string) => ({
+    id, name, vendor: 'mikrotik', model: 'wireless', deviceType: 'wireless',
+    ports: [
+      { id: 'port1', name: 'ether1', status: 'up', macAddress: `00:0c:29:${seed}:01:01` },
+      { id: 'port2', name: 'ether2', status: 'up', macAddress: `00:0c:29:${seed}:02:01` },
+      { id: 'port3', name: 'wlan1', status: 'up', macAddress: `00:0c:29:${seed}:03:01` },
+    ],
+  });
+  const buildWifi = () => {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, '41'), eNode('pc2', 'PC2', 'pc', 1, '42'),
+        apNode('ap1', 'AP1', '43'), apNode('st1', 'ST1', '44'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'ap1', 'port2'),
+        eEdge('e2', 'ap1', 'port3', 'st1', 'port3'),
+        eEdge('e3', 'st1', 'port2', 'pc2', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.0.2/24' }, []);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.0.3/24' }, []);
+    return sim;
+  };
+
+  // 10a. AP terbuka tanpa config → asosiasi default, ping jalan
+  {
+    const sim = buildWifi();
+    check('10a tanpa config: ping lewat radio sukses', sim.simulatePing('pc1', '10.0.0.3').success);
+  }
+
+  // 10b. SSID harus sama (ap-bridge ↔ station)
+  {
+    const sim = buildWifi();
+    sim.setWireless('ap1', { interfaces: { wlan1: { ssid: 'NetLab', mode: 'ap-bridge' } }, profiles: {} });
+    sim.setWireless('st1', { interfaces: { wlan1: { ssid: 'NetLab', mode: 'station' } }, profiles: {} });
+    check('10b ssid sama: station terasosiasi', sim.getWirelessInfo('ap1')?.associations.length === 1);
+    check('10b ssid sama: ping sukses', sim.simulatePing('pc1', '10.0.0.3').success);
+
+    sim.setWireless('st1', { interfaces: { wlan1: { ssid: 'Lain', mode: 'station' } }, profiles: {} });
+    check('10b ssid beda: tidak terasosiasi', sim.getWirelessInfo('ap1')?.associations.length === 0);
+    check('10b ssid beda: ping gagal', !sim.simulatePing('pc1', '10.0.0.3').success);
+  }
+
+  // 10c. WPA2-PSK: key harus cocok
+  {
+    const sim = buildWifi();
+    const sec = { authenticationTypes: 'wpa2-psk', key: 'rahasia123' };
+    sim.setWireless('ap1', { interfaces: { wlan1: { ssid: 'NetLab', mode: 'ap-bridge', securityProfile: 's1' } }, profiles: { s1: sec } });
+    sim.setWireless('st1', { interfaces: { wlan1: { ssid: 'NetLab', mode: 'station', securityProfile: 's1' } }, profiles: { s1: { ...sec, key: 'salah' } } });
+    check('10c key salah: tidak terasosiasi', sim.getWirelessInfo('ap1')?.associations.length === 0);
+    check('10c key salah: ping gagal', !sim.simulatePing('pc1', '10.0.0.3').success);
+    sim.setWireless('st1', { interfaces: { wlan1: { ssid: 'NetLab', mode: 'station', securityProfile: 's1' } }, profiles: { s1: sec } });
+    check('10c key benar: terasosiasi', sim.getWirelessInfo('ap1')?.associations.length === 1);
+    check('10c key benar: ping sukses', sim.simulatePing('pc1', '10.0.0.3').success);
+  }
+
+  // 10d. AP mati → asosiasi hilang, jaringan terisolasi
+  {
+    const sim = buildWifi();
+    sim.setNodePowered('ap1', false);
+    check('10d AP mati: tidak ada asosiasi', sim.getWirelessInfo('ap1')?.associations.length === 0);
+    check('10d AP mati: ping gagal', !sim.simulatePing('pc1', '10.0.0.3').success);
+  }
+}
+
+// ── 11. QoS: mangle mark-packet + simple queue (token bucket) ────────────
+{
+  const ePorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const eNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor: deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik', model: deviceType, deviceType,
+    ports: ePorts(portCount, macSeed),
+  });
+  const eEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  const buildQos = () => {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('r1', 'R1', 'router', 3, '51'), eNode('pc1', 'PC1', 'pc', 1, '52'), eNode('pc2', 'PC2', 'pc', 1, '53'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'r1', 'port1'),
+        eEdge('e2', 'r1', 'port2', 'pc2', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/24', ether2: '192.168.2.1/24' }, []);
+    sim.applyNodeConfig('pc1', { ether1: '192.168.1.10/24' }, [{ dst: '0.0.0.0/0', gateway: '192.168.1.1' }]);
+    sim.applyNodeConfig('pc2', { ether1: '192.168.2.10/24' }, [{ dst: '0.0.0.0/0', gateway: '192.168.2.1' }]);
+    return sim;
+  };
+
+  // 11a. Baseline tanpa queue → ping sukses
+  {
+    const sim = buildQos();
+    check('11a baseline ping sukses', sim.simulatePing('pc1', '192.168.2.10').success);
+  }
+
+  // 11b. Simple queue rate rendah → paket di-drop token bucket
+  {
+    const sim = buildQos();
+    sim.setQos('r1', [{ name: 'q-kecil', target: '192.168.2.0/24', maxLimit: '1k' }], []);
+    const r = sim.simulatePing('pc1', '192.168.2.10');
+    check('11b queue 1k: ping gagal', !r.success, JSON.stringify(r));
+    const stats = sim.getQosStats('r1');
+    check('11b ada paket di-drop', (stats[0]?.dropped || 0) > 0, JSON.stringify(stats));
+  }
+
+  // 11c. Queue dibuka → ping sukses lagi
+  {
+    const sim = buildQos();
+    sim.setQos('r1', [{ name: 'q-besar', target: '192.168.2.0/24', maxLimit: '100M' }], []);
+    check('11c queue 100M: ping sukses', sim.simulatePing('pc1', '192.168.2.10').success);
+    check('11c tidak ada drop', (sim.getQosStats('r1')[0]?.dropped || 0) === 0);
+  }
+
+  // 11d. Mangle mark-packet + queue per-mark → hanya icmp yang di-drop
+  {
+    const sim = buildQos();
+    sim.setQos('r1', [
+      { name: 'q-voice', target: 'packet-mark=voice', maxLimit: '1k' },
+    ], [
+      { chain: 'forward', protocol: 'icmp', action: 'mark-packet', newPacketMark: 'voice' },
+    ]);
+    const r = sim.simulatePing('pc1', '192.168.2.10');
+    check('11d icmp ter-mark voice: ping drop', !r.success, JSON.stringify(r));
+    const voice = sim.getQosStats('r1').find((s) => s.name === 'q-voice');
+    check('11d queue voice mencatat drop', !!voice && voice.dropped > 0, JSON.stringify(voice));
+  }
+}
+
 // ── Ringkasan ────────────────────────────────────────────────────────────
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

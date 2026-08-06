@@ -271,6 +271,7 @@ export default function App() {
     simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
     simEngineRef.current.setRouting(nodeId, mem.routing || undefined);
     simEngineRef.current.setBgp(nodeId, mem.bgp || undefined);
+    simEngineRef.current.setSnmp(nodeId, mem.snmp || undefined);
     simEngineRef.current.setAcls(nodeId, mem.acls || undefined);
     simEngineRef.current.setNatRules(nodeId, mem.natRules || undefined);
     simEngineRef.current.setDnsRecords(nodeId, mem.dnsRecords || undefined);
@@ -278,6 +279,14 @@ export default function App() {
     simEngineRef.current.setWebServer(nodeId, mem.webServer || undefined);
     simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
     simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    simEngineRef.current.setStp(nodeId, mem.stp || undefined);
+    simEngineRef.current.setWireless(
+      nodeId,
+      mem.wireless || mem.wirelessSecurityProfiles
+        ? { interfaces: mem.wireless || {}, profiles: mem.wirelessSecurityProfiles || {} }
+        : undefined
+    );
+    simEngineRef.current.setQos(nodeId, mem.queues || undefined, mem.mangleRules || undefined);
     simEngineRef.current.computeDynamicRoutes();
   }, []);
 
@@ -962,6 +971,19 @@ export default function App() {
         bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
         tcpProvider: () => simEngineRef.current.getTcpConnections(nodeId),
         arpProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.arp || [],
+        stpProvider: () => simEngineRef.current.getStpInfo(nodeId),
+        wirelessProvider: () => simEngineRef.current.getWirelessInfo(nodeId),
+        qosProvider: () => simEngineRef.current.getQosStats(nodeId),
+        snmpQueryProvider: (host: string, community: string, oid: string, opts?: { walk?: boolean; setValue?: string }) => {
+          // hostname → resolve via DNS konfigurasi perangkat (seperti curl)
+          let target = host;
+          if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
+            const res = simEngineRef.current.resolveHostname(nodeId, host);
+            if (!res.resolved) return { ok: false, reason: 'not-found' };
+            target = res.resolved;
+          }
+          return simEngineRef.current.simulateSnmpQuery(nodeId, target, community, oid, opts || {});
+        },
       });
 
       // Pick up config changes made by this command (IP, routes, routing, ACL, NAT, VLAN)

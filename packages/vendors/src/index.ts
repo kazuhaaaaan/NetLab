@@ -384,6 +384,28 @@ export class CiscoVendorAdapter implements IVendorAdapter {
       ].join('\n');
     }
     if (cmdResult.type === 'show_stp') {
+      if (cmdResult.ports && cmdResult.ports.length > 0) {
+        const modeLabel = cmdResult.mode === 'rapid-pvst' ? 'rapid-pvst' : cmdResult.mode === 'pvst' ? 'ieee (pvst)' : 'ieee';
+        const isRoot = cmdResult.rootId === cmdResult.bridgeId;
+        const lines = [
+          'VLAN0001',
+          `  Spanning tree enabled protocol ${modeLabel}`,
+          `  Root ID    Priority    ${String(cmdResult.priority + 1)}`,
+          `             Address     ${fmtMac(rootIdStr(cmdResult.rootId))}`,
+          `             ${isRoot ? 'This bridge is the root' : `Cost        4`}`,
+          `             ${isRoot ? '' : 'Port        ' + (cmdResult.rootPort || '')}`,
+          `  Bridge ID  Priority    ${String(cmdResult.priority)}`,
+          `             Address     ${fmtMac(rootIdStr(cmdResult.bridgeId))}`,
+          'Interface           Role Sts Cost      Prio.Nbr Type',
+          '------------------- ---- --- --------- -------- --------',
+        ];
+        for (const p of cmdResult.ports) {
+          const role = p.role === 'root' ? 'Root' : p.role === 'designated' ? 'Desg' : p.role === 'alternate' ? 'Altn' : 'Disa';
+          const sts = p.state === 'forwarding' ? 'FWD' : p.state === 'blocking' ? 'BLK' : 'DIS';
+          lines.push(`${(p.port || 'Port').padEnd(20)} ${role.padEnd(4)} ${sts.padEnd(3)} ${String(p.cost ?? 4).padEnd(9)} 128.1    P2p${p.state === 'blocking' ? ' *' : ''}`);
+        }
+        return lines.join('\n');
+      }
       return ['VLAN0001',
         '  Spanning tree enabled protocol ieee',
         '  Root ID    Priority    32769',
@@ -1274,6 +1296,7 @@ export class VendorDispatcher {
         configuredIps: {},
         routes: [],
         bgp: { asn: '', routerId: '', peers: [] },
+        snmp: { enabled: false, community: 'public', communityRW: 'private', sysContact: '', sysLocation: '' },
         hostname: '',
         modelLabel: '',
         vlans: [],
@@ -1296,6 +1319,9 @@ export class VendorDispatcher {
         queues: [],
         mangleRules: [],
         wireless: {},
+        wirelessSecurityProfiles: {},
+        stp: { enabled: true, priority: 32768, mode: 'rstp' },
+        currentSsid: '',
         currentStaticDst: '',
         currentDhcpPool: '',
         currentProto: '',
@@ -1353,6 +1379,7 @@ export class VendorDispatcher {
       target.configuredIps = { ...target.configuredIps, ...(mem.configuredIps || {}) };
       target.routes = [...(mem.routes || [])];
       target.bgp = { asn: '', routerId: '', peers: [], ...(mem.bgp || {}) };
+      target.snmp = { enabled: false, community: 'public', communityRW: 'private', sysContact: '', sysLocation: '', ...(mem.snmp || {}) };
       if (typeof mem.hostname === 'string') target.hostname = mem.hostname;
       if (typeof mem.modelLabel === 'string') target.modelLabel = mem.modelLabel;
       if (Array.isArray(mem.vlans)) target.vlans = mem.vlans;
@@ -1381,6 +1408,9 @@ export class VendorDispatcher {
       if (Array.isArray(mem.queues)) target.queues = mem.queues;
       if (Array.isArray(mem.mangleRules)) target.mangleRules = mem.mangleRules;
       if (mem.wireless && typeof mem.wireless === 'object') target.wireless = { ...target.wireless, ...mem.wireless };
+      if (mem.wirelessSecurityProfiles && typeof mem.wirelessSecurityProfiles === 'object') target.wirelessSecurityProfiles = { ...mem.wirelessSecurityProfiles };
+      if (typeof mem.currentSsid === 'string') target.currentSsid = mem.currentSsid;
+      if (mem.stp && typeof mem.stp === 'object') target.stp = { enabled: true, priority: 32768, mode: 'rstp', ...mem.stp };
       if (Array.isArray(mem.natInsideIfaces)) target.natInsideIfaces = mem.natInsideIfaces;
       if (Array.isArray(mem.natOutsideIfaces)) target.natOutsideIfaces = mem.natOutsideIfaces;
       if (mem.natAcls && typeof mem.natAcls === 'object') target.natAcls = { ...target.natAcls, ...mem.natAcls };
@@ -1427,6 +1457,9 @@ export class VendorDispatcher {
 
     if (normalized.action === '?' || normalized.action === 'help' || rawInput.trim() === '?') {
       cmdResult = { type: 'help' };
+    } else if ((cmdResult = snmpCommand(rawInput, vendorId, mem, context)) !== undefined) {
+      // SNMP: konfigurasi agent per vendor + query snmpget/snmpwalk/snmpset.
+      // Selalu dicek duluan agar perintah agent tidak tabrakan dengan parser bawaan.
     } else if (vendorId === 'fortinet' && (cmdResult = fortinetCommand(rawInput, context, mem)) !== undefined) {
       // Fortinet: DHCP server, VLAN, OSPF, BGP, firewall policy (NAT), VIP port-forward,
       // firewall address, DNS — semuanya lewat mode "config ... / edit ... / set ... / end".
@@ -2001,6 +2034,54 @@ export class VendorDispatcher {
       } else {
         cmdResult = { raw: '% Usage: /routing bgp network add network=<jaringan/prefix>' };
       }
+    } else if (/^spanning-tree\s+mode\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "spanning-tree mode rstp|pvst|rapid-pvst|mst"
+      const mode = (rawInput.trim().match(/^spanning-tree\s+mode\s+(\S+)/i)?.[1] || 'rstp').toLowerCase();
+      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+      mem.stp.enabled = true;
+      mem.stp.mode = ['pvst', 'rapid-pvst', 'mst', 'stp', 'rstp'].includes(mode) ? mode : 'rstp';
+      cmdResult = { raw: '' };
+    } else if (/^no\s+spanning-tree/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "no spanning-tree" → matikan STP
+      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+      mem.stp.enabled = false;
+      cmdResult = { raw: '' };
+    } else if (/^spanning-tree\s+vlan\s+\d+\s+priority\s+\d+/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "spanning-tree vlan 1 priority 4096"
+      const m = rawInput.trim().match(/^spanning-tree\s+vlan\s+\d+\s+priority\s+(\d+)/i);
+      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+      mem.stp.priority = m ? parseInt(m[1], 10) : 32768;
+      mem.stp.enabled = true;
+      cmdResult = { raw: '' };
+    } else if (/^spanning-tree\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "spanning-tree portfast"/"spanning-tree uplinkfast" → diterima (simplifikasi)
+      cmdResult = { raw: '' };
+    } else if (/^\/interface\s+bridge\s+set\s+\S+\s+protocol-mode=(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/interface bridge set bridge1 protocol-mode=rstp|stp|none"
+      const pm = (rawInput.trim().match(/protocol-mode=(\S+)/i)?.[1] || 'rstp').toLowerCase();
+      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+      mem.stp.enabled = pm !== 'none';
+      mem.stp.mode = pm === 'stp' ? 'stp' : pm === 'mstp' ? 'mst' : 'rstp';
+      cmdResult = { raw: '' };
+    } else if (/^\/interface\s+bridge\s+print/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      cmdResult = { type: 'bridge_print', stp: mem.stp };
+    } else if (/^set\s+protocols\s+rstp/i.test(rawInput.trim()) && (vendorId === 'juniper' || vendorId === 'vyos' || vendorId === 'ubiquiti')) {
+      // Juniper/VyOS: "set protocols rstp" → aktifkan RSTP
+      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+      mem.stp.enabled = true;
+      mem.stp.mode = 'rstp';
+      cmdResult = { raw: '' };
+    } else if (/^delete\s+protocols\s+rstp/i.test(rawInput.trim()) && (vendorId === 'juniper' || vendorId === 'vyos' || vendorId === 'ubiquiti')) {
+      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+      mem.stp.enabled = false;
+      cmdResult = { raw: '' };
+    } else if (/^stp\s+mode\s+(\S+)/i.test(rawInput.trim()) && vendorId === 'huawei') {
+      // Huawei: "stp mode rstp" (system view)
+      const mode = (rawInput.trim().match(/^stp\s+mode\s+(\S+)/i)?.[1] || 'rstp').toLowerCase();
+      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+      mem.stp.enabled = true;
+      mem.stp.mode = ['stp', 'mst', 'rstp'].includes(mode) ? mode : 'rstp';
+      cmdResult = { raw: '' };
     } else if (/^set\s+protocols\s+(ospf|rip)\b/i.test(rawInput.trim()) && (vendorId === 'juniper' || vendorId === 'vyos' || vendorId === 'ubiquiti')) {
       // Juniper/VyOS/EdgeOS: "set protocols ospf area 0 interface eth0" / "set protocols ospf area 0 network 10.0.0.0/24"
       const proto = rawInput.trim().match(/^set\s+protocols\s+(ospf|rip)\b/i)?.[1]?.toLowerCase() as 'ospf' | 'rip';
@@ -2040,10 +2121,37 @@ export class VendorDispatcher {
       const iface = rawInput.trim().match(/interface=(\S+)/i)?.[1];
       if (iface) pushTrunk(mem, resolveIfaceName(context?.ports, iface) || iface);
       cmdResult = { raw: '' };
-    } else if (/^\/interface\s+wireless\s+(print|set\s+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+    } else if (/^\/interface\s+wireless\s+(print|set\s+|security-profiles|registration-table|monitor)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       // MikroTik: "/interface wireless set wlan1 ssid=NetLab band=2ghz-b mode=ap-bridge"
+      //           "/interface wireless security-profiles add name=p1 wpa2-pre-shared-key=rahasia"
+      //           "/interface wireless registration-table print" / monitor
       const raw = rawInput.trim();
-      if (/^\/interface\s+wireless\s+set\s+/i.test(raw)) {
+      if (/^\/interface\s+wireless\s+security-profiles\s+add\s+/i.test(raw)) {
+        const name = raw.match(/name=(\S+)/i)?.[1];
+        if (name) {
+          if (!mem.wirelessSecurityProfiles) mem.wirelessSecurityProfiles = {};
+          mem.wirelessSecurityProfiles[name] = {
+            authenticationTypes: raw.match(/authentication-types=(\S+)/i)?.[1] || 'wpa2-psk',
+            key: raw.match(/wpa2-pre-shared-key=(\S+)/i)?.[1] || raw.match(/pre-shared-key=(\S+)/i)?.[1] || '',
+          };
+          cmdResult = { raw: '' };
+        } else {
+          cmdResult = { raw: '% Usage: /interface wireless security-profiles add name=<profil> authentication-types=wpa2-psk wpa2-pre-shared-key=<kunci>' };
+        }
+      } else if (/^\/interface\s+wireless\s+registration-table\s+print/i.test(raw)) {
+        const info = typeof context.wirelessProvider === 'function' ? context.wirelessProvider() : null;
+        cmdResult = { type: 'wireless_reg_print', entries: info && info.associations ? info.associations : [] };
+      } else if (/^\/interface\s+wireless\s+monitor\s+/i.test(raw)) {
+        const info = typeof context.wirelessProvider === 'function' ? context.wirelessProvider() : null;
+        const assoc = info && info.associations ? info.associations : [];
+        cmdResult = {
+          type: 'wireless_monitor',
+          mode: info?.mode || 'ap-bridge',
+          ssid: info?.ssid || '(none)',
+          signal: assoc.length > 0 ? assoc[0].signal : -100,
+          stationCount: assoc.length,
+        };
+      } else if (/^\/interface\s+wireless\s+set\s+/i.test(raw)) {
         const iface = raw.match(/set\s+(\S+)/i)?.[1];
         if (iface) {
           if (!mem.wireless) mem.wireless = {};
@@ -2051,9 +2159,15 @@ export class VendorDispatcher {
           const ssid = raw.match(/ssid=(\S+)/i)?.[1];
           const band = raw.match(/band=(\S+)/i)?.[1];
           const mode = raw.match(/mode=(\S+)/i)?.[1];
+          const secProf = raw.match(/security-profile=(\S+)/i)?.[1];
+          const security = raw.match(/security=(\S+)/i)?.[1];
+          const key = raw.match(/key=(\S+)/i)?.[1];
           if (ssid) w.ssid = ssid;
           if (band) w.band = band;
           if (mode) w.mode = mode;
+          if (secProf) w.securityProfile = secProf;
+          if (security) w.security = security;
+          if (key) w.key = key;
           mem.wireless[iface] = w;
           cmdResult = { raw: '' };
         } else {
@@ -2062,6 +2176,24 @@ export class VendorDispatcher {
       } else {
         cmdResult = { type: 'wireless_print', wireless: mem.wireless };
       }
+    } else if (/^dot11\s+ssid\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos')) {
+      // Cisco: "dot11 ssid NetLab" → AP SSID (dot11radio0 dipetakan ke wlan1)
+      const ssid = rawInput.trim().match(/^dot11\s+ssid\s+(\S+)/i)?.[1];
+      if (!mem.wireless) mem.wireless = {};
+      mem.wireless['wlan1'] = { ...(mem.wireless['wlan1'] || {}), ssid, mode: 'ap-bridge' };
+      mem.currentSsid = ssid;
+      cmdResult = { raw: '' };
+    } else if (/^wpa-psk\s+ascii\s+\d+\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos') && mem.currentSsid) {
+      // Cisco: "wpa-psk ascii 0 <kunci>" (dalam mode konfigurasi SSID)
+      const key = rawInput.trim().match(/^wpa-psk\s+ascii\s+\d+\s+(\S+)/i)?.[1];
+      if (!mem.wirelessSecurityProfiles) mem.wirelessSecurityProfiles = {};
+      mem.wirelessSecurityProfiles['default'] = { authenticationTypes: 'wpa2-psk', key };
+      const w = mem.wireless['wlan1'] || {};
+      mem.wireless['wlan1'] = { ...w, securityProfile: 'default' };
+      cmdResult = { raw: '' };
+    } else if (/^show\s+dot11\s+associations/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos')) {
+      const info = typeof context.wirelessProvider === 'function' ? context.wirelessProvider() : null;
+      cmdResult = { type: 'wireless_reg_print', entries: info && info.associations ? info.associations : [] };
     } else if (/^\/queue\s+simple\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       // MikroTik: "/queue simple add name=q1 target=192.168.1.0/24 max-limit=10M/10M"
       const raw = rawInput.trim();
@@ -2078,9 +2210,10 @@ export class VendorDispatcher {
         cmdResult = { raw: '% Usage: /queue simple add name=<nama> target=<jaringan> max-limit=<limit>' };
       }
     } else if (/^\/queue\s+simple\s+print/i.test(rawInput.trim()) || (normalized.target === 'queue_simple' && normalized.action === 'print')) {
-      cmdResult = { type: 'queue_print', queues: mem.queues };
+      const live = typeof context.qosProvider === 'function' ? context.qosProvider() : [];
+      cmdResult = { type: 'queue_print', queues: mem.queues, live };
     } else if (/^\/ip\s+firewall\s+mangle\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
-      // MikroTik: "/ip firewall mangle add chain=prerouting protocol=icmp action=change-mss new-mss=1360"
+      // MikroTik: "/ip firewall mangle add chain=prerouting protocol=icmp action=mark-packet new-packet-mark=voice"
       const raw = rawInput.trim();
       if (!mem.mangleRules) mem.mangleRules = [];
       mem.mangleRules.push({
@@ -2089,6 +2222,9 @@ export class VendorDispatcher {
         srcAddress: raw.match(/src-address=(\S+)/i)?.[1] || '',
         dstAddress: raw.match(/dst-address=(\S+)/i)?.[1] || '',
         action: raw.match(/action=(\S+)/i)?.[1] || 'mark-packet',
+        newPacketMark: raw.match(/new-packet-mark=(\S+)/i)?.[1] || '',
+        packetMark: raw.match(/packet-mark=(\S+)/i)?.[1] || '',
+        newMss: raw.match(/new-mss=(\S+)/i)?.[1] || '',
       });
       cmdResult = { raw: '' };
     } else if (/^\/ip\s+firewall\s+mangle\s+print/i.test(rawInput.trim()) || (normalized.target === 'ip_firewall_mangle' && normalized.action === 'print')) {
@@ -2264,7 +2400,10 @@ export class VendorDispatcher {
     } else if (normalized.action === 'show_vlan' || (normalized.target === 'interface_vlan' && normalized.action === 'print')) {
       cmdResult = { type: 'show_vlan', vlans: mem.vlans };
     } else if (normalized.action === 'show_stp') {
-      cmdResult = { type: 'show_stp' };
+      const info = typeof context.stpProvider === 'function' ? context.stpProvider() : null;
+      cmdResult = info && info.enabled !== undefined
+        ? { type: 'show_stp', enabled: info.enabled, mode: info.mode, priority: info.priority, rootId: info.rootId, rootName: info.rootName, bridgeId: info.bridgeId, rootPort: info.rootPort, ports: info.ports }
+        : { type: 'show_stp' };
     } else if (normalized.action === 'get_system_status') {
       cmdResult = { type: 'get_system_status', model: mem.modelLabel, hostname: mem.hostname || context?.name };
     } else if (normalized.action === 'show_firewall_policy') {
@@ -2357,6 +2496,244 @@ export class VendorDispatcher {
  * firewall policy (NAT masquerade & ACL), firewall vip (port-forward),
  * firewall address, DNS system, static route (via engine generik).
  */
+// ============================================================
+// SNMP — konfigurasi agent per vendor + query snmpget/walk/set.
+// State disimpan di mem.snmp, hasil query real dari engine via
+// context.snmpQueryProvider (udp/161, ARP + routing).
+// ============================================================
+function snmpCommand(raw: string, vendorId: string, mem: any, context: any): any {
+  const t = raw.trim();
+  let m: RegExpMatchArray | null;
+
+  // ── Query tools (Linux / OpenWrt) ──────────────────────────────
+  if ((vendorId === 'linux' || vendorId === 'openwrt') && context && typeof context.snmpQueryProvider === 'function') {
+    const q = matchSnmpQuery(t);
+    if (q) {
+      const host = q.host;
+      const community = q.community || 'public';
+      const oid = String(q.oid || '.1.3.6.1.2.1.1.1.0');
+      const opts = { walk: q.walk, setValue: q.value };
+      const res = context.snmpQueryProvider(host, community, oid, opts);
+      return { type: 'snmp_query', result: res, host, oid, community, tool: q.tool, numeric: q.numeric, setValue: q.value };
+    }
+  }
+
+  // ── MikroTik: /snmp set enabled=yes community=public / /snmp print ──
+  if (vendorId === 'mikrotik' && /^\/snmp/i.test(t)) {
+    if (/\/snmp\s+print/i.test(t) || /^\/snmp\s*$/i.test(t)) return { type: 'snmp_print', snmp: mem.snmp };
+    if (/^\/snmp\s+set/i.test(t)) {
+      const ok = setSnmpPairs(t, mem);
+      return ok ? { type: 'snmp_ok' } : { raw: '% Usage: /snmp set enabled=yes community=<community>' };
+    }
+    return undefined;
+  }
+
+  // ── Cisco IOS / NX-OS / Aruba / Huawei ios-style ───────────────
+  if ((vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei') && /^snmp[- ](agent|server)/i.test(t) && vendorId !== 'huawei') {
+    m = t.match(/^snmp[- ]server\s+community\s+(\S+)\s+(ro|rw|read[-\s]?only|read[-\s]?write)/i) ||
+        t.match(/^snmp[- ]server\s+community\s+(\S+)\s*$/i);
+    if (m) {
+      const comm = m[1];
+      const right = (m[2] || 'ro').toLowerCase();
+      mem.snmp.enabled = true;
+      mem.snmp.community = comm;
+      if (right.includes('rw') || right.includes('write')) mem.snmp.communityRW = comm;
+      return { type: 'snmp_print', snmp: mem.snmp };
+    }
+    return { type: 'snmp_print', snmp: mem.snmp };
+  }
+  // Huawei VRP
+  if (vendorId === 'huawei' && /^snmp[- ]?agent/i.test(t)) {
+    m = t.match(/^snmp[- ]?agent\s+community\s+(read|write)\s+(\S+)/i) ||
+        t.match(/^snmp[- ]agent\s+sys[- ]?info\s+(contact|location)\s+(.+)/i);
+    if (m) {
+      if (m[1].toLowerCase() === 'read') {
+        mem.snmp.enabled = true;
+        mem.snmp.community = m[2];
+      } else if (m[1].toLowerCase() === 'write') {
+        mem.snmp.enabled = true;
+        mem.snmp.communityRW = m[2];
+      } else {
+        mem.snmp[m[1].toLowerCase()] = m[2];
+      }
+      return { type: 'snmp_print', snmp: mem.snmp };
+    }
+    if (/^snmp[- ]?agent\s*$/i.test(t)) {
+      mem.snmp.enabled = true;
+      return { type: 'snmp_print', snmp: mem.snmp };
+    }
+  }
+
+  // ── Juniper: set snmp ... ──────────────────────────────────────
+  if ((vendorId === 'juniper' || vendorId === 'vyos' || vendorId === 'ubiquiti') && t.toLowerCase().includes(' snmp')) {
+    if (/^set\s+snmp\s*$/i.test(t)) {
+      mem.snmp.enabled = true;
+      return { type: 'snmp_print', snmp: mem.snmp };
+    }
+    if (/^set\s+snmp\s+community\s+(\S+)\s+authorization\s+(read-only|read-write)/i.test(t)) {
+      m = t.match(/^set\s+snmp\s+community\s+(\S+)\s+authorization\s+(read-only|read-write)/i);
+      if (m) {
+        mem.snmp.enabled = true;
+        mem.snmp.community = m[1];
+        if (m[2].toLowerCase() === 'read-write') mem.snmp.communityRW = m[1];
+        return { type: 'snmp_print', snmp: mem.snmp };
+      }
+    }
+    if (/^set\s+snmp\s+community\s+(\S+)/i.test(t)) {
+      m = t.match(/^set\s+snmp\s+community\s+(\S+)/i);
+      if (m) {
+        mem.snmp.enabled = true;
+        mem.snmp.community = m[1];
+        return { type: 'snmp_print', snmp: mem.snmp };
+      }
+    }
+    if (/^set\s+snmp\s+(contact|location)\s+\"?([^"]+)\"?$/i.test(t)) {
+      m = t.match(/^set\s+snmp\s+(contact|location)\s+\"?([^"]+)\"?$/i);
+      if (m) {
+        mem.snmp.enabled = true;
+        mem.snmp[m[1].toLowerCase() === 'contact' ? 'sysContact' : 'sysLocation'] = m[2];
+        return { type: 'snmp_print', snmp: mem.snmp };
+      }
+    }
+    if (/^(?:set\s+)?service\s+snmp\s*$/i.test(t)) {
+      mem.snmp.enabled = true;
+      return { type: 'snmp_print', snmp: mem.snmp };
+    }
+    if (/^show\s+(configuration\s+)?snmp/i.test(t) || /^run\s+show\s+service\s+snmp/i.test(t) || /^show\s+service\s+snmp/i.test(t)) {
+      return { type: 'snmp_print', snmp: mem.snmp };
+    }
+  }
+
+  // ── VyOS: set service snmp community <c> ... / show service snmp ──
+  if ((vendorId === 'vyos' || vendorId === 'ubiquiti') && /^set\s+service\s+snmp/i.test(t)) {
+    m = t.match(/^set\s+service\s+snmp\s+community\s+(\S+)\s*(authorization\s+(read-only|read-write))?/i);
+    if (m) mem.snmp.community = m[1];
+    if (m && m[3] && /write/.test(m[3])) mem.snmp.communityRW = m[1];
+    if (m) mem.snmp.enabled = true;
+    m = t.match(/^set\s+service\s+snmp\s+(contact|location)\s+(.+)/i);
+    if (m) mem.snmp[m[1].toLowerCase() === 'contact' ? 'sysContact' : 'sysLocation'] = m[2];
+    if (m) mem.snmp.enabled = true;
+    return { type: 'snmp_print', snmp: mem.snmp };
+  }
+  if ((vendorId === 'vyos' || vendorId === 'ubiquiti') && /^show\s+service\s+snmp/i.test(t)) {
+    return { type: 'snmp_print', snmp: mem.snmp };
+  }
+
+  // ── OpenWrt: uci snmpd ─────────────────────────────────────────
+  if (vendorId === 'openwrt' && /^uci\s+set\s+snmpd/i.test(t)) {
+    const v = t.replace(/^uci\s+set\s+snmpd\./, '');
+    const eq = v.indexOf('=');
+    if (eq > 0) {
+      const k = v.slice(0, eq).toLowerCase();
+      const val = v.slice(eq + 1);
+      if (k === 'community') mem.snmp.community = val;
+      else if (k === 'contact') mem.snmp.sysContact = val;
+      else if (k === 'location') mem.snmp.sysLocation = val;
+      else if (k.endsWith('enabled') || k.endsWith('enable')) mem.snmp.enabled = val === '1' || val === 'yes';
+      if (mem.snmp.community) mem.snmp.enabled = true;
+    }
+    return { raw: '' };
+  }
+  if (vendorId === 'openwrt' && /^uci\s+commit\s+snmpd/i.test(t)) return { raw: '' };
+  if (vendorId === 'openwrt' && /^(uci\s+show\s+snmpd|cat\s+\/etc\/snmp\/snmpd\.conf)/i.test(t)) {
+    return { type: 'snmp_print', snmp: mem.snmp };
+  }
+  if (vendorId === 'openwrt' && /^(\/etc\/init\.d\/snmpd\s+(?:enable|start)|service\s+snmpd\s+(?:start|restart|enable))/i.test(t)) {
+    mem.snmp.enabled = true;
+    return { raw: '' };
+  }
+
+  // ── Linux: /etc/snmp/snmpd.conf + service snmpd ────────────────
+  if (vendorId === 'linux') {
+    m = t.match(/^echo\s+["']?(\w+(?:ro|rw)community\s+\S+)["']?\s+(>>|>)\s*\/etc\/snmp\/snmpd\.conf/i);
+    if (m) {
+      const directive = m[1].toLowerCase();
+      const comm = m[1].split(/\s+/)[1] || '';
+      if (directive.includes('rocommunity')) {
+        mem.snmp.enabled = true;
+        mem.snmp.community = comm;
+      } else if (directive.includes('rwcommunity')) {
+        mem.snmp.enabled = true;
+        mem.snmp.communityRW = comm;
+      }
+      return { raw: '' };
+    }
+    if (/^(service\s+snmpd\s+(start|restart)|systemctl\s+(start|enable|restart)\s+snmpd)/i.test(t)) {
+      mem.snmp.enabled = true;
+      return { raw: '' };
+    }
+    if (/^cat\s+\/etc\/snmp\/snmpd\.conf/i.test(t) || /^(service\s+snmpd\s+status|systemctl\s+status\s+snmpd)/i.test(t)) {
+      return { type: 'snmp_print', snmp: mem.snmp };
+    }
+  }
+
+  // ── View SNMP lintas vendor ────────────────────────────────────
+  if (/^(show\s+snmp|display\s+snmp[- ]?agent|get\s+system\s+snmp\s+status)/i.test(t)) {
+    return { type: 'snmp_print', snmp: mem.snmp };
+  }
+
+  return undefined;
+}
+
+function setSnmpPairs(t: string, mem: any): boolean {
+  const body = t.replace(/^\/snmp\s+set/i, '').trim();
+  const pairs = body.split(/\s+/).filter(Boolean);
+  let any = false;
+  for (const p of pairs) {
+    const eq = p.indexOf('=');
+    if (eq <= 0) continue;
+    const k = p.slice(0, eq).toLowerCase();
+    const v = p.slice(eq + 1);
+    if (k === 'enabled') {
+      mem.snmp.enabled = /^(yes|true|1|enabled|on)$/i.test(v);
+    } else if (k === 'community') {
+      mem.snmp.community = v;
+      mem.snmp.enabled = true;
+    } else if (k === 'contact') {
+      mem.snmp.sysContact = v;
+    } else if (k === 'location') {
+      mem.snmp.sysLocation = v;
+    } else {
+      return false;
+    }
+    any = true;
+  }
+  return any;
+}
+
+/** Parse perintah query net-snmp: snmpget|snmpwalk|snmpgetnext|snmpset + opsi. */
+function matchSnmpQuery(t: string): {
+  tool: string;
+  host: string;
+  community: string;
+  oid: string;
+  walk: boolean;
+  numeric: boolean;
+  value?: string;
+} | null {
+  const head = /^(snmpget|snmpgetnext|snmpwalk|snmpset)\b/i.exec(t);
+  if (!head) return null;
+  const tool = head[1].toLowerCase();
+  const rest = t.slice(head[0].length);
+  let community = 'public';
+  let numeric = false;
+  const cleaned = rest.replace(/-c\s+("([^"]*)"|\S+)/i, (_m, _x, quoted) => {
+    community = (quoted !== undefined ? quoted : _m.split(/\s+/)[1] || 'public').replace(/"/g, '');
+    return '';
+  });
+  const tokens = (cleaned.match(/"([^"]*)"|\S+/g) || []).map((tk) => tk.replace(/^"|"$/g, ''));
+  const args = tokens.filter((tk) => {
+    if (!tk.startsWith('-')) return true;
+    if (tk.includes('n') || tk.includes('v')) numeric = true;
+    return false;
+  });
+  const host = args[0] || '';
+  if (!host) return null;
+  const oid = args[1] || '.1.3.6.1.2.1.1.1.0';
+  const value = tool === 'snmpset' ? args.slice(2).join(' ') : undefined;
+  return { tool, host, community, oid, walk: tool === 'snmpwalk' || tool === 'snmpgetnext', numeric, value };
+}
+
 function fortinetCommand(raw: string, context: any, mem: any): any {
   const t = raw.trim();
   const path = mem.fortiPath || (mem.fortiPath = []);
@@ -3636,19 +4013,23 @@ function formatExtended(cmdResult: any): string {
   }
   if (cmdResult.type === 'queue_print') {
     const queues = cmdResult.queues || [];
+    const live = cmdResult.live || [];
     if (queues.length === 0) return 'Flags: X - disabled, I - invalid\n #    NAME       TARGET            MAX-LIMIT\n -- no entries --';
-    const rows = queues.map((q: any, i: number) =>
-      ` ${i} ${(q.name || '').padEnd(10)} ${(q.target || '').padEnd(17)} ${q.maxLimit || ''}`
-    ).join('\n');
-    return 'Flags: X - disabled, I - invalid\n #    NAME       TARGET            MAX-LIMIT\n' + rows;
+    const rows = queues.map((q: any, i: number) => {
+      const s = live.find((l: any) => l.name === q.name);
+      const tx = s ? `${s.packets} pkt, ${s.bytes} B` : 'idle';
+      const dr = s && s.dropped > 0 ? `, ${s.dropped} dropped` : '';
+      return ` ${i} ${(q.name || '').padEnd(10)} ${(q.target || '').padEnd(17)} ${(q.maxLimit || '').padEnd(12)} ${tx}${dr}`;
+    }).join('\n');
+    return 'Flags: X - disabled, I - invalid\n #    NAME       TARGET            MAX-LIMIT      RATE\n' + rows;
   }
   if (cmdResult.type === 'mangle_print') {
     const rules = cmdResult.rules || [];
     if (rules.length === 0) return 'Flags: X - disabled, I - invalid\n #    CHAIN         ACTION       PROTOCOL   SRC-ADDRESS\n -- no entries --';
     const rows = rules.map((r: any, i: number) =>
-      ` ${i} ${(r.chain || '').padEnd(14)} ${(r.action || '').padEnd(12)} ${(r.protocol || '').padEnd(10)} ${r.srcAddress || ''}`
+      ` ${i} ${(r.chain || '').padEnd(14)} ${(r.action || '').padEnd(12)} ${(r.protocol || '').padEnd(10)} ${(r.newPacketMark ? 'mark=' + r.newPacketMark : '')} ${r.srcAddress || ''}`
     ).join('\n');
-    return 'Flags: X - disabled, I - invalid\n #    CHAIN         ACTION       PROTOCOL   SRC-ADDRESS\n' + rows;
+    return 'Flags: X - disabled, I - invalid\n #    CHAIN         ACTION       PROTOCOL   MARK       SRC-ADDRESS\n' + rows;
   }
   if (cmdResult.type === 'wireless_print') {
     const wireless = cmdResult.wireless || {};
@@ -3658,6 +4039,30 @@ function formatExtended(cmdResult: any): string {
       ` ${i} R ${name.padEnd(11)} ${(w.ssid || '').padEnd(18)} ${(w.band || '2ghz-G').padEnd(13)} ${w.mode || 'ap-bridge'}`
     ).join('\n');
     return 'Flags: X - disabled, R - running\n #    NAME       SSID               BAND         MODE\n' + rows;
+  }
+  if (cmdResult.type === 'bridge_print') {
+    const stp = cmdResult.stp || {};
+    const rows = [
+      ` 0   bridge1            enabled                ${stp.mode || 'rstp'}`,
+    ];
+    return 'Flags: X - disabled, R - running\n #    NAME               STP                    PROTOCOL-MODE\n' + rows;
+  }
+  if (cmdResult.type === 'wireless_reg_print') {
+    const entries = cmdResult.entries || [];
+    if (entries.length === 0) return 'Flags: A - active, B - blocked\n #    MAC-ADDRESS       SSID               SIGNAL   INTERFACE\n -- no registered stations --';
+    const rows = entries.map((e: any, i: number) =>
+      ` ${i} A ${(e.mac || '-').padEnd(18)} ${(e.ssid || '').padEnd(18)} ${String(e.signal ?? -100).padEnd(7)} ${e.iface || 'wlan1'}`
+    ).join('\n');
+    return 'Flags: A - active, B - blocked\n #    MAC-ADDRESS       SSID               SIGNAL   INTERFACE\n' + rows;
+  }
+  if (cmdResult.type === 'wireless_monitor') {
+    return [
+      `status: running`,
+      `mode: ${cmdResult.mode || 'ap-bridge'}`,
+      `ssid: ${cmdResult.ssid || '(none)'}`,
+      `registered-stations: ${cmdResult.stationCount ?? 0}`,
+      `signal-strength: ${cmdResult.signal ?? -100}dBm`,
+    ].join('\n');
   }
   if (cmdResult.type === 'neighbor_print') {
     const neighbors = cmdResult.neighbors || [];
@@ -3688,7 +4093,45 @@ function formatExtended(cmdResult: any): string {
     if (entries.length === 0) return '(ARP cache empty — kirim ping dulu untuk belajar MAC)';
     return entries.map((e: any) => `${e.ip} dev eth0 lladdr ${e.mac} REACHABLE`).join('\n');
   }
+  if (cmdResult.type === 'snmp_print') {
+    const s = cmdResult.snmp || {};
+    if (!s.enabled) return 'SNMP agent: disabled';
+    const lines = [
+      'SNMP agent: enabled',
+      `Community (read-only):  ${s.community || 'public'}`,
+      `Community (read-write): ${s.communityRW || 'private'}`,
+      `Contact:   ${s.sysContact || '(not set)'}`,
+      `Location:  ${s.sysLocation || '(not set)'}`,
+    ];
+    return lines.join('\n');
+  }
+  if (cmdResult.type === 'snmp_query') {
+    return formatSnmpQuery(cmdResult);
+  }
   return '';
+}
+
+/** Format output snmpget/snmpwalk/snmpset meniru net-snmp CLI. */
+function formatSnmpQuery(cmdResult: any): string {
+  const { result, host, community, tool, numeric } = cmdResult;
+  const oid = cmdResult.oid || '.1.3.6.1.2.1.1.1.0';
+  if (!result || result.ok === false) {
+    const reason = result?.reason;
+    if (reason === 'auth') return `${tool}: Error in packet. Reason: Bad community name used with community string: ${community}`;
+    if (reason === 'readonly') return `${tool}: Error in packet. Reason: notWritable`;
+    if (reason === 'no-agent' || reason === 'timeout' || reason === 'unreachable') {
+      return `${tool}: Timeout: No Response from ${host}`;
+    }
+    if (reason === 'not-found-oid' || (result && Array.isArray(result.oids) && result.oids.length === 0)) {
+      return `No Such Object available on this agent at this OID ${oid}`;
+    }
+    return `${tool}: ${result?.error || 'Error in packet'}`;
+  }
+  const oids = result.oids || [];
+  if (oids.length === 0) return `No Such Instance currently exists at this OID ${oid}`;
+  const prefix = numeric ? '' : 'SNMPv2-MIB::';
+  const lines = oids.map((o: any) => `${prefix}${o.oid} = ${o.type || 'STRING'}: ${o.value}`);
+  return lines.join('\n');
 }
 
 function mergeIps(ports: any[], configuredIps: Record<string, string>) {
@@ -3696,6 +4139,17 @@ function mergeIps(ports: any[], configuredIps: Record<string, string>) {
     ...p,
     ipAddress: configuredIps[p.name] || p.ipAddress
   }));
+}
+
+/** Ambil 12 digit hex (4 prioritas + 8 MAC) dari bridge ID STP. */
+function rootIdStr(id: string | undefined): string {
+  const hex = (id || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase().padEnd(12, '0');
+  return hex.slice(0, 12);
+}
+
+/** Format MAC ala Cisco: xxxx.xxxx.xxxx */
+function fmtMac(hex: string): string {
+  return `${hex.slice(0, 4)}.${hex.slice(4, 8)}.${hex.slice(8, 12)}`;
 }
 
 /**
