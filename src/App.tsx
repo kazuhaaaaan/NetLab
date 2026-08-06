@@ -23,7 +23,7 @@ import { SimulationEngine, formatPingOutput, formatTracerouteOutput } from './en
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
-import { askLlm, type LlmHistoryItem } from './modules/ai/llmClient';
+import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
 
 const vendorDispatcher = new VendorDispatcher();
 
@@ -178,8 +178,13 @@ export default function App() {
     }
   }, [terminalLogs, openTerminalNodeIds, activeTerminalNodeId, isTerminalOpen]);
 
-  // Cek ketersediaan server Gemini (untuk badge status panel chat)
+  // Cek ketersediaan Gemini (untuk badge status panel chat):
+  // mode langsung (key VITE) → selalu aktif; selain itu cek server /api/health
   useEffect(() => {
+    if (isDirectLlmEnabled()) {
+      setLlmOnline(true);
+      return;
+    }
     let alive = true;
     fetch('/api/health')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
