@@ -40,26 +40,42 @@ export const MobileWarning: React.FC = () => {
 
   return (
     <div className="fixed bottom-3 left-3 right-3 sm:left-4 sm:right-auto sm:max-w-md z-[85] animate-in slide-in-from-bottom-4 fade-in duration-200">
-      <div className="bg-[#0F1015]/95 backdrop-blur-md border border-amber-500/40 rounded-xl shadow-2xl p-3.5 flex items-start space-x-3">
-        <div className="p-2 bg-amber-500/15 text-amber-400 rounded-lg border border-amber-500/30 flex-shrink-0">
-          <MonitorSmartphone className="w-5 h-5" />
+      <div className="bg-[#0F1015]/95 backdrop-blur-md border border-amber-500/40 rounded-xl shadow-2xl p-3.5">
+        <div className="flex items-start space-x-3">
+          <div className="p-2 bg-amber-500/15 text-amber-400 rounded-lg border border-amber-500/30 flex-shrink-0">
+            <MonitorSmartphone className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-xs font-bold text-amber-300">MikroAi paling optimal di Desktop / Laptop</h3>
+            <p className="mt-1 text-[11px] text-slate-300 leading-relaxed">
+              Website ini lebih mudah dioperasikan lewat komputer (desktop, laptop, atau
+              MacBook) — mouse, keyboard, dan layar lebar memberikan pengalaman terbaik.
+              Di ponsel, beberapa fitur seperti seret perangkat, hover kabel, dan terminal
+              CLI lebih sulit digunakan.
+            </p>
+          </div>
+          <button
+            onClick={handleDismiss}
+            title="Tutup peringatan"
+            className="p-1 text-slate-400 hover:text-white rounded-md flex-shrink-0 transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-xs font-bold text-amber-300">MikroAi paling optimal di Desktop / Laptop</h3>
-          <p className="mt-1 text-[11px] text-slate-300 leading-relaxed">
-            Website ini lebih mudah dioperasikan lewat komputer (desktop, laptop, atau
-            MacBook) â€” mouse, keyboard, dan layar lebar memberikan pengalaman terbaik.
-            Di ponsel, beberapa fitur seperti seret perangkat, hover kabel, dan terminal
-            CLI lebih sulit digunakan.
+
+        {/* Donasi untuk maintenance */}
+        <div className="mt-3 pt-3 border-t border-amber-500/20 flex flex-col items-center">
+          <p className="text-[11px] text-slate-300 text-center leading-relaxed">
+            Website ini membutuhkan <span className="text-amber-300 font-semibold">donasi untuk maintenance</span>.
+            Dukung pengembangan NetLab dengan scan QRIS di bawah ini:
           </p>
+          <img
+            src="/qris.jpeg"
+            alt="QRIS Donation"
+            className="mt-2 w-36 h-auto object-contain rounded-lg border-2 border-slate-700 shadow-md"
+          />
+          <p className="mt-1.5 text-[10px] text-slate-400">Scan QRIS untuk berdonasi — terima kasih! ♥</p>
         </div>
-        <button
-          onClick={handleDismiss}
-          title="Tutup peringatan"
-          className="p-1 text-slate-400 hover:text-white rounded-md flex-shrink-0 transition"
-        >
-          <X className="w-4 h-4" />
-        </button>
       </div>
     </div>
   );

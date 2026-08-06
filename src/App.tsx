@@ -93,6 +93,15 @@ export default function App() {
   const goToCanvas = useCallback(() => {
     localStorage.setItem('netlab_view', 'canvas');
     setView('canvas');
+    // Popup donasi sebelum konfigurasi: tampil tiap masuk canvas, kecuali
+    // user mencentang "jangan tampilkan lagi" untuk sesi ini (sessionStorage).
+    try {
+      if (sessionStorage.getItem('netlab_donate_session_hidden') !== '1') {
+        setIsDonateOpen(true);
+      }
+    } catch {
+      setIsDonateOpen(true);
+    }
   }, []);
 
   const goToHome = useCallback(() => {
@@ -210,6 +219,14 @@ export default function App() {
   const [llmOnline, setLlmOnline] = useState(false);
   // Riwayat percakapan panel chat (hanya untuk Gemini, multi-turn)
   const aiHistoryRef = useRef<LlmHistoryItem[]>([]);
+  // Checkbox "jangan tampilkan lagi" pada popup donasi (berlaku per sesi)
+  const [donateSessionHidden, setDonateSessionHidden] = useState(() => {
+    try {
+      return sessionStorage.getItem('netlab_donate_session_hidden') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetId?: string; targetType?: string } | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>(() => loadUiState()?.theme ?? 'dark');
 
@@ -1197,7 +1214,7 @@ export default function App() {
         />
       )}
 
-      {/* Donate Modal */}
+      {/* Donate Modal (muncul sebelum konfigurasi saat masuk canvas) */}
       {isDonateOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full shadow-2xl overflow-hidden animate-in fade-in duration-200">
@@ -1212,8 +1229,32 @@ export default function App() {
             <div className="p-6 flex flex-col items-center">
               <img src="/qris.jpeg" alt="QRIS Donation" className="w-56 h-auto object-contain rounded-lg border-2 border-slate-700 mb-4 shadow-md" />
               <p className="text-sm text-slate-300 text-center font-medium">
-                Terima kasih atas dukungannya! Donasi kamu membantu developer NetLab terus mengembangkan simulator ini.
+                Website ini membutuhkan donasi untuk maintenance & pengembangan.
+                Donasi kamu membantu developer NetLab terus mengembangkan simulator ini.
               </p>
+              <label className="mt-4 flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={donateSessionHidden}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setDonateSessionHidden(checked);
+                    try {
+                      sessionStorage.setItem('netlab_donate_session_hidden', checked ? '1' : '0');
+                    } catch {
+                      // storage tidak tersedia — abaikan
+                    }
+                  }}
+                  className="accent-violet-500 w-3.5 h-3.5"
+                />
+                Jangan tampilkan lagi selama sesi ini
+              </label>
+              <button
+                onClick={() => setIsDonateOpen(false)}
+                className="mt-3 w-full py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold transition"
+              >
+                Lanjut ke Konfigurasi
+              </button>
             </div>
           </div>
         </div>
