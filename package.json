@@ -9,8 +9,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/index.mjs",
-    "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx run_all_tests.mts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

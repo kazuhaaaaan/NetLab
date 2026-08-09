@@ -1443,6 +1443,558 @@ export class VendorDispatcher {
     this.nodeMemory.delete(nodeId);
   }
 
+  /**
+   * Configuration deletion dispatcher — turns "no …", "/ip … remove", "delete …",
+   * "undo …", "rollback" and "uci delete …" into real state mutations instead of
+   * printing a fake "Success".
+   *
+   * Returns a cmdResult when the command was handled, or undefined to let the
+   * generic dispatch chain continue.
+   */
+  private handleDeletion(rawInput: string, normalized: any, vendorId: string, mem: any, context: any): any {
+    const input = rawInput.trim();
+    const lower = input.toLowerCase();
+    const isCisco = vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba';
+    const isVyosLike = vendorId === 'vyos' || vendorId === 'ubiquiti';
+    const err = (msg: string) => ({ raw: msg });
+
+    // ── IP address normalization: "x y" (mask) or "x/y" (cidr) → CIDR string ──
+    const toCidr = (s: string): string => {
+      const m = s.trim().match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
+      if (!m) return s.trim();
+      const octets = m[2].split('.').map(Number);
+      const bits = octets.reduce((acc, o) => acc + (o.toString(2).match(/1/g) || []).length, 0);
+      return `${m[1]}/${bits}`;
+    };
+
+    // ── Cisco IOS / NX-OS / Aruba "no <config>" ─────────────────────────────
+    if (isCisco && /^no\s+/i.test(input)) {
+      // no ip address (interface view) — removes the IPv4 address from the interface
+      if (/^no\s+ip\s+(?:address|addr)\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected (enter interface config first)');
+        const removed = mem.configuredIps[mem.currentIface];
+        if (!removed) return err(`% No address configured on ${mem.currentIface}`);
+        delete mem.configuredIps[mem.currentIface];
+        mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== mem.currentIface);
+        return { raw: '' };
+      }
+      // no ip address <ip> <mask> (interface view)
+      if (/^no\s+ip\s+(?:address|addr)\s+\d+\.\d+\.\d+\.\d+\s+\d+\.\d+\.\d+\.\d+\s*$/i.test(input) || /^no\s+ip\s+(?:address|addr)\s+[0-9a-fA-F:.]+\/\d+\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected (enter interface config first)');
+        const target = toCidr(input.replace(/^no\s+ip\s+(?:address|addr)\s+/i, ''));
+        const cur = mem.configuredIps[mem.currentIface];
+        if (!cur) return err(`% No address configured on ${mem.currentIface}`);
+        const curCidr = toCidr(cur);
+        if (curCidr !== target && cur !== input.replace(/^no\s+ip\s+(?:address|addr)\s+/i, '')) {
+          return err(`% Address ${target} not configured on ${mem.currentIface}`);
+        }
+        delete mem.configuredIps[mem.currentIface];
+        mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== mem.currentIface);
+        return { raw: '' };
+      }
+      // no ipv6 address <addr> — only when a link-local/global actually exists
+      if (/^no\s+ipv6\s+address\b/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected (enter interface config first)');
+        const target = input.replace(/^no\s+ipv6\s+address\s*/i, '').trim() || null;
+        if (target) {
+          const cur = mem.configuredIpv6?.[mem.currentIface];
+          if (!cur) return err(`% No IPv6 address configured on ${mem.currentIface}`);
+          if (cur !== target) return err(`% IPv6 address ${target} not configured on ${mem.currentIface}`);
+          if (mem.configuredIpv6) delete mem.configuredIpv6[mem.currentIface];
+          return { raw: '' };
+        }
+        return err('% Incomplete command');
+      }
+      // no ip route <dst> [mask] [gw]  /  no ip route default <gw>
+      if (/^no\s+ip\s+route\s+/i.test(input) || /^no\s+ip\s+route-static\s+/i.test(input)) {
+        const rest = input.replace(/^(?:no\s+ip\s+route|no\s+ip\s+route-static)\s+/i, '');
+        const parts = rest.split(/\s+/).filter(Boolean);
+        let dst: string | null = null;
+        let gw: string | null = null;
+        if (parts.length >= 2) {
+          dst = parts[0].toLowerCase() === 'default' ? '0.0.0.0/0' : toCidr(parts[0]);
+          if (/^\d+\.\d+\.\d+\.\d+$/.test(parts[1]) && parts[1] !== parts[0]) {
+            // secondary prefix form "no ip route 10.0.0.0 255.255.255.0 10.0.0.1"
+            dst = toCidr(`${parts[0]} ${parts[1]}`);
+            gw = parts[2] || null;
+          } else {
+            gw = parts[1];
+          }
+        } else {
+          return err('% Incomplete command: no ip route <destination> <mask> <next-hop>');
+        }
+        const before = mem.routes.length;
+        mem.routes = mem.routes.filter((r: any) => {
+          if (gw && r.gateway !== gw) return true;
+          return toCidr(String(r.dst)) !== dst;
+        });
+        if (mem.routes.length === before) return err(`% No matching route to ${dst}${gw ? ` via ${gw}` : ''}`);
+        return { raw: '' };
+      }
+      // no vlan <id> / no interface vlan <id> — remove VLAN + SVI + port mappings
+      const vlanIdMatch = input.match(/^no\s+(?:interface\s+)?vlan\s+(\d+)\s*$/i);
+      if (vlanIdMatch) {
+        const id = vlanIdMatch[1];
+        const before = mem.vlans.length;
+        mem.vlans = mem.vlans.filter((v: any) => String(v.id) !== String(id));
+        for (const [iface, v] of Object.entries(mem.portVlans || {})) {
+          if (String(v) === String(id)) delete mem.portVlans[iface];
+        }
+        mem.subinterfaces = (mem.subinterfaces || []).filter((s: any) => String(s.vlanId) !== String(id));
+        if (mem.vlans.length === before) return err(`% VLAN ${id} does not exist`);
+        return { raw: '' };
+      }
+      // no ip dhcp pool <name>
+      const poolMatch = input.match(/^no\s+ip\s+dhcp\s+pool\s+(\S+)\s*$/i);
+      if (poolMatch) {
+        const before = mem.dhcpPools.length;
+        mem.dhcpPools = mem.dhcpPools.filter((p: any) => p.name !== poolMatch[1]);
+        if (mem.dhcpPools.length === before) return err(`% DHCP pool ${poolMatch[1]} does not exist`);
+        if (mem.currentDhcpPool === poolMatch[1]) mem.currentDhcpPool = '';
+        return { raw: '' };
+      }
+      // no ip host <name>
+      const hostMatch = input.match(/^no\s+ip\s+host\s+(\S+)\s*$/i);
+      if (hostMatch) {
+        const before = mem.dnsRecords.length;
+        mem.dnsRecords = mem.dnsRecords.filter((d: any) => d.name !== hostMatch[1].toLowerCase());
+        if (mem.dnsRecords.length === before) return err(`% Host ${hostMatch[1]} does not exist`);
+        return { raw: '' };
+      }
+      // no ip name-server [<ip>]
+      if (/^no\s+ip\s+name-server\s*$/i.test(input)) {
+        mem.dnsServers = [];
+        return { raw: '' };
+      }
+      const nsMatch = input.match(/^no\s+ip\s+name-server\s+(\S+)\s*$/i);
+      if (nsMatch) {
+        const before = mem.dnsServers.length;
+        mem.dnsServers = (mem.dnsServers || []).filter((s: string) => s !== nsMatch[1]);
+        if (mem.dnsServers.length === before) return err(`% Name-server ${nsMatch[1]} not configured`);
+        return { raw: '' };
+      }
+      // no access-list <id>
+      const aclMatch = input.match(/^no\s+(?:ip\s+)?access-list\s+\d+\s*$/i);
+      if (aclMatch) {
+        const id = input.match(/\d+/)?.[0];
+        const existed = mem.natAcls?.[id] !== undefined;
+        if (mem.natAcls) delete mem.natAcls[id];
+        if (!existed) return err(`% Access-list ${id} does not exist`);
+        return { raw: '' };
+      }
+      // no ip nat inside source static tcp <in-ip> <in-port> <pub-ip> <pub-port>
+      const natMatch = input.match(/^no\s+ip\s+nat\s+inside\s+source\s+static\s+tcp\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s*$/i);
+      if (natMatch) {
+        const before = mem.natRules.length;
+        mem.natRules = mem.natRules.filter((r: any) =>
+          !(r.chain === 'dstnat' && r.protocol === 'tcp' && r.dstAddress === natMatch[3] && r.dstPort === natMatch[4] && r.toAddresses === natMatch[1] && r.toPorts === natMatch[2])
+        );
+        if (mem.natRules.length === before) return err('% No matching NAT translation');
+        return { raw: '' };
+      }
+      // no router ospf <pid> | no router bgp <asn> | no router rip | no router eigrp <as>
+      const routerMatch = input.match(/^no\s+router\s+(ospf|bgp|rip|eigrp)(?:\s+\d+)?\s*$/i);
+      if (routerMatch) {
+        const proto = routerMatch[1].toLowerCase() as 'ospf' | 'bgp' | 'rip' | 'eigrp';
+        if (proto === 'ospf' || proto === 'rip' || proto === 'eigrp') {
+          mem.routing[proto] = { enabled: false, networks: [], ...(proto === 'eigrp' ? { asn: 0 } : {}) };
+          if (mem.currentProto === proto) mem.currentProto = '';
+        } else {
+          mem.bgp = { asn: '', routerId: '', peers: [], networks: [] };
+          if (mem.currentProto === 'bgp') mem.currentProto = '';
+        }
+        return { raw: '' };
+      }
+      // no ipv6 route <…> handled by engine-side config reset below only if present
+      return undefined; // let existing chain handle remaining "no …" (shutdown, spanning-tree …)
+    }
+
+    // ── MikroTik "/ip … remove" / "numbers=" ────────────────────────────────
+    if (vendorId === 'mikrotik' && /\bremove\b/i.test(input)) {
+      const nums = (input.match(/numbers=(\d[\d,.-]*)/i)?.[1] || '').split(',').map((s: string) => parseInt(s, 10)).filter((n: number) => !isNaN(n) && n >= 0);
+      const findAddr = (input.match(/find\s+.*address=([^\s\]]+)/i)?.[1] || input.match(/address=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+      const findIface = (input.match(/find\s+.*interface=([^\s\]]+)/i)?.[1] || input.match(/interface=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+      const findName = (input.match(/find\s+.*name=([^\s\]]+)/i)?.[1] || input.match(/name=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+      const findDst = (input.match(/find\s+.*dst-address=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+      const findDstPort = (input.match(/find\s+.*dst-port=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+      const findChain = (input.match(/find\s+.*chain=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+      const idx = (arr: any[], n: number) => (n < 0 || n >= arr.length ? undefined : arr[n]);
+
+      const fail = (msg: string) => err(`% ${msg}`);
+
+      // /ip address remove [find address=…] / [find interface=…] / numbers=N
+      if (/^\/ip\s+address\s+remove\b/i.test(input)) {
+        const keys = Object.keys(mem.configuredIps);
+        let removed = false;
+        if (nums.length > 0) {
+          const k = idx(keys, nums[0]);
+          if (k === undefined) return fail('no such item');
+          delete mem.configuredIps[k];
+          mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== k);
+          removed = true;
+        } else if (findAddr) {
+          for (const k of keys) {
+            if (toCidr(mem.configuredIps[k]) === toCidr(findAddr.replace(/^\/\d+$/, '')) || mem.configuredIps[k] === findAddr) {
+              delete mem.configuredIps[k];
+              mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== k);
+              removed = true;
+            }
+          }
+          if (!removed) {
+            const addrOnly = findAddr.split('/')[0];
+            for (const k of keys) {
+              if (mem.configuredIps[k].startsWith(addrOnly)) {
+                delete mem.configuredIps[k];
+                mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== k);
+                removed = true;
+              }
+            }
+          }
+          if (!removed) return fail(`no such address ${findAddr}`);
+        } else if (findIface) {
+          const k = resolveIfaceName(context?.ports, findIface) || findIface;
+          if (!mem.configuredIps[k]) return fail(`no such interface ${findIface}`);
+          delete mem.configuredIps[k];
+          mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== k);
+          removed = true;
+        } else {
+          return err('% Usage: /ip address remove [find address=<ip/mask>] | [find interface=<iface>] | numbers=<n>');
+        }
+        return { raw: removed ? '' : fail('no such item') };
+      }
+      // /ip route remove
+      if (/^\/ip\s+route\s+remove\b/i.test(input)) {
+        if (nums.length > 0) {
+          const r = idx(mem.routes, nums[0]);
+          if (!r) return fail('no such item');
+          mem.routes.splice(nums[0], 1);
+          return { raw: '' };
+        }
+        if (findDst) {
+          const before = mem.routes.length;
+          mem.routes = mem.routes.filter((r: any) => toCidr(String(r.dst)) !== toCidr(findDst));
+          if (mem.routes.length === before) return fail(`no such route to ${findDst}`);
+          return { raw: '' };
+        }
+        return err('% Usage: /ip route remove [find dst-address=<dst>] | numbers=<n>');
+      }
+      // /ip firewall nat remove
+      if (/^\/ip\s+firewall\s+nat\s+remove\b/i.test(input)) {
+        if (nums.length > 0) {
+          const r = idx(mem.natRules, nums[0]);
+          if (!r) return fail('no such item');
+          mem.natRules.splice(nums[0], 1);
+          return { raw: '' };
+        }
+        const before = mem.natRules.length;
+        mem.natRules = mem.natRules.filter((r: any) =>
+          (!findChain || r.chain === findChain) &&
+          (!findDstPort || String(r.dstPort) === findDstPort) &&
+          (!findAddr || (r.dstAddress || '') === findAddr || (r.srcAddress || '') === findAddr)
+        );
+        if (mem.natRules.length === before) return fail('no such nat rule found');
+        return { raw: '' };
+      }
+      // /ip firewall filter remove
+      if (/^\/ip\s+firewall\s+filter\s+remove\b/i.test(input)) {
+        if (nums.length > 0) {
+          const r = idx(mem.acls, nums[0]);
+          if (!r) return fail('no such item');
+          mem.acls.splice(nums[0], 1);
+          return { raw: '' };
+        }
+        const before = mem.acls.length;
+        mem.acls = mem.acls.filter((r: any) =>
+          (!findChain || r.chain === findChain) &&
+          (!findAddr || r.src === findAddr || r.dst === findAddr)
+        );
+        if (mem.acls.length === before) return fail('no such filter rule found');
+        return { raw: '' };
+      }
+      // /ip firewall mangle remove
+      if (/^\/ip\s+firewall\s+mangle\s+remove\b/i.test(input)) {
+        if (nums.length > 0) {
+          const r = idx(mem.mangleRules, nums[0]);
+          if (!r) return fail('no such item');
+          mem.mangleRules.splice(nums[0], 1);
+          return { raw: '' };
+        }
+        return err('% Usage: /ip firewall mangle remove numbers=<n>');
+      }
+      // /ip pool remove [find name=…]  /  /ip dhcp-server remove [find name=…]
+      if (/^\/ip\s+(?:pool|dhcp-server)\s+remove\b/i.test(input)) {
+        if (!findName) return err(`% Usage: /ip ${input.match(/\/ip\s+(\S+)/i)?.[1]} remove [find name=<nama>]`);
+        const before = mem.dhcpPools.length;
+        mem.dhcpPools = mem.dhcpPools.filter((p: any) => p.name !== findName);
+        if (mem.dhcpPools.length === before) return fail(`no such item (${findName})`);
+        return { raw: '' };
+      }
+      // /ip dhcp-client remove [find interface=…]
+      if (/^\/ip\s+dhcp-client\s+remove\b/i.test(input)) {
+        const iface = findIface || (input.match(/interface=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+        if (!iface) return err('% Usage: /ip dhcp-client remove [find interface=<iface>]');
+        const before = mem.dhcpClients.length;
+        mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== iface);
+        if (mem.dhcpClients.length === before) return fail('no such dhcp client');
+        return { raw: '' };
+      }
+      // /ip dns static remove [find name=…]
+      if (/^\/ip\s+dns\s+static\s+remove\b/i.test(input)) {
+        if (!findName) return err('% Usage: /ip dns static remove [find name=<hostname>]');
+        const before = mem.dnsRecords.length;
+        mem.dnsRecords = mem.dnsRecords.filter((d: any) => d.name !== findName.toLowerCase());
+        if (mem.dnsRecords.length === before) return fail(`no such dns record (${findName})`);
+        return { raw: '' };
+      }
+      // /interface vlan remove [find name=…]
+      if (/^\/interface\s+vlan\s+remove\b/i.test(input)) {
+        if (!findName) return err('% Usage: /interface vlan remove [find name=<nama>]');
+        const vlan = mem.vlans.find((v: any) => v.name === findName);
+        if (!vlan) return fail(`no such vlan (${findName})`);
+        mem.vlans = mem.vlans.filter((v: any) => v.name !== findName);
+        mem.subinterfaces = (mem.subinterfaces || []).filter((s: any) => s.name !== findName && String(s.vlanId) !== String(vlan.id));
+        return { raw: '' };
+      }
+      return undefined;
+    }
+
+    // ── Juniper "delete <path>" ─────────────────────────────────────────────
+    if (vendorId === 'juniper' && /^delete\s+/i.test(input)) {
+      // delete interfaces <iface> unit 0 family inet address <ip/mask>
+      const ifaceMatch = input.match(/^delete\s+interfaces\s+(\S+)\s+unit\s+\d+\s+family\s+(?:inet6?\s+)?address\s+(\S+)\s*$/i);
+      if (ifaceMatch) {
+        const iface = resolveIfaceName(context?.ports, ifaceMatch[1]) || ifaceMatch[1];
+        const addr = ifaceMatch[2].replace(/\/\d+$/, '');
+        const cur = mem.configuredIps[iface];
+        if (!cur) return err('error: address not found');
+        if (!cur.startsWith(addr) && toCidr(cur) !== toCidr(ifaceMatch[2])) return err(`error: address ${ifaceMatch[2]} does not exist on ${iface}`);
+        delete mem.configuredIps[iface];
+        return { raw: '' };
+      }
+      // delete interfaces <iface> unit 0 — remove all addresses
+      const ifaceAll = input.match(/^delete\s+interfaces\s+(\S+)\s+unit\s+\d+\s*$/i) || input.match(/^delete\s+interfaces\s+(\S+)\s*$/i);
+      if (ifaceAll) {
+        const iface = resolveIfaceName(context?.ports, ifaceAll[1]) || ifaceAll[1];
+        if (!mem.configuredIps[iface]) return err(`error: no address configured on ${iface}`);
+        delete mem.configuredIps[iface];
+        return { raw: '' };
+      }
+      // delete routing-options static route <dst>
+      const staticMatch = input.match(/^delete\s+routing-options\s+static\s+route\s+(\S+)\s*$/i);
+      if (staticMatch) {
+        const before = mem.routes.length;
+        mem.routes = mem.routes.filter((r: any) => toCidr(String(r.dst)) !== toCidr(staticMatch[1]));
+        if (mem.routes.length === before) return err(`error: route ${staticMatch[1]} does not exist`);
+        return { raw: '' };
+      }
+      // delete system host-name
+      if (/^delete\s+system\s+host-name\s*$/i.test(input)) {
+        if (!mem.hostname) return err('error: host-name is not configured');
+        mem.hostname = '';
+        return { raw: '' };
+      }
+      // delete system name-server [<ip>]
+      if (/^delete\s+system\s+name-server\s*$/i.test(input)) {
+        const server = input.replace(/^delete\s+system\s+name-server\s*/i, '').trim();
+        if (server) {
+          const before = mem.dnsServers.length;
+          mem.dnsServers = (mem.dnsServers || []).filter((s: string) => s !== server);
+          if (mem.dnsServers.length === before) return err(`error: name-server ${server} does not exist`);
+        } else {
+          mem.dnsServers = [];
+        }
+        return { raw: '' };
+      }
+      // delete vlans <name>
+      const vlanJ = input.match(/^delete\s+vlans\s+(\S+)\s*$/i);
+      if (vlanJ) {
+        const before = mem.vlans.length;
+        mem.vlans = mem.vlans.filter((v: any) => v.name !== vlanJ[1]);
+        if (mem.vlans.length === before) return err(`error: vlan ${vlanJ[1]} does not exist`);
+        return { raw: '' };
+      }
+      // delete routing-options static — remove all static routes
+      if (/^delete\s+routing-options\s+static\s*$/i.test(input)) {
+        if (mem.routes.length === 0) return err('error: no static routes configured');
+        mem.routes = [];
+        return { raw: '' };
+      }
+      return undefined;
+    }
+
+    // ── VyOS / EdgeOS "delete <path>" (and normalized delete_config action) ─
+    if (isVyosLike && (/^delete\s+/i.test(input) || normalized.action === 'delete_config')) {
+      // delete interfaces ethernet <iface> address <ip/mask>
+      const vIface = input.match(/^delete\s+interfaces\s+\S+\s+(\S+)\s+address\s+(\S+)\s*$/i);
+      if (vIface) {
+        const iface = resolveIfaceName(context?.ports, vIface[1]) || vIface[1];
+        const cur = mem.configuredIps[iface];
+        if (!cur) return err('Configuration path: interfaces ethernet ' + vIface[1] + ' address\\n\\n is not a valid command or cannot be deleted.\\nDelete failed');
+        if (toCidr(cur) !== toCidr(vIface[2])) return err(`Configuration path: interfaces ethernet ${vIface[1]} address ${vIface[2]}\\n\nDelete failed`);
+        delete mem.configuredIps[iface];
+        return { raw: '' };
+      }
+      // delete interfaces ethernet <iface>
+      const vIfaceAll = input.match(/^delete\s+interfaces\s+\S+\s+(\S+)\s*$/i);
+      if (vIfaceAll) {
+        const iface = resolveIfaceName(context?.ports, vIfaceAll[1]) || vIfaceAll[1];
+        if (!mem.configuredIps[iface] && mem.currentIface !== iface) return err(`Configuration path: interfaces ethernet ${vIfaceAll[1]}\\n\nDelete failed`);
+        delete mem.configuredIps[iface];
+        return { raw: '' };
+      }
+      // delete protocols static route <dst>
+      const vStatic = input.match(/^delete\s+protocols\s+static\s+route\s+(\S+)\s*$/i);
+      if (vStatic) {
+        const before = mem.routes.length;
+        mem.routes = mem.routes.filter((r: any) => toCidr(String(r.dst)) !== toCidr(vStatic[1]));
+        if (mem.routes.length === before) return err(`Configuration path: protocols static route ${vStatic[1]}\\n\nDelete failed`);
+        return { raw: '' };
+      }
+      // delete system host-name
+      if (/^delete\s+system\s+host-name\s*$/i.test(input)) {
+        mem.hostname = '';
+        return { raw: '' };
+      }
+      // delete system name-server
+      if (/^delete\s+system\s+name-server\s*$/i.test(input)) {
+        mem.dnsServers = [];
+        return { raw: '' };
+      }
+      return undefined;
+    }
+
+    // ── Huawei "undo <config>" ──────────────────────────────────────────────
+    if (vendorId === 'huawei' && /^undo\s+/i.test(input)) {
+      // undo ip address [<ip> <mask>] (interface view)
+      if (/^undo\s+ip\s+(?:address|addr)\b/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: enter interface view first (interface <name>)');
+        const rest = input.replace(/^undo\s+ip\s+(?:address|addr)\s*/i, '').trim();
+        const cur = mem.configuredIps[mem.currentIface];
+        if (!cur) return err(`% No IP address configured on interface ${mem.currentIface}`);
+        if (rest) {
+          const target = toCidr(rest);
+          if (toCidr(cur) !== target && cur !== rest) return err(`% The IP address does not exist on interface ${mem.currentIface}`);
+        }
+        delete mem.configuredIps[mem.currentIface];
+        mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== mem.currentIface);
+        return { raw: '' };
+      }
+      // undo ip route-static <dst> [mask] <gw>
+      if (/^undo\s+ip\s+route-static\s+/i.test(input)) {
+        const rest = input.replace(/^undo\s+ip\s+route-static\s+/i, '');
+        const parts = rest.split(/\s+/).filter(Boolean);
+        let dst: string;
+        let gw = parts[1] || null;
+        if (parts.length >= 2 && /^\d+\.\d+\.\d+\.\d+$/.test(parts[1])) {
+          dst = toCidr(`${parts[0]} ${parts[1]}`);
+          gw = parts[2] || null;
+        } else {
+          dst = toCidr(parts[0]);
+          gw = parts[1] || null;
+        }
+        const before = mem.routes.length;
+        mem.routes = mem.routes.filter((r: any) => {
+          if (gw && r.gateway !== gw) return true;
+          return toCidr(String(r.dst)) !== dst;
+        });
+        if (mem.routes.length === before) return err(`% Error: The route (${dst}) does not exist`);
+        return { raw: '' };
+      }
+      // undo vlan <id>
+      const hVlan = input.match(/^undo\s+vlan\s+(\d+)\s*$/i);
+      if (hVlan) {
+        const id = hVlan[1];
+        const before = mem.vlans.length;
+        mem.vlans = mem.vlans.filter((v: any) => String(v.id) !== String(id));
+        for (const [iface, v] of Object.entries(mem.portVlans || {})) {
+          if (String(v) === String(id)) delete mem.portVlans[iface];
+        }
+        mem.subinterfaces = (mem.subinterfaces || []).filter((s: any) => String(s.vlanId) !== String(id));
+        if (mem.vlans.length === before) return err(`% Error: The VLAN does not exist`);
+        return { raw: '' };
+      }
+      // undo ip host <name>
+      const hHost = input.match(/^undo\s+ip\s+host\s+(\S+)\s*$/i);
+      if (hHost) {
+        const before = mem.dnsRecords.length;
+        mem.dnsRecords = mem.dnsRecords.filter((d: any) => d.name !== hHost[1].toLowerCase());
+        if (mem.dnsRecords.length === before) return err(`% Error: The host does not exist`);
+        return { raw: '' };
+      }
+      return undefined;
+    }
+
+    // ── OpenWrt "uci delete …" ──────────────────────────────────────────────
+    if (vendorId === 'openwrt' && /^uci\s+delete\s+/i.test(input)) {
+      const path = input.replace(/^uci\s+delete\s+/i, '').trim();
+      // uci delete network.<iface>.ipaddr  / network.<iface>.ip6addr
+      const netIface = path.match(/^network\.(\S+?)\.ip(?:6)?addr\s*$/i);
+      if (netIface) {
+        let iface = netIface[1];
+        if (iface === 'lan' || iface === 'wan' || iface === 'wan6') iface = 'ether' + (iface === 'lan' ? 1 : 0);
+        const k = resolveIfaceName(context?.ports, iface) || iface;
+        if (!mem.configuredIps[k]) return err(`uci: Entry not found: ${path}`);
+        delete mem.configuredIps[k];
+        return { raw: '' };
+      }
+      // uci delete system.@system[0].hostname
+      if (/^system\.@system\[0\]\.hostname\s*$/i.test(path)) {
+        if (!mem.hostname) return err(`uci: Entry not found: ${path}`);
+        mem.hostname = '';
+        return { raw: '' };
+      }
+      // uci delete network.<iface> — remove whole interface config (and its IP)
+      const netWipe = path.match(/^network\.(\S+)\s*$/i);
+      if (netWipe) {
+        let iface = netWipe[1];
+        if (iface === 'lan' || iface === 'wan' || iface === 'wan6') iface = 'ether' + (iface === 'lan' ? 1 : 0);
+        const k = resolveIfaceName(context?.ports, iface) || iface;
+        const had = mem.configuredIps[k] !== undefined;
+        delete mem.configuredIps[k];
+        if (!had) return err(`uci: Entry not found: ${path}`);
+        return { raw: '' };
+      }
+      return undefined;
+    }
+
+    // ── Linux "ip addr del" / "ip route del" ────────────────────────────────
+    if (vendorId === 'linux' && (/^ip\s+addr(?:ess)?\s+del\s+/i.test(input) || /^ip\s+route\s+(?:del|delete)\s+/i.test(input))) {
+      if (/^ip\s+addr(?:ess)?\s+del\s+/i.test(input)) {
+        const m = input.match(/^ip\s+addr(?:ess)?\s+del\s+(\S+)\s+dev\s+(\S+)\s*$/i);
+        if (!m) return err('% Usage: ip addr del <ip/prefix> dev <iface>');
+        const iface = resolveIfaceName(context?.ports, m[2]) || m[2];
+        const cur = mem.configuredIps[iface];
+        if (!cur) return err(`RTNETLINK answers: No such process`);
+        if (toCidr(cur) !== toCidr(m[1])) return err(`RTNETLINK answers: Cannot assign requested address`);
+        delete mem.configuredIps[iface];
+        return { raw: '' };
+      }
+      const m = input.match(/^ip\s+route\s+(?:del|delete)\s+(\S+)(?:\s+via\s+(\S+))?\s*$/i);
+      if (!m) return err('% Usage: ip route del <dst> via <gw>');
+      const dst = toCidr(m[1].toLowerCase() === 'default' ? '0.0.0.0/0' : m[1]);
+      const gw = m[2] || null;
+      const before = mem.routes.length;
+      mem.routes = mem.routes.filter((r: any) => {
+        if (gw && r.gateway !== gw) return true;
+        return toCidr(String(r.dst)) !== dst;
+      });
+      if (mem.routes.length === before) return err('RTNETLINK answers: No such process');
+      return { raw: '' };
+    }
+
+    // ── Juniper "rollback 0" — restore last committed config (simplified: config is volatile here) ──
+    if (vendorId === 'juniper' && /^rollback\s*$/i.test(input)) {
+      const count =
+        (mem.configuredIps && Object.keys(mem.configuredIps).length) +
+        (mem.routes?.length || 0) +
+        (mem.vlans?.length || 0);
+      if (count === 0) return err('error: no configuration to roll back');
+      return { raw: 'configuration rolled back' };
+    }
+
+    return undefined;
+  }
+
   dispatch(vendorId: string, rawInput: string, context: any): string {
     const adapter = this.getAdapter(vendorId);
     if (!adapter) return `% Error: Unknown vendor "${vendorId}". Supported: ${Array.from(this.adapters.keys()).join(', ')}`;
@@ -1457,6 +2009,9 @@ export class VendorDispatcher {
 
     if (normalized.action === '?' || normalized.action === 'help' || rawInput.trim() === '?') {
       cmdResult = { type: 'help' };
+    } else if ((cmdResult = this.handleDeletion(rawInput, normalized, vendorId, mem, context)) !== undefined) {
+      // Configuration deletion (no …, /ip … remove, delete …, undo …, uci delete …)
+      // mutates real state instead of returning fake success.
     } else if ((cmdResult = snmpCommand(rawInput, vendorId, mem, context)) !== undefined) {
       // SNMP: konfigurasi agent per vendor + query snmpget/snmpwalk/snmpset.
       // Selalu dicek duluan agar perintah agent tidak tabrakan dengan parser bawaan.

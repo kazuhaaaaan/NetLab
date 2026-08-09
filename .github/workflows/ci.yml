@@ -1,4 +1,4 @@
-name: MikroLab CI Pipeline
+name: NetLab CI Pipeline
 
 on:
   push:
@@ -11,19 +11,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v2
-        with:
-          version: 8
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'pnpm'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: npm ci
 
-      - name: Typecheck & Build
-        run: pnpm run build
+      - name: Typecheck
+        run: npm run lint
 
-      - name: Lint
-        run: pnpm run lint
+      - name: Unit & integration tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
