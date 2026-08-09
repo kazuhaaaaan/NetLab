@@ -1130,7 +1130,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full shadow-2xl overflow-hidden animate-in fade-in duration-200">
               <div className="p-4 border-b border-slate-800 flex justify-between items-center">
                 <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                  <span className="text-rose-500 text-xl">♥</span> Donate untuk Support Developer
+                  <span className="text-rose-500 text-xl">♥</span> Donasi untuk Mendukung Developer
                 </h2>
                 <button onClick={() => setIsDonateOpen(false)} className="text-slate-400 hover:text-slate-200 transition">
                   <X className="w-5 h-5" />
@@ -1273,7 +1273,7 @@ export default function App() {
               targetType={contextMenu.targetType}
               onOpenTerminal={handleOpenTerminal}
               onDeleteNode={handleDeleteNode}
-onDeleteEdge={handleDeleteEdge}
+              onDeleteEdge={handleDeleteEdge}
               selectedNodeIds={selectedNodeIds}
               onDeleteNodes={handleDeleteNodes}
               onClose={() => setContextMenu(null)}
@@ -1330,7 +1330,7 @@ onDeleteEdge={handleDeleteEdge}
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full shadow-2xl overflow-hidden animate-in fade-in duration-200">
             <div className="p-4 border-b border-slate-800 flex justify-between items-center">
               <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                <span className="text-rose-500 text-xl">♥</span> Donate untuk Support Developer
+                <span className="text-rose-500 text-xl">♥</span> Donasi untuk Mendukung Developer
               </h2>
               <button onClick={() => setIsDonateOpen(false)} className="text-slate-400 hover:text-slate-200 transition">
                 <X className="w-5 h-5" />

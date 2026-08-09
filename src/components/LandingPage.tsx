@@ -296,10 +296,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
             <button
               onClick={onOpenDonate}
               className="group flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 text-[13px] font-semibold px-3.5 py-2 transition-all duration-200 hover:bg-rose-500/20 hover:scale-[1.03] active:scale-[0.98]"
-              title="Donate untuk support developer"
+              title="Donasi untuk mendukung developer"
             >
               <Heart className="w-3.5 h-3.5 text-rose-400 transition-transform group-hover:scale-125" />
-              Donate
+              Donasi
             </button>
             <button
               onClick={launch}
@@ -400,7 +400,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
             transition={{ duration: 0.6, delay: 0.34 }}
             className="mt-5 text-[11px] font-mono text-slate-600"
           >
-            Free · No install · Runs 100% in your browser · Topologi &amp; config auto-save
+            Gratis · Tanpa Install · 100% Di Browser · Topologi &amp; konfigurasi auto-save
           </motion.p>
         </div>
 
@@ -466,7 +466,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
 
                 {/* floating status chips */}
                 <div className="absolute top-4 right-4 hidden sm:flex items-center gap-1.5 rounded-md border border-[#1F2128] bg-[#0B0C0E]/80 backdrop-blur px-2.5 py-1 text-[10px] font-mono text-slate-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> 3/3 links up
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> 4/4 links up
                 </div>
                 <div className="absolute bottom-4 left-4 hidden sm:flex items-center gap-1.5 rounded-md border border-[#1F2128] bg-[#0B0C0E]/80 backdrop-blur px-2.5 py-1 text-[10px] font-mono text-slate-400">
                   <Zap className="w-3 h-3 text-amber-400" /> TTL 62 · 2 hops
@@ -936,10 +936,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
             <button
               onClick={onOpenDonate}
               className="flex items-center gap-1.5 text-rose-300 hover:text-rose-200 transition-colors font-medium"
-              title="Donate untuk support developer"
+              title="Donasi untuk mendukung developer"
             >
               <Heart className="w-3.5 h-3.5 text-rose-400" />
-              Donate untuk Support Developer
+              Donasi untuk Mendukung Developer
             </button>
           </div>
 

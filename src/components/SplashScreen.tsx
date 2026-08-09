@@ -1,6 +1,5 @@
-﻿import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 
-// â”€â”€â”€ Node positions for topology animation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const NODES = [
   { id: 0, x: 300, y: 160, delay: 0,   label: 'R1', color: '#38bdf8' },
   { id: 1, x: 160, y: 290, delay: 180, label: 'SW', color: '#818cf8' },
