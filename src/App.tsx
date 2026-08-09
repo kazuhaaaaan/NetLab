@@ -111,6 +111,7 @@ export default function App() {
 
   const [project, setProject] = useState<LabProject>(TEMPLATE_BASIC);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [activeTool, setActiveTool] = useState<ActiveTool>(() => loadUiState()?.activeTool ?? 'select');
   const [cableStart, setCableStart] = useState<{ nodeId: string; portId: string } | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -269,6 +270,7 @@ export default function App() {
     simEngineRef.current.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
     simEngineRef.current.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
     simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+    simEngineRef.current.applyNodeConfig6(nodeId, mem.configuredIps6 || {}, mem.routes6 || []);
     simEngineRef.current.setRouting(nodeId, mem.routing || undefined);
     simEngineRef.current.setBgp(nodeId, mem.bgp || undefined);
     simEngineRef.current.setSnmp(nodeId, mem.snmp || undefined);
@@ -280,6 +282,7 @@ export default function App() {
     simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
     simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
     simEngineRef.current.setStp(nodeId, mem.stp || undefined);
+    simEngineRef.current.setFhrp(nodeId, mem.fhrpGroups || undefined);
     simEngineRef.current.setWireless(
       nodeId,
       mem.wireless || mem.wirelessSecurityProfiles
@@ -340,6 +343,18 @@ export default function App() {
           historyIndexRef.current = 0;
           setCanUndo(false);
           setCanRedo(false);
+          // Terminal tab bawaan ('node-1') tidak valid bila proyek tersimpan
+          // tidak memilikinya — selaraskan tab dengan node proyek yang dimuat.
+          const validIds = new Set(saved.nodes.map((n) => n.id));
+          setOpenTerminalNodeIds((prev) => {
+            const clean = prev.filter((id) => validIds.has(id));
+            return clean.length > 0 ? clean : saved.nodes.slice(0, 1).map((n) => n.id);
+          });
+          setActiveTerminalNodeId((cur) =>
+            cur && validIds.has(cur)
+              ? cur
+              : (saved.nodes[0]?.id ?? '')
+          );
         }
         projectLoadedRef.current = true;
       });
@@ -416,48 +431,6 @@ export default function App() {
     setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
   }, []);
 
-  // Keyboard shortcut: Delete / Backspace to remove selected edge or node
-  //                     Ctrl+Z = Undo, Ctrl+Y / Ctrl+Shift+Z = Redo
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      // Don't trigger if typing in an input / textarea
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
-      // Undo
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-        return;
-      }
-      // Redo
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        handleRedo();
-        return;
-      }
-
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedEdgeId) {
-          setProjectWithHistory((prev) => ({
-            ...prev,
-            edges: prev.edges.filter((edge) => edge.id !== selectedEdgeId)
-          }));
-          setSelectedEdgeId(null);
-        } else if (selectedNodeId) {
-          setProjectWithHistory((prev) => ({
-            ...prev,
-            nodes: prev.nodes.filter((n) => n.id !== selectedNodeId),
-            edges: prev.edges.filter((e) => e.sourceNodeId !== selectedNodeId && e.targetNodeId !== selectedNodeId)
-          }));
-          setSelectedNodeId(null);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, selectedNodeId, handleUndo, handleRedo, setProjectWithHistory]);
-
   const handleAddNode = (
     vendor: VendorType,
     deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless',
@@ -525,6 +498,43 @@ export default function App() {
     StorageEngine.saveDeviceConfigs(remaining);
   };
 
+  /** Hapus banyak perangkat sekaligus (hasil multi-select). */
+  const handleDeleteNodes = (nodeIds: string[]) => {
+    const ids = new Set(nodeIds);
+    setProjectWithHistory((prev) => ({
+      ...prev,
+      nodes: prev.nodes.filter((n) => !ids.has(n.id)),
+      edges: prev.edges.filter((e) => !ids.has(e.sourceNodeId) && !ids.has(e.targetNodeId))
+    }));
+    setSelectedNodeIds((prev) => prev.filter((id) => !ids.has(id)));
+    setSelectedNodeId((cur) => (cur && ids.has(cur) ? null : cur));
+    setOpenTerminalNodeIds((prev) => prev.filter((id) => !ids.has(id)));
+    // Fallback tab terminal: node survivor tetap (bukan closure openTerminalNodeIds
+    // yang basi — bisa saja berisi id yang ikut terhapus).
+    const survivor = project.nodes.find((n) => !ids.has(n.id));
+    setActiveTerminalNodeId((cur) => (cur && ids.has(cur) ? survivor?.id ?? '' : cur));
+    for (const id of ids) vendorDispatcher.forgetNodeMemory(id);
+    StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory());
+  };
+
+  /** Tambah/kurangi satu perangkat dari multi-select (Shift+klik). */
+  const handleToggleNodeSelected = (nodeId: string) => {
+    setSelectedNodeIds((prev) => {
+      if (prev.includes(nodeId)) {
+        return prev.filter((id) => id !== nodeId);
+      }
+      setSelectedNodeId(nodeId);
+      return [...prev, nodeId];
+    });
+  };
+
+  /** Commit hasil selection box → set daftar perangkat terpilih. */
+  const handleSelectNodes = (nodeIds: string[]) => {
+    setSelectedNodeIds(nodeIds);
+    setSelectedNodeId(nodeIds.length === 1 ? nodeIds[0] : null);
+    setContextMenu(null);
+  };
+
   const handleDeleteEdge = (edgeId: string) => {
     setProjectWithHistory((prev) => ({
       ...prev,
@@ -532,6 +542,55 @@ export default function App() {
     }));
     if (selectedEdgeId === edgeId) setSelectedEdgeId(null);
   };
+
+  // Keyboard shortcut: Delete / Backspace to remove selected edge or node
+  //                     Ctrl+Z = Undo, Ctrl+Y / Ctrl+Shift+Z = Redo, Escape = deselect semua
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      // Don't trigger if typing in an input / textarea
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      // Undo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+      // Redo
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedEdgeId) {
+          setProjectWithHistory((prev) => ({
+            ...prev,
+            edges: prev.edges.filter((edge) => edge.id !== selectedEdgeId)
+          }));
+          setSelectedEdgeId(null);
+        } else if (selectedNodeIds.length > 1) {
+          handleDeleteNodes(selectedNodeIds);
+        } else if (selectedNodeId) {
+          setProjectWithHistory((prev) => ({
+            ...prev,
+            nodes: prev.nodes.filter((n) => n.id !== selectedNodeId),
+            edges: prev.edges.filter((e) => e.sourceNodeId !== selectedNodeId && e.targetNodeId !== selectedNodeId)
+          }));
+          setSelectedNodeId(null);
+        }
+      }
+      if (e.key === 'Escape') {
+        setSelectedNodeIds([]);
+        setSelectedNodeId(null);
+        setSelectedEdgeId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedEdgeId, selectedNodeId, selectedNodeIds, handleUndo, handleRedo, setProjectWithHistory, handleDeleteNodes]);
 
   const handleUpdateNodeName = (nodeId: string, name: string) => {
     setProjectWithHistory((prev) => ({
@@ -662,6 +721,26 @@ export default function App() {
     [project, setProjectWithHistory, showToast]
   );
 
+  /** Perbarui properti kabel (latensi / bandwidth / down) langsung dari canvas. */
+  const handleUpdateEdge = useCallback(
+    (edgeId: string, partial: Partial<LabEdge>) => {
+      const edge = project.edges.find((e) => e.id === edgeId);
+      if (!edge) return;
+      setProjectWithHistory((prev) => ({
+        ...prev,
+        edges: prev.edges.map((e) => (e.id === edgeId ? { ...e, ...partial } : e)),
+      }));
+      if (partial.down !== undefined) {
+        showToast(
+          partial.down
+            ? `Link ${edge.id} di-down-kan (rute akan menghindarinya)`
+            : `Link ${edge.id} aktif kembali`
+        );
+      }
+    },
+    [project.edges, setProjectWithHistory, showToast]
+  );
+
   /** True when a port is already used by an edge. */
   const isPortBusy = (nodeId: string, portId: string): boolean => {
     return project.edges.some(
@@ -739,7 +818,8 @@ export default function App() {
 
       if (simResult.success) {
         status = 'success';
-        message = `Reply from ${ping.dstIp}: bytes=32 time=<1ms TTL=${simResult.ttlAtDestination || 64}${path}`;
+        const rtt = simResult.rttMs != null ? Math.max(1, Math.round(simResult.rttMs)) : '<1';
+        message = `Reply from ${ping.dstIp}: bytes=32 time=${rtt}ms TTL=${simResult.ttlAtDestination || 64}${path}`;
         if (simResult.dhcpGranted) {
           message = `DHCP lease didapat otomatis — ${message}`;
         }
@@ -968,6 +1048,8 @@ export default function App() {
         dnsResolver: (name: string) => simEngineRef.current.resolveHostname(nodeId, name),
         neighborProvider: (proto: 'cdp' | 'lldp') => simEngineRef.current.getLldpNeighbors(nodeId),
         ospfNeighborProvider: () => simEngineRef.current.getOspfNeighbors(nodeId),
+        fhrpProvider: () => simEngineRef.current.getFhrpInfo(nodeId),
+        ipv6Provider: () => simEngineRef.current.getIpv6Info(nodeId),
         bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
         tcpProvider: () => simEngineRef.current.getTcpConnections(nodeId),
         arpProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.arp || [],
@@ -1136,12 +1218,16 @@ export default function App() {
             viewport={project.viewport}
             onViewportChange={(viewport) => setProject((prev) => ({ ...prev, viewport }))}
             selectedNodeId={selectedNodeId}
+            selectedNodeIds={selectedNodeIds}
+            onSelectNodes={handleSelectNodes}
+            onToggleNodeSelected={handleToggleNodeSelected}
             onSelectNode={(id) => {
               if (activeTool === 'ping') {
                 handleNodeClickForPing(id);
                 return;
               }
               setSelectedNodeId(id);
+              setSelectedNodeIds([]);
               setContextMenu(null);
               // CLI follows the selected device: switch the terminal tab to it
               if (id && isTerminalOpen) {
@@ -1187,7 +1273,9 @@ export default function App() {
               targetType={contextMenu.targetType}
               onOpenTerminal={handleOpenTerminal}
               onDeleteNode={handleDeleteNode}
-              onDeleteEdge={handleDeleteEdge}
+onDeleteEdge={handleDeleteEdge}
+              selectedNodeIds={selectedNodeIds}
+              onDeleteNodes={handleDeleteNodes}
               onClose={() => setContextMenu(null)}
             />
           )}

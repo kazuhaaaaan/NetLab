@@ -25,7 +25,7 @@ export interface Point {
 export interface Port {
   id: string;
   name: string;
-  type: string;
+  type?: string;
   status: "up" | "down";
   ipAddress?: string;
 }
@@ -33,12 +33,13 @@ export interface Port {
 export interface LabNode {
   id: string;
   name: string;
-  deviceType: "router" | "switch" | "firewall" | "server" | "pc";
+  deviceType: "router" | "switch" | "firewall" | "pc" | "server" | "wireless";
   vendor: string;
   model: string;
   position: Point;
   selected?: boolean;
   ports: Port[];
+  powered?: boolean;
 }
 
 export interface LabEdge {
@@ -47,7 +48,13 @@ export interface LabEdge {
   sourcePortId: string;
   targetNodeId: string;
   targetPortId: string;
-  cableType: "straight" | "cross" | "fiber" | "copper_cross";
+  cableType: "copper_straight" | "copper_cross" | "fiber" | "serial";
+  /** latensi kabel (ms) — override nilai default sesuai tipe kabel */
+  latencyMs?: number;
+  /** bandwidth link (Mbps) */
+  bandwidthMbps?: number;
+  /** true = link sengaja dimatikan (failure injection) */
+  down?: boolean;
 }
 
 export interface Viewport {
@@ -96,6 +103,41 @@ function getEdgeAnchor(node: LabNode, portId: string): { x: number; y: number } 
 import { GestureType, GestureDetail, InteractionEngine } from "../engine/InteractionEngine";
 import { PacketAnimation } from "../types";
 
+/** Konversi kotak seleksi (koordinat layar engine) → koordinat dunia. */
+function selectionRectToWorld(
+  rect: { x1: number; y1: number; x2: number; y2: number },
+  viewport: Viewport
+): { x1: number; y1: number; x2: number; y2: number } {
+  return {
+    x1: (rect.x1 - viewport.x) / viewport.zoom,
+    y1: (rect.y1 - viewport.y) / viewport.zoom,
+    x2: (rect.x2 - viewport.x) / viewport.zoom,
+    y2: (rect.y2 - viewport.y) / viewport.zoom,
+  };
+}
+
+/** Perangkat yang bounding box-nya menyentuh kotak seleksi. */
+function nodesInSelectionRect(
+  rect: { x1: number; y1: number; x2: number; y2: number },
+  nodes: LabNode[],
+  viewport: Viewport
+): string[] {
+  const w = selectionRectToWorld(rect, viewport);
+  const minX = Math.min(w.x1, w.x2);
+  const minY = Math.min(w.y1, w.y2);
+  const maxX = Math.max(w.x1, w.x2);
+  const maxY = Math.max(w.y1, w.y2);
+  return nodes
+    .filter((n) => {
+      const left = n.position.x;
+      const top = n.position.y;
+      const right = n.position.x + NODE_W;
+      const bottom = n.position.y + NODE_H;
+      return left < maxX && right > minX && top < maxY && bottom > minY;
+    })
+    .map((n) => n.id);
+}
+
 interface CanvasProps {
   nodes: LabNode[];
   edges: LabEdge[];
@@ -127,6 +169,14 @@ interface CanvasProps {
   onToggleViewPorts?: () => void;
   /** Animasi paket ping yang melintasi kabel (dari hasil simulasi). */
   packetAnimations?: PacketAnimation[];
+  /** Id perangkat yang terpilih sekaligus (multi-select). */
+  selectedNodeIds?: string[];
+  /** Commit hasil selection box / multi-select. */
+  onSelectNodes?: (nodeIds: string[]) => void;
+  /** Toggle satu perangkat ke/keluar dari multi-select (Shift+klik). */
+  onToggleNodeSelected?: (nodeId: string) => void;
+  /** Perbarui properti sebuah kabel (latensi/bandwidth/down). */
+  onUpdateEdge?: (edgeId: string, partial: Partial<LabEdge>) => void;
 }
 
 /** Popover interaktif di atas canvas — blokir gesture engine (preventDefault + TAP) agar klik asli & dropdown tetap berfungsi. */
@@ -177,11 +227,21 @@ export const Canvas: React.FC<CanvasProps> = ({
   viewPorts = false,
   onToggleViewPorts,
   packetAnimations = [],
+  selectedNodeIds = [],
+  onSelectNodes,
+  onToggleNodeSelected,
+  onUpdateEdge,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const handleGestureRef = useRef<(gesture: GestureDetail) => void>(() => {});
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  const [selectionRect, setSelectionRect] = useState<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null>(null);
   const [cableWizard, setCableWizard] = useState<{
     sourceNodeId: string;
     sourcePortId: string | null;
@@ -338,10 +398,13 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       const targetNode = nodes.find((n) => n.id === gesture.nodeId);
       const selectedNodes = nodes.filter(
-        (n) => n.selected || n.id === selectedNodeId,
+        (n) => selectedNodeIds.includes(n.id) || n.selected || n.id === selectedNodeId,
       );
       const isTargetSelected =
-        targetNode && (targetNode.selected || targetNode.id === selectedNodeId);
+        targetNode &&
+        (selectedNodeIds.includes(targetNode.id) ||
+          targetNode.selected ||
+          targetNode.id === selectedNodeId);
 
       if (isTargetSelected && selectedNodes.length > 1) {
         selectedNodes.forEach((node) => {
@@ -378,6 +441,10 @@ export const Canvas: React.FC<CanvasProps> = ({
           }
         } else if (activeTool === 'cable') {
           setCableWizard({ sourceNodeId: gesture.nodeId, sourcePortId: null, cableType: null, targetNodeId: null });
+        } else if (gesture.shiftKey) {
+          // Shift+klik → tambah/kurangi dari multi-select tanpa kehilangan seleksi lain
+          if (onToggleNodeSelected) onToggleNodeSelected(gesture.nodeId);
+          onSelectEdge(null);
         } else {
           onSelectNode(gesture.nodeId);
           onSelectEdge(null);
@@ -387,8 +454,15 @@ export const Canvas: React.FC<CanvasProps> = ({
         onSelectNode(null);
       } else if (gesture.targetType === "canvas") {
         setCableWizard(null);
-        onSelectNode(null);
+        // Selection box selesai (Shift+drag) → commit perangkat yang masuk kotak
+        if (selectionRect && onSelectNodes) {
+          const ids = nodesInSelectionRect(selectionRect, nodes, viewport);
+          onSelectNodes(ids);
+        } else {
+          onSelectNode(null);
+        }
         onSelectEdge(null);
+        setSelectionRect(null);
       }
     } else if (gesture.type === "DOUBLE_TAP") {
       if (gesture.targetType === "node" && gesture.nodeId) {
@@ -397,6 +471,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     } else if (gesture.type === "LONG_PRESS") {
       if (gesture.targetType === "node" && gesture.nodeId) {
         onSelectNode(gesture.nodeId);
+        // Long-press = klik kanan: buka context menu perangkat
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+          onContextMenu(
+            {
+              clientX: rect.left + gesture.point.x,
+              clientY: rect.top + gesture.point.y,
+              preventDefault: () => {},
+            } as React.MouseEvent,
+            "node",
+            gesture.nodeId,
+          );
+        }
       }
     } else if (gesture.type === "CABLE_DRAG") {
       if (gesture.nodeId && gesture.portId) {
@@ -412,6 +499,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
       }
       setCableHover(gesture.hover || null);
+    } else if (gesture.type === "SELECTION_BOX" && gesture.selectionRect) {
+      setSelectionRect(gesture.selectionRect);
     } else if (gesture.type === "CABLE_CONNECT") {
       setCableDrag(null);
       setCableHover(null);
@@ -482,6 +571,19 @@ export const Canvas: React.FC<CanvasProps> = ({
       ref={containerRef}
       onContextMenu={(e) => {
         e.preventDefault();
+        // Resolve target (node/edge) dari elemen yang diklik kanan
+        let target = e.target as HTMLElement | null;
+        while (target && target !== containerRef.current) {
+          if (target.dataset.edgeId) {
+            onContextMenu(e, 'edge', target.dataset.edgeId);
+            return;
+          }
+          if (target.dataset.nodeId) {
+            onContextMenu(e, 'node', target.dataset.nodeId);
+            return;
+          }
+          target = target.parentElement;
+        }
         onContextMenu(e);
       }}
       onPointerMove={(e) => {
@@ -632,19 +734,27 @@ export const Canvas: React.FC<CanvasProps> = ({
                 stroke={
                   isSelected 
                     ? "#ef4444" 
-                    : isHoveredEdge
-                      ? "#fbbf24"
-                      : edge.cableType === "fiber"
-                        ? "#f97316"
-                        : edge.cableType === "serial"
-                          ? "#f43f5e"
-                          : edge.cableType === "copper_cross"
-                            ? "#eab308"
-                            : "#3b82f6"
+                    : edge.down
+                      ? "#dc2626"
+                      : isHoveredEdge
+                        ? "#fbbf24"
+                        : edge.cableType === "fiber"
+                          ? "#f97316"
+                          : edge.cableType === "serial"
+                            ? "#f43f5e"
+                            : edge.cableType === "copper_cross"
+                              ? "#eab308"
+                              : "#3b82f6"
                 }
                 strokeWidth={isSelected ? "5" : isHoveredEdge || isHoverConnected ? "4.5" : "3"}
                 strokeDasharray={
-                  edge.cableType === "copper_cross" ? "6,6" : edge.cableType === "serial" ? "2,4" : "none"
+                  edge.down
+                    ? "8,4"
+                    : edge.cableType === "copper_cross"
+                      ? "6,6"
+                      : edge.cableType === "serial"
+                        ? "2,4"
+                        : "none"
                 }
                 className="transition-all hover:stroke-[4px]"
                 style={isHoveredEdge || (isHoverConnected && !isSelected) ? { filter: "drop-shadow(0 0 5px currentColor)" } : undefined}
@@ -716,7 +826,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           );
         })()}
 
-        {/* Delete-cable chip on the selected edge */}
+        {/* Panel properti kabel — pada kabel terpilih */}
         {(() => {
           const edge = edges.find((e) => e.id === selectedEdgeId);
           if (!edge) return null;
@@ -744,16 +854,57 @@ export const Canvas: React.FC<CanvasProps> = ({
           const mt = 1 - t;
           const mx = mt * mt * mt * x1 + 3 * mt * mt * t * cx1 + 3 * mt * t * t * cx2 + t * t * t * x2;
           const my = mt * mt * mt * y1 + 3 * mt * mt * t * cy1 + 3 * mt * t * t * cy2 + t * t * t * y2;
+          const panelW = 196;
           return (
             <g pointerEvents="none">
-              <foreignObject x={mx - 18} y={my - 18} width={36} height={36}>
-                <div className="flex items-center justify-center w-full h-full">
+              <foreignObject x={mx - panelW / 2} y={my - 64} width={panelW} height={128}>
+                <div className="pointer-events-auto bg-[#0F1015]/95 backdrop-blur-md border border-red-500/40 rounded-lg shadow-2xl px-2.5 py-2 text-[11px] font-mono">
+                  <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10 mb-1.5">
+                    <span className="text-[10px] text-slate-400 truncate">{sNode.name} ↔ {tNode.name}</span>
+                    <button
+                      data-delete-edge-id={edge.id}
+                      title="Delete Cable"
+                      className="p-1 rounded-md bg-rose-600/80 hover:bg-rose-500 text-white shrink-0 transition-colors"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <label className="text-slate-400 w-14 shrink-0">Latency</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000}
+                      value={edge.latencyMs ?? ""}
+                      placeholder="auto"
+                      onChange={(e) => onUpdateEdge?.(edge.id, { latencyMs: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) })}
+                      className="w-full min-w-0 bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-cyan-200 focus:outline-none focus:border-cyan-500/60"
+                    />
+                    <span className="text-slate-500 shrink-0">ms</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <label className="text-slate-400 w-14 shrink-0">Link</label>
+                    <select
+                      value={`${edge.bandwidthMbps ?? ""}`}
+                      onChange={(e) => onUpdateEdge?.(edge.id, { bandwidthMbps: e.target.value === "" ? undefined : Number(e.target.value) })}
+                      className="w-full min-w-0 bg-black/40 border border-white/10 rounded px-1 py-0.5 text-slate-200 focus:outline-none focus:border-cyan-500/60"
+                    >
+                      <option value="">auto</option>
+                      <option value="10">10 Mbps</option>
+                      <option value="100">100 Mbps</option>
+                      <option value="1000">1 Gbps</option>
+                      <option value="10000">10 Gbps</option>
+                    </select>
+                  </div>
                   <button
-                    data-delete-edge-id={edge.id}
-                    title="Delete Cable"
-                    className="pointer-events-auto p-1.5 rounded-full bg-rose-600/90 border border-rose-400 text-white shadow-lg hover:bg-rose-500 transition-all animate-in fade-in zoom-in-90 duration-150"
+                    onClick={() => onUpdateEdge?.(edge.id, { down: !edge.down })}
+                    className={`w-full rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider transition-colors ${
+                      edge.down
+                        ? "bg-red-600/30 text-red-300 border border-red-500/40"
+                        : "bg-emerald-600/20 text-emerald-300 border border-emerald-500/30"
+                    }`}
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {edge.down ? "● Link Down — klik untuk aktifkan" : "○ Link Active — klik untuk downkan"}
                   </button>
                 </div>
               </foreignObject>
@@ -850,7 +1001,10 @@ export const Canvas: React.FC<CanvasProps> = ({
         }}
       >
         {nodes.map((node) => {
-          const isSelected = selectedNodeId === node.id || node.selected;
+          const isSelected =
+            selectedNodeId === node.id ||
+            node.selected ||
+            selectedNodeIds.includes(node.id);
           const nodeInCableFlow =
             activeTool === 'cable' ||
             cableWizard?.sourceNodeId === node.id ||
@@ -1175,14 +1329,14 @@ export const Canvas: React.FC<CanvasProps> = ({
         })}
       </div>
 
-      {selectionBox && (
+      {(selectionBox || selectionRect) && (
         <div
           className="absolute border border-blue-500 bg-blue-500/10 pointer-events-none z-30"
           style={{
-            left: Math.min(selectionBox.x1, selectionBox.x2),
-            top: Math.min(selectionBox.y1, selectionBox.y2),
-            width: Math.abs(selectionBox.x2 - selectionBox.x1),
-            height: Math.abs(selectionBox.y2 - selectionBox.y1),
+            left: Math.min((selectionBox || selectionRect)!.x1, (selectionBox || selectionRect)!.x2),
+            top: Math.min((selectionBox || selectionRect)!.y1, (selectionBox || selectionRect)!.y2),
+            width: Math.abs((selectionBox || selectionRect)!.x2 - (selectionBox || selectionRect)!.x1),
+            height: Math.abs((selectionBox || selectionRect)!.y2 - (selectionBox || selectionRect)!.y1),
           }}
         />
       )}

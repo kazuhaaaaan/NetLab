@@ -66,8 +66,16 @@ export function formatPingOutput(
 
   const hops = Math.max(1, r.path.length - 1);
   const ttl = r.ttlAtDestination || 64;
-  const ms = (i: number) =>
-    hops === 0 ? '<1ms' : `${hops * 2 + (i % 3)}.${100 + (i * 137) % 900}ms`;
+  const baseRtt = typeof r.rttMs === 'number' ? r.rttMs : null;
+  // Goyang kecil antar paket agar terlihat realistis (±10%).
+  const ms = (i: number) => {
+    if (hops === 0) return '<1ms';
+    if (baseRtt !== null) {
+      const jitter = baseRtt <= 1 ? 0 : Math.round(baseRtt * 0.1 * (i + 1));
+      return `${Math.max(1, Math.round(baseRtt + jitter))}.${(100 + i * 137) % 900}ms`;
+    }
+    return `${hops * 2 + (i % 3)}.${100 + (i * 137) % 900}ms`;
+  };
 
   if (vendorId === 'mikrotik') {
     const rows = [0, 1, 2]

@@ -120,10 +120,20 @@ export class RouterProcessor implements DeviceProcessor {
       return;
     }
 
-    // Layanan UDP broadcast (DHCP server) — hanya untuk device yang punya pool
-    if (pkt.protocol === 'udp' && pkt.dstPort === UDP_BOOTPS && dev.dhcpPools.length > 0) {
-      this.handleDhcpServer(pkt, inPort, core, traceId);
-      return;
+    // Layanan UDP DHCP: server lokal jika punya pool di port ini, atau DHCP relay.
+    // Relay menang duluan agar perangkat campuran (pool + helper-address) tetap
+    // meneruskan trafik klien dari segmen yang di-relay.
+    if (pkt.protocol === 'udp' && pkt.dstPort === UDP_BOOTPS) {
+      const inIfaceRelay = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+      const relayServer = inIfaceRelay ? dev.dhcpRelays[inIfaceRelay.name] : null;
+      if (relayServer) {
+        this.handleDhcpRelay(pkt, inPort, relayServer, core, traceId);
+        return;
+      }
+      if (dev.dhcpPools.length > 0) {
+        this.handleDhcpServer(pkt, inPort, core, traceId);
+        return;
+      }
     }
 
     // Trafik balik NAT masquerade: tujuan IP saya tapi ada sesi → kembalikan dstIp asli
@@ -145,16 +155,28 @@ export class RouterProcessor implements DeviceProcessor {
     }
 
     if (myIface) {
-      // Balas via interface tempat paket masuk (bukan interface yang IP-nya cocok),
-      // agar reply lintas-interface (mis. ping ke IP LAN lain) kembali ke sumber.
-      const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
-      this.localDelivery(pkt, inPort, (inIface || myIface).name, core, traceId);
-      return;
+      // Jangan tangkap balasan DHCP yang harus diteruskan relay (relayed offer/ack
+      // membawa penanda relayed walau dstIp menunjuk interface router itu sendiri).
+      const rp0 = (pkt.payload ?? {}) as Record<string, unknown> | undefined;
+      if (!(pkt.protocol === 'udp' && pkt.dstPort === UDP_BOOTPC && rp0?.relayed && (rp0.relayed as any).clientMac)) {
+        // Balas via interface tempat paket masuk (bukan interface yang IP-nya cocok),
+        // agar reply lintas-interface (mis. ping ke IP LAN lain) kembali ke sumber.
+        const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+        this.localDelivery(pkt, inPort, (inIface || myIface).name, core, traceId);
+        return;
+      }
     }
 
     // DHCP client: offer/ack server datang dengan dstIp broadcast/0.0.0.0,
     // tapi frame ditujukan ke MAC kita → terima sebagai trafik lokal.
     if (pkt.protocol === 'udp' && pkt.dstPort === UDP_BOOTPC && forMyMac) {
+      const rp = (pkt.payload ?? {}) as Record<string, unknown> & { relayed?: { clientMac: string; clientIface: string } };
+      if (rp.relayed && rp.relayed.clientMac) {
+        // Balasan DHCP dari server yang lewat relay (ip helper-address) →
+        // teruskan kembali ke klien asli di segmen broadcast-nya.
+        this.handleDhcpRelayReply(pkt, inPort, core, traceId);
+        return;
+      }
       const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
       if (inIface) {
         this.localDelivery(pkt, inPort, inIface.name, core, traceId);
@@ -667,6 +689,9 @@ export class RouterProcessor implements DeviceProcessor {
   private handleDhcpServer(pkt: Packet, inPort: string, core: SimulatorCore, traceId: string): void {
     const dev = this.device;
     const p = (pkt.payload ?? {}) as Record<string, unknown> & { type?: string; xid?: number };
+    // Permintaan datang via relay (ip helper-address) → balasan harus
+    // membawa penanda relayed agar relay bisa meneruskannya ke klien asli.
+    const relayed = (pkt.payload as Record<string, unknown> | undefined)?.relayed;
 
     if (p.type === 'discover') {
       core.emit('DHCP_DISCOVER', traceId, { xid: p.xid, mac: pkt.srcMac }, dev.id, inPort);
@@ -686,7 +711,7 @@ export class RouterProcessor implements DeviceProcessor {
         dstPort: UDP_BOOTPC,
         ttl: 64,
         traceId,
-        payload: { type: 'offer', xid: p.xid, ...grant },
+        payload: relayed ? { type: 'offer', xid: p.xid, ...grant, relayed } : { type: 'offer', xid: p.xid, ...grant },
       });
       core.transmit(dev, offer, inPort, traceId);
       core.emit('DHCP_OFFER', traceId, { ip: grant.ip }, dev.id, inPort);
@@ -717,7 +742,7 @@ export class RouterProcessor implements DeviceProcessor {
         dstPort: UDP_BOOTPC,
         ttl: 64,
         traceId,
-        payload: { type: 'ack', xid: p.xid, ...grant },
+        payload: relayed ? { type: 'ack', xid: p.xid, ...grant, relayed } : { type: 'ack', xid: p.xid, ...grant },
       });
       core.transmit(dev, ack, inPort, traceId);
       core.emit('DHCP_ACK', traceId, { ip: grant.ip }, dev.id, inPort);
@@ -731,6 +756,69 @@ export class RouterProcessor implements DeviceProcessor {
     const alloc = allocateIp(dev, pool, core.usedIps());
     if (!alloc) return null;
     return { ip: alloc.ip, gateway: alloc.gateway, prefix: alloc.prefix, poolNodeId: dev.id };
+  }
+
+  // ── DHCP relay (ip helper-address) ──────────────────────────
+  private handleDhcpRelay(pkt: Packet, inPort: string, serverIp: string, core: SimulatorCore, traceId: string): void {
+    const dev = this.device;
+    const p = (pkt.payload ?? {}) as Record<string, unknown> & { type?: string };
+    if (p.type !== 'discover' && p.type !== 'request') {
+      core.drop(dev, pkt, 'dhcp-unknown', traceId);
+      return;
+    }
+    const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+    if (!inIface || !inIface.ip) {
+      core.drop(dev, pkt, 'dhcp-relay-no-ip', traceId);
+      return;
+    }
+    // Interface keluar menuju server (subnet sama atau via routing).
+    const egress = dev.resolveEgressIface(serverIp) || inIface;
+    const nh = dev.routing.lookup(serverIp);
+    const nextHopIp = nh?.gateway || serverIp;
+    const fwd = core.createPacket({
+      protocol: 'udp',
+      srcMac: egress.mac,
+      dstMac: '',
+      srcIp: egress.ip.address,
+      dstIp: serverIp,
+      srcPort: UDP_BOOTPS,
+      dstPort: UDP_BOOTPS,
+      ttl: 64,
+      traceId,
+      payload: { ...p, relayed: { clientMac: pkt.srcMac, clientIface: inIface.name } },
+    });
+    core.emit('DHCP_RELAY', traceId, { xid: p.xid, to: serverIp, clientMac: pkt.srcMac }, dev.id, inPort);
+    arpResolveAndSend(dev, fwd, egress.name, nextHopIp, core, traceId);
+    core.drop(dev, pkt, 'dhcp-consumed', traceId);
+  }
+
+  private handleDhcpRelayReply(pkt: Packet, inPort: string, core: SimulatorCore, traceId: string): void {
+    const dev = this.device;
+    const p = (pkt.payload ?? {}) as Record<string, unknown> & { relayed?: { clientMac: string; clientIface: string } };
+    const r = p.relayed!;
+    const clientIface = dev.getIfaceByName(r.clientIface) || dev.getIfaceByPortId(inPort) || null;
+    if (!clientIface) {
+      core.drop(dev, pkt, 'dhcp-relay-no-client-iface', traceId);
+      return;
+    }
+    // Relay tidak tahu IP klien (offer/ack berisi alamat yang ditawarkan di
+    // payload), jadi balasan ke segmen klien selalu dikirim sebagai broadcast
+    // unicast-frame (dstMac = MAC klien dari penanda relayed).
+    const reply = core.createPacket({
+      protocol: 'udp',
+      srcMac: clientIface.mac,
+      dstMac: r.clientMac,
+      srcIp: pkt.srcIp,
+      dstIp: '255.255.255.255',
+      srcPort: UDP_BOOTPS,
+      dstPort: UDP_BOOTPC,
+      ttl: 64,
+      traceId,
+      payload: { ...p, relayed: undefined },
+    });
+    core.emit('DHCP_RELAY_REPLY', traceId, { xid: p.xid, clientMac: r.clientMac }, dev.id, clientIface.name);
+    core.transmit(dev, reply, clientIface.name, traceId);
+    core.drop(dev, pkt, 'dhcp-consumed', traceId);
   }
 
   private ipInPool(ip: string, pool: NonNullable<ReturnType<typeof findServingPool>>): boolean {

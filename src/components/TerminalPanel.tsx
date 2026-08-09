@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Terminal, X, Minimize2, Maximize2, Send, BookOpen, ClipboardPaste, Copy, Check } from 'lucide-react';
 import { LabNode, TerminalLog } from '../types';
 import { VENDOR_MAP } from '../data/vendors';
@@ -89,7 +89,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Ctrl+V / Cmd+V â†’ smart paste: multi-line opens paste modal, single-line inserts directly
+    // Ctrl+V / Cmd+V → smart paste: multi-line opens paste modal, single-line inserts directly
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
       e.preventDefault();
       navigator.clipboard
@@ -107,7 +107,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       return;
     }
 
-    // Tab â†’ autocomplete
+    // Tab → autocomplete
     if (e.key === 'Tab') {
       e.preventDefault();
       const completion = getTabCompletion(vendor, inputVal.replace(/\?$/, '').trim());
@@ -300,7 +300,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         <div className="bg-slate-900/80 border-b border-slate-800 px-3 py-2 text-[11px] overflow-y-auto max-h-44 animate-in slide-in-from-top-2 fade-in duration-150">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-emerald-400 font-bold text-[10px] uppercase tracking-wide">
-              ðŸ“– Panduan Konfigurasi â€” {activeGuide.label}
+              📖 Panduan Konfigurasi — {activeGuide.label}
             </span>
             <span className="text-slate-500 text-[9px]">klik perintah untuk menjalankannya</span>
           </div>
@@ -317,7 +317,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 <span className="text-slate-500 shrink-0 pt-0.5">{step.title.split(' ')[0]}</span>
                 <span className="min-w-0">
                   <span className="font-mono text-emerald-300 group-hover:text-emerald-200 break-all">{step.command}</span>
-                  <span className="block text-slate-500 mt-0.5">{step.title.replace(/^\d+\.\s*/, '')}{step.note ? ` â€” ${step.note}` : ''}</span>
+                  <span className="block text-slate-500 mt-0.5">{step.title.replace(/^\d+\.\s*/, '')}{step.note ? ` — ${step.note}` : ''}</span>
                 </span>
               </button>
             ))}
@@ -373,7 +373,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       {showHints && hints.length > 0 && (
         <div className="mx-2 mb-0 border border-slate-700 rounded-t-md bg-slate-900 overflow-hidden shadow-xl max-h-56 overflow-y-auto">
           <div className="px-3 py-1 bg-slate-800 border-b border-slate-700 text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
-            <span>âŒ¨  Context Help â€” <span className="text-yellow-400">â†‘â†“</span> navigate Â· <span className="text-cyan-400">Enter</span> apply Â· <span className="text-slate-400">Esc</span> close</span>
+            <span>⌨  Context Help — <span className="text-yellow-400">↑↓</span> navigate · <span className="text-cyan-400">Enter</span> apply · <span className="text-slate-400">Esc</span> close</span>
             <span className="text-slate-500">{hints.length} matches</span>
           </div>
           {hints.map((hint, i) => (
@@ -429,7 +429,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </button>
       </form>
 
-      {/* Paste Modal â€” tempel teks yang sudah disiapkan */}
+      {/* Paste Modal — tempel teks yang sudah disiapkan */}
       {showPasteModal && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"

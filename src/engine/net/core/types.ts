@@ -88,6 +88,8 @@ export type SimEventType =
   | 'DHCP_ACK'
   | 'DHCP_RENEW'
   | 'DHCP_RELEASE'
+  | 'DHCP_RELAY'
+  | 'DHCP_RELAY_REPLY'
   | 'PING_REQUEST'
   | 'PING_REPLY'
   | 'ROUTING_UPDATE'
@@ -119,6 +121,12 @@ export interface LinkSpec {
   a: { nodeId: string; port: string };
   b: { nodeId: string; port: string };
   cableType: string;
+  /** latensi kabel (ms) — override nilai default sesuai tipe kabel */
+  latencyMs?: number;
+  /** bandwidth link (Mbps) */
+  bandwidthMbps?: number;
+  /** true = link sengaja dimatikan (failure injection) */
+  down?: boolean;
 }
 
 export interface DhcpPool {

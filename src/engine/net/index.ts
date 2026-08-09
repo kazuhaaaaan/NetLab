@@ -21,6 +21,8 @@ export type { DeviceProcessor, SimulatorCore } from './devices/DeviceProcessor';
 export { SwitchProcessor } from './devices/SwitchProcessor';
 export { RouterProcessor } from './devices/RouterProcessor';
 export { HostProcessor } from './devices/HostProcessor';
+export { computeFhrp, DEFAULT_FHRP_PRIORITY } from './services/FhrpService';
+export type { FhrpGroup, FhrpState, FhrpResult } from './services/FhrpService';
 export { MacTable } from './layer2/MacTable';
 export { ArpCache } from './layer2/ArpCache';
 export { RoutingTable } from './layer3/RoutingTable';

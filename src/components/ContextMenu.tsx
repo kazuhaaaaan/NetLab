@@ -9,6 +9,10 @@ interface ContextMenuProps {
   onOpenTerminal: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onDeleteEdge?: (edgeId: string) => void;
+  /** Perangkat yang sedang terpilih sekaligus (multi-select). */
+  selectedNodeIds?: string[];
+  /** Hapus semua perangkat yang terpilih sekaligus. */
+  onDeleteNodes?: (nodeIds: string[]) => void;
   onClose: () => void;
 }
 
@@ -20,8 +24,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onOpenTerminal,
   onDeleteNode,
   onDeleteEdge,
+  selectedNodeIds = [],
+  onDeleteNodes,
   onClose
 }) => {
+  const isMultiTarget =
+    !!targetId &&
+    targetType === 'node' &&
+    selectedNodeIds.includes(targetId) &&
+    selectedNodeIds.length > 1;
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -43,13 +54,17 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <div className="h-px bg-slate-800 my-1" />
           <button
             onClick={() => {
-              onDeleteNode(targetId);
+              if (isMultiTarget && onDeleteNodes) {
+                onDeleteNodes(selectedNodeIds);
+              } else {
+                onDeleteNode(targetId);
+              }
               onClose();
             }}
             className="w-full text-left px-2.5 py-1.5 rounded hover:bg-rose-950/60 text-rose-400 font-medium flex items-center space-x-2"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>Delete Device</span>
+            <span>{isMultiTarget ? `Delete Group (${selectedNodeIds.length})` : 'Delete Device'}</span>
           </button>
         </>
       )}

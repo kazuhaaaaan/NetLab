@@ -23,6 +23,8 @@ export interface PingSimResult {
   ttlAtDestination: number;
   /** true when the source obtained an IP automatically via DHCP */
   dhcpGranted?: boolean;
+  /** round-trip time (ms) dari latensi kabel di lintasan */
+  rttMs?: number;
   reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power' | 'refused';
 }
 
@@ -41,6 +43,25 @@ export interface DeviceStatsSnapshot {
   arp: { ip: string; mac: string }[];
   macTable: { mac: string; port: string }[];
   routes: { dst: string; gateway: string; iface: string; kind: string }[];
+  /** status spanning-tree per port (switch saja) */
+  stp?: {
+    rootId: string;
+    rootName: string;
+    rootPort: string | null;
+    ports: { port: string; role: string; state: string; cost: number }[];
+  };
+  /** kelompok VRRP yang diikuti (router saja) */
+  fhrp?: {
+    virtualAddress: string;
+    vip: string;
+    isMaster: boolean;
+    masterName: string;
+    priority: number;
+    interface?: string;
+    vrid?: number;
+  }[];
+  /** port-security per interface (switch saja) */
+  portSecurity?: Record<string, { limit: number; sticky: boolean; learned: string[] }>;
 }
 
 export interface DhcpLeaseInfo {
@@ -59,7 +80,8 @@ export interface DhcpLeaseGrant {
 }
 
 export interface RoutingMemoryShape {
-  ospf?: { enabled?: boolean; networks?: string[] };
+  /** interface → cost OSPF eksplisit (clé = nama interface) */
+  ospf?: { enabled?: boolean; networks?: string[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[] };
   rip?: { enabled?: boolean; networks?: string[] };
   eigrp?: { enabled?: boolean; asn?: number; networks?: string[] };
 }

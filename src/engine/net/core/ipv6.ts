@@ -8,7 +8,7 @@ export function isIpv6Address(ip: string): boolean {
   let s = ip.replace(/^\[|\]$/g, '');
   if (s.includes('.') || !s.includes(':')) return false;
   s = s.replace(/%[a-zA-Z0-9]+$/, '');
-  return /^[0-9a-fA-F:]*$/.test(s) && s.length > 2;
+  return /^[0-9a-fA-F:]*$/.test(s) && s.length >= 2;
 }
 
 /** Uraikan alamat v6 → 8 group 16-bit (angka). Tangani '::'. */

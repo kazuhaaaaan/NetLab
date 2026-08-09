@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   HelpCircle,
   MousePointer,
@@ -35,7 +35,7 @@ const GUIDE_STEPS: GuideStep[] = [
   {
     icon: <Rocket className="w-5 h-5" />,
     title: 'Selamat Datang di Mikrolab',
-    desc: 'Simulator jaringan enterprise yang berjalan sepenuhnya di browser â€” tanpa install, tanpa server. Semua yang kamu kerjakan tersimpan otomatis.',
+    desc: 'Simulator jaringan enterprise yang berjalan sepenuhnya di browser — tanpa install, tanpa server. Semua yang kamu kerjakan tersimpan otomatis.',
     points: [
       { label: 'Simpan Otomatis', text: 'Topologi, konfigurasi CLI, dan log terminal tetap tersimpan saat halaman di-reload.' },
       { label: 'Anti Hilang', text: 'Undo/Redo (Ctrl+Z / Ctrl+Y) untuk membatalkan atau mengulang perubahan.' },
@@ -48,7 +48,7 @@ const GUIDE_STEPS: GuideStep[] = [
     desc: 'Semua perangkat tersedia di panel kiri (Sidebar) dikelompokkan per vendor: MikroTik, Cisco, Juniper, Huawei, Fortinet, Ubiquiti, dan lainnya.',
     points: [
       { label: 'Pilih Vendor', text: 'Klik vendor di sidebar untuk melihat daftar model perangkatnya.' },
-      { label: 'Tambah ke Canvas', text: 'Klik nama model â€” perangkat langsung muncul di kanvas.' },
+      { label: 'Tambah ke Canvas', text: 'Klik nama model — perangkat langsung muncul di kanvas.' },
       { label: 'Atur Posisi', text: 'Seret perangkat untuk menata posisinya di kanvas.' },
       { label: 'Klik = Pilih', text: 'Klik perangkat untuk memilihnya, klik kanan untuk menu hapus.' },
     ],
@@ -60,7 +60,7 @@ const GUIDE_STEPS: GuideStep[] = [
     points: [
       { label: 'Mulai Wizard', text: 'Klik tombol kabel di toolbar, atau tombol "+" pada perangkat.' },
       { label: 'Pilih Tipe Kabel', text: 'Wajib pilih Copper Straight, Crossover, Fiber, atau Serial sebelum memilih port.' },
-      { label: 'Sumber â†’ Tujuan', text: 'Klik perangkat sumber â†’ pilih port â†’ klik perangkat tujuan â†’ pilih port.' },
+      { label: 'Sumber → Tujuan', text: 'Klik perangkat sumber → pilih port → klik perangkat tujuan → pilih port.' },
       { label: 'Port Tidak Cocok', text: 'Port yang tidak sesuai tipe kabel otomatis dinonaktifkan (contoh: kabel fiber tidak masuk ke port copper).' },
       { label: 'Info Kabel', text: 'Arahkan kursor ke kabel untuk melihat perangkat & port yang terhubung.' },
     ],
@@ -82,7 +82,7 @@ const GUIDE_STEPS: GuideStep[] = [
     desc: 'Lanjutkan dengan template siap pakai atau uji konektivitas antar perangkat dengan simulasi ping.',
     points: [
       { label: 'Template Cepat', text: 'Dropdown Templates: "Mudah" (router + switch + PC) atau "ISP / Data Center Lab" (16 perangkat).' },
-      { label: 'Simulasi Ping', text: 'Gunakan panel Ping: pilih sumber â†’ pilih tujuan â†’ lihat hasilnya (TTL & hop).' },
+      { label: 'Simulasi Ping', text: 'Gunakan panel Ping: pilih sumber → pilih tujuan → lihat hasilnya (TTL & hop).' },
       { label: 'Zoom & Pan', text: 'Scroll / pinch touchpad untuk zoom, seret area kosong (atau dua jari) untuk pan.' },
       { label: 'Export/Import', text: 'Simpan topologi ke file .mlab atau buka kembali proyek dari file.' },
     ],

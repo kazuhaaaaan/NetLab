@@ -53,6 +53,21 @@ export class SwitchProcessor implements DeviceProcessor {
     const aged = dev.macTable.age(core.now);
     if (aged.length > 0) core.emit('MAC_AGED', traceId, { macs: aged }, dev.id);
 
+    // 1b) Port-security: batasi MAC yang boleh lewat per port (enforcement di sini
+    // sebelum forwarding agar frame dari MAC "asing" di atas limit tidak diteruskan).
+    const ps = dev.portSecurityCfg[inName];
+    if (ps && ps.limit && ps.limit > 0) {
+      const known = ps.learned.includes(pkt.srcMac);
+      if (!known) {
+        if (ps.learned.length >= ps.limit) {
+          core.emit('PACKET_DROPPED', traceId, { reason: 'port-security-violation' }, dev.id, inPort);
+          core.drop(dev, pkt, 'port-security-violation', traceId);
+          return;
+        }
+        ps.learned.push(pkt.srcMac);
+      }
+    }
+
     // 2) Keputusan forwarding
     const broadcast = isBroadcastMac(pkt.dstMac);
     if (broadcast) {

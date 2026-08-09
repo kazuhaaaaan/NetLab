@@ -13,6 +13,7 @@ import { AclRule, DeviceKind, DhcpPool, DnsRecord, NatRule, NetLease, NetRoute }
 import { parseCidr, networkOf, intToIp } from '../core/ip';
 import { parseIpv6Cidr, ipv6NetworkString, inSameIpv6Subnet } from '../core/ipv6';
 import { DEFAULT_STP_MODE, DEFAULT_STP_PRIORITY, StpBridgeState, StpConfig, StpPortState } from '../services/StpService';
+import { FhrpGroup } from '../services/FhrpService';
 import { WirelessIfaceCfg, WirelessProfileCfg, WirelessState } from '../services/WirelessService';
 import { freshQosState, MangleRule, QosState, SimpleQueue } from '../services/QosService';
 import type { SnmpAgentConfig } from '../compat';
@@ -61,7 +62,7 @@ export class NetworkDevice {
   aclRules: AclRule[] = [];
   natRules: NatRule[] = [];
   webServer: WebServerState | null = null;
-  routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[] }> = {};
+  routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[] }> = {};
   bgpCfg: { asn: number; peers: { remoteAs: number; remoteAddr: string }[]; networks: string[] } | null = null;
   /** Agent SNMP (community, hidup/mati) — diisi via CLI + engine. */
   snmpAgent: SnmpAgentConfig | null = null;
@@ -73,6 +74,22 @@ export class NetworkDevice {
   /** portId → role/state STP (diisi computeStp). */
   stpPorts: Map<string, StpPortState> = new Map();
   stpState: StpBridgeState | null = null;
+
+  // ── FHRP (VRRP-style) ────────────────────────────────────────
+  /** Grup virtual IP yang diikuti perangkat ini (diisi via CLI). */
+  fhrpGroups: FhrpGroup[] = [];
+  /** Virtual IP yang "dimiliki" perangkat ini (hanya master, diisi computeFhrp). */
+  virtualIps: string[] = [];
+
+  // ── DHCP relay & port-security & SLAAC ──────────────────────
+  /** port (nama interface) → alamat server DHCP (ip helper-address). */
+  dhcpRelays: Record<string, string> = {};
+  /** port (nama interface) → konfigurasi port-security (limit/sticky/macs belajar). */
+  portSecurityCfg: Record<string, { limit?: number; sticky?: boolean; learned: string[] }> = {};
+  /** interface yang memakai SLAAC/DHCPv6 client (autoconfig). */
+  slaacIfaces: string[] = [];
+  /** hasil alamat SLAAC (iface → cidr) agar info/print konsisten. */
+  slaacAddresses: Record<string, string> = {};
 
   // ── Wireless (AP/station) ────────────────────────────────────
   /** nama interface → konfigurasi wireless (ssid/mode/band/security). */
@@ -312,6 +329,14 @@ export class NetworkDevice {
   }
 
   hasIp(ip: string): NetworkInterfaceModel | null {
+    if (this.virtualIps.includes(ip)) {
+      // FHRP: virtual IP dimiliki master — kaitkan ke interface grup (atau
+      // interface up pertama) agar paket diterima & dibalas oleh master.
+      const g = this.fhrpGroups.find((grp) => grp.virtualAddress.split('/')[0] === ip);
+      const viaName = g?.interface ?? '';
+      const named = viaName ? this.getIfaceByName(viaName) : null;
+      return named || this.getInterfaces().find((i) => i.up) || this.getInterfaces()[0] || null;
+    }
     for (const iface of this.interfaces.values()) {
       if (iface.ip && iface.ip.address === ip) return iface;
     }

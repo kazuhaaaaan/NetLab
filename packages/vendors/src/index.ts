@@ -85,6 +85,9 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
             ? `routing_${s0}_${s1}`
             : `routing_${s0}`;
           action = isPrefix(s1, 'instance') || isPrefix(s1, 'network') ? verb : s1 || 'print';
+        } else if (isPrefix(s0, 'vrrp')) {
+          target = `routing_vrrp_${s1 || 'instance'}`;
+          action = (ast.subCommands[2] || (s1 || 'print')).toLowerCase();
         }
       }
       if (isPrefix(action, 'interface') && isPrefix(s0, 'wireless')) {
@@ -229,6 +232,44 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
     if (cmdResult.type === 'identity_print') {
       return `name: ${cmdResult.name || 'MikroTik'}`;
     }
+    if (cmdResult.type === 'fhrp_print') {
+      const groups = cmdResult.groups || [];
+      const header = 'Flags: R - running, M - master\nColumns: NAME, INTERFACE, VRID, STATE, IP-ADDRESS, PRIORITY\n';
+      const rows = groups.map((g: any, i: number) => {
+        const isMaster = g.isMaster === true;
+        const addr = g.virtualAddress || g.vip || '0.0.0.0/24';
+        const name = g.masterName || `vrrp${i + 1}`;
+        return ` R ${isMaster ? 'M' : 'B'} name=${name} interface=${g.interface || ''} vrid=${g.vrid || 1} state=${isMaster ? 'MASTER' : 'BACKUP'} address=${addr} priority=${g.priority ?? 100}`;
+      });
+      return header + (rows.join('\n') || ' -- no entries --');
+    }
+    if (cmdResult.type === 'ipv6_print') {
+      const info = cmdResult.info;
+      if (!info) return ' -- no IPv6 configuration --';
+      const addrRows = (info.addresses || []).map((a: any) => ` ${String(a.iface || '').padEnd(9)} ${a.address}/${a.prefix}`);
+      const routeRows = (info.routes || []).map((r: any) => ` ${(r.dst || '').padEnd(24)} ${r.gateway ? 'via ' + r.gateway : '---'}`);
+      const neighRows = (info.neighbors || []).map((n: any) => ` ${String(n.ip || '').padEnd(24)} ${String(n.mac || '').padEnd(18)} ${n.iface || ''}`);
+      return [
+        'Columns: INTERFACE, ADDRESS',
+        ...(addrRows.length ? addrRows : [' -- no IPv6 addresses --']),
+        '',
+        'Columns: DST-ADDRESS, GATEWAY',
+        ...(routeRows.length ? routeRows : [' -- no IPv6 routes --']),
+        '',
+        'Columns: ADDRESS, MAC-ADDRESS, INTERFACE',
+        ...(neighRows.length ? neighRows : [' -- no IPv6 neighbors --']),
+      ].join('\n');
+    }
+    if (cmdResult.type === 'ipv6_dhcp_print') {
+      const clients = cmdResult.clients || [];
+      const info = cmdResult.info || {};
+      const rows = clients.map((iface: string) => {
+        const addr = (info.addresses || []).find((a: any) => a.iface === iface);
+        return ` ${iface.padEnd(9)} state=BOUND address=${addr ? `${addr.address}/${addr.prefix}` : 'slaac-pending'} prefix-len=64`;
+      });
+      const header = 'Columns: INTERFACE, STATE, ADDRESS\nFlags: X - disabled, R - running\n';
+      return header + (rows.join('\n') || ' -- no entries --');
+    }
     return String(cmdResult.raw ?? formatExtended(cmdResult) ?? '');
   }
 }
@@ -270,7 +311,7 @@ export class CiscoVendorAdapter implements IVendorAdapter {
     if (isPrefix(action, 'ip') && isPrefix(subs[0], 'address')) return { action: 'add_ip', target: 'ios', payload: { raw: rawInput, ast, ip: subs[1], mask: subs[2] } };
     if (isPrefix(action, 'router') && isPrefix(subs[0], 'bgp')) return { action: 'bgp_router', target: 'ios', payload: { raw: rawInput, ast, as: subs[1] } };
     if (isPrefix(action, 'neighbor') && isPrefix(subs[1], 'remote-as')) return { action: 'bgp_neighbor', target: 'ios', payload: { raw: rawInput, ast, ip: subs[0], remoteAs: subs[2] } };
-    if (isPrefix(action, 'write') || (isPrefix(action, 'copy') && isPrefix(subs[0], 'run') && isPrefix(subs[1], 'start'))) return { action: 'write_mem', target: 'ios', payload: { raw: rawInput, ast } };
+    if (isPrefix(action, 'write') || (isPrefix(action, 'copy') && isPrefix(subs[0], 'running-config') && isPrefix(subs[1], 'startup-config'))) return { action: 'write_mem', target: 'ios', payload: { raw: rawInput, ast } };
 
     return { action: action || 'EXEC_COMMAND', target: 'ios', payload: { raw: rawInput, ast } };
   }
@@ -323,6 +364,11 @@ export class CiscoVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'write_mem') {
       return 'Building configuration...\n[OK]';
+    }
+    if (cmdResult.type === 'reload') {
+      return cmdResult.hadStartup
+        ? 'System configuration has been modified. Save? [yes/no]: yes\nProceed with reload? [confirm]\n\n*Mar  1 00:00:05.999: %SYS-5-RELOAD: Reload requested by console.\nReloading...\n[OK]\nDevice restarted. Startup-configuration loaded.'
+        : '*Mar  1 00:00:05.999: %SYS-5-RELOAD: Reload requested by console.\nReloading...\n[OK]\nNo startup-configuration present. Device started with default configuration.';
     }
     if (cmdResult.type === 'ping') {
       const host = cmdResult.host || '10.0.0.1';
@@ -1292,67 +1338,97 @@ export class VendorDispatcher {
   /** Public accessor for per-node in-memory config (IPs, routes, BGP, services). */
   getNodeMemory(nodeId: string): any {
     if (!this.nodeMemory.has(nodeId)) {
-      this.nodeMemory.set(nodeId, {
-        configuredIps: {},
-        routes: [],
-        bgp: { asn: '', routerId: '', peers: [] },
-        snmp: { enabled: false, community: 'public', communityRW: 'private', sysContact: '', sysLocation: '' },
-        hostname: '',
-        modelLabel: '',
-        vlans: [],
-        dnsServers: [],
-        dnsRecords: [],
-        webServer: { enabled: true, port: 80, content: '' },
-        dhcpPools: [],
-        dhcpClients: [],
-        natRules: [],
-        acls: [],
-        portVlans: {},
-        routing: {
-          ospf: { enabled: false, networks: [] },
-          rip: { enabled: false, networks: [] },
-          eigrp: { enabled: false, asn: 0, networks: [] },
-        },
-        shutdownIfaces: [],
-        subinterfaces: [],
-        trunkPorts: [],
-        queues: [],
-        mangleRules: [],
-        wireless: {},
-        wirelessSecurityProfiles: {},
-        stp: { enabled: true, priority: 32768, mode: 'rstp' },
-        currentSsid: '',
-        currentStaticDst: '',
-        currentDhcpPool: '',
-        currentProto: '',
-        natInsideIfaces: [],
-        natOutsideIfaces: [],
-        natAcls: {},
-        currentDhcpSection: '',
-        currentDhcpRange: false,
-        bgpGroups: {},
-        // — state internal per-vendor (Fortinet, Juniper, VyOS, Huawei, OpenWrt, Linux) —
-        fortiPath: [] as string[],
-        fortiInRange: false,
-        fortiDhcpIdx: 0,
-        fortiRangeIdx: 0,
-        fortiPendingVlan: 0,
-        fortiAddresses: {} as Record<string, string>,
-        fortiDraft: {} as Record<string, any>,
-        fortiBgpPeer: '',
-        fortiDhcpClient: '',
-        currentAclId: '',
-        natSrcDraft: {} as Record<string, any>,
-        natDstDraft: {} as Record<string, any>,
-        juniperSrcNat: {} as Record<string, any>,
-        juniperDstPool: {} as Record<string, any>,
-        uciPending: {} as Record<string, string>,
-        uciRedirects: {} as Record<string, Record<string, string>>,
-        juniperFilters: {} as Record<string, any>,
-        fortiAddrName: '',
-      });
+      this.nodeMemory.set(nodeId, this.blankNodeMemory());
     }
     return this.nodeMemory.get(nodeId);
+  }
+
+  /** Snapshot per-node yang disimpan "startup-config" (write memory / save). */
+  private startupConfigs = new Map<string, any>();
+
+  /** State mentah default sebuah node (running-config kosong). */
+  private blankNodeMemory(): any {
+    return {
+      configuredIps: {},
+      routes: [],
+      bgp: { asn: '', routerId: '', peers: [] },
+      snmp: { enabled: false, community: 'public', communityRW: 'private', sysContact: '', sysLocation: '' },
+      hostname: '',
+      modelLabel: '',
+      vlans: [],
+      dnsServers: [],
+      dnsRecords: [],
+      webServer: { enabled: true, port: 80, content: '' },
+      dhcpPools: [],
+      dhcpClients: [],
+      natRules: [],
+      acls: [],
+      portVlans: {},
+      routing: {
+        ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [] },
+        rip: { enabled: false, networks: [] },
+        eigrp: { enabled: false, asn: 0, networks: [] },
+      },
+      shutdownIfaces: [],
+      subinterfaces: [],
+      trunkPorts: [],
+      queues: [],
+      mangleRules: [],
+      wireless: {},
+      wirelessSecurityProfiles: {},
+      stp: { enabled: true, priority: 32768, mode: 'rstp' },
+      currentSsid: '',
+      currentStaticDst: '',
+      currentDhcpPool: '',
+      currentProto: '',
+      natInsideIfaces: [],
+      natOutsideIfaces: [],
+      natAcls: {},
+      currentDhcpSection: '',
+      currentDhcpRange: false,
+      bgpGroups: {},
+      // — IPv6 & FHRP (VRRP) —
+      configuredIps6: {},
+      routes6: [],
+      fhrpGroups: [],
+      // — DHCP relay (ip helper-address) & port-security & DHCPv6/SLAAC —
+      dhcpRelays: {},
+      portSecurity: {},
+      ipv6DhcpClients: [],
+      // — state internal per-vendor (Fortinet, Juniper, VyOS, Huawei, OpenWrt, Linux) —
+      fortiPath: [] as string[],
+      fortiInRange: false,
+      fortiDhcpIdx: 0,
+      fortiRangeIdx: 0,
+      fortiPendingVlan: 0,
+      fortiAddresses: {} as Record<string, string>,
+      fortiDraft: {} as Record<string, any>,
+      fortiBgpPeer: '',
+      fortiDhcpClient: '',
+      currentAclId: '',
+      natSrcDraft: {} as Record<string, any>,
+      natDstDraft: {} as Record<string, any>,
+      juniperSrcNat: {} as Record<string, any>,
+      juniperDstPool: {} as Record<string, any>,
+      uciPending: {} as Record<string, string>,
+      uciRedirects: {} as Record<string, Record<string, string>>,
+      juniperFilters: {} as Record<string, any>,
+      fortiAddrName: '',
+    };
+  }
+
+  /** Snapshot running-config node menjadi startup-config (write memory / save). */
+  private saveStartupConfig(nodeId: string): void {
+    const mem = this.nodeMemory.get(nodeId);
+    if (mem) this.startupConfigs.set(nodeId, JSON.parse(JSON.stringify(mem)));
+  }
+
+  /** Restore node dari startup-config (reload) — tanpa snapshot → default bersih. */
+  private reloadFromStartupConfig(nodeId: string): boolean {
+    const saved = this.startupConfigs.get(nodeId);
+    if (saved) this.nodeMemory.set(nodeId, JSON.parse(JSON.stringify(saved)));
+    else this.nodeMemory.set(nodeId, this.blankNodeMemory());
+    return !!saved;
   }
 
   /** Set the hardware model label for a node (used in show version output). */
@@ -1393,7 +1469,7 @@ export class VendorDispatcher {
       if (mem.portVlans && typeof mem.portVlans === 'object') target.portVlans = { ...target.portVlans, ...mem.portVlans };
       if (mem.routing && typeof mem.routing === 'object') {
         target.routing = {
-          ospf: { enabled: false, networks: [], ...(mem.routing.ospf || {}) },
+          ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [], ...(mem.routing.ospf || {}) },
           rip: { enabled: false, networks: [], ...(mem.routing.rip || {}) },
           eigrp: { enabled: false, asn: 0, networks: [], ...(mem.routing.eigrp || {}) },
         };
@@ -1411,6 +1487,12 @@ export class VendorDispatcher {
       if (mem.wirelessSecurityProfiles && typeof mem.wirelessSecurityProfiles === 'object') target.wirelessSecurityProfiles = { ...mem.wirelessSecurityProfiles };
       if (typeof mem.currentSsid === 'string') target.currentSsid = mem.currentSsid;
       if (mem.stp && typeof mem.stp === 'object') target.stp = { enabled: true, priority: 32768, mode: 'rstp', ...mem.stp };
+      if (mem.configuredIps6 && typeof mem.configuredIps6 === 'object') target.configuredIps6 = { ...target.configuredIps6, ...mem.configuredIps6 };
+      if (Array.isArray(mem.routes6)) target.routes6 = mem.routes6;
+      if (Array.isArray(mem.fhrpGroups)) target.fhrpGroups = mem.fhrpGroups;
+      if (mem.dhcpRelays && typeof mem.dhcpRelays === 'object') target.dhcpRelays = { ...target.dhcpRelays, ...mem.dhcpRelays };
+      if (mem.portSecurity && typeof mem.portSecurity === 'object') target.portSecurity = { ...mem.portSecurity };
+      if (Array.isArray(mem.ipv6DhcpClients)) target.ipv6DhcpClients = mem.ipv6DhcpClients;
       if (Array.isArray(mem.natInsideIfaces)) target.natInsideIfaces = mem.natInsideIfaces;
       if (Array.isArray(mem.natOutsideIfaces)) target.natOutsideIfaces = mem.natOutsideIfaces;
       if (mem.natAcls && typeof mem.natAcls === 'object') target.natAcls = { ...target.natAcls, ...mem.natAcls };
@@ -1559,6 +1641,42 @@ export class VendorDispatcher {
         const before = mem.dnsRecords.length;
         mem.dnsRecords = mem.dnsRecords.filter((d: any) => d.name !== hostMatch[1].toLowerCase());
         if (mem.dnsRecords.length === before) return err(`% Host ${hostMatch[1]} does not exist`);
+        return { raw: '' };
+      }
+      // no ip ospf cost <n> — hapus cost interface OSPF
+      if (/^no\s+(?:ip\s+)?ospf\s+cost\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected');
+        if (!mem.routing.ospf.interfaceCosts[mem.currentIface]) return err(`% No OSPF cost configured on ${mem.currentIface}`);
+        delete mem.routing.ospf.interfaceCosts[mem.currentIface];
+        return { raw: '' };
+      }
+      // no passive-interface <iface> — aktifkan adjacency kembali
+      const noPassive = input.match(/^no\s+passive-interface\s+(\S+)\s*$/i);
+      if (noPassive) {
+        const iface = resolveIfaceName(context?.ports, noPassive[1]) || noPassive[1];
+        const before = (mem.routing.ospf.passiveInterfaces || []).length;
+        mem.routing.ospf.passiveInterfaces = (mem.routing.ospf.passiveInterfaces || []).filter((i: string) => i !== iface);
+        if (mem.routing.ospf.passiveInterfaces.length === before) return err(`% Interface ${iface} is not passive`);
+        return { raw: '' };
+      }
+      // no ip helper-address — hapus DHCP relay
+      if (/^no\s+ip\s+helper-address\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected');
+        if (!mem.dhcpRelays[mem.currentIface]) return err(`% No helper-address configured on ${mem.currentIface}`);
+        delete mem.dhcpRelays[mem.currentIface];
+        return { raw: '' };
+      }
+      // no switchport port-security — matikan port security
+      if (/^no\s+switchport\s+port-security\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected');
+        if (!mem.portSecurity[mem.currentIface]) return err(`% Port security not configured on ${mem.currentIface}`);
+        delete mem.portSecurity[mem.currentIface];
+        return { raw: '' };
+      }
+      // no ipv6 address autoconfig — hentikan SLAAC pada interface
+      if (/^no\s+ipv6\s+address\s+(?:autoconfig|dhcp)\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected');
+        mem.ipv6DhcpClients = (mem.ipv6DhcpClients || []).filter((i: string) => i !== mem.currentIface);
         return { raw: '' };
       }
       // no ip name-server [<ip>]
@@ -1736,6 +1854,34 @@ export class VendorDispatcher {
         const before = mem.dhcpClients.length;
         mem.dhcpClients = (mem.dhcpClients || []).filter((c: any) => c.iface !== iface);
         if (mem.dhcpClients.length === before) return fail('no such dhcp client');
+        return { raw: '' };
+      }
+      // /ip dhcp-relay remove [find interface=…] — hapus DHCP relay
+      if (/^\/ip\s+dhcp-relay\s+remove\b/i.test(input)) {
+        const ifaceRaw = findIface || (input.match(/interface=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        if (!iface) return err('% Usage: /ip dhcp-relay remove [find interface=<iface>]');
+        if (!mem.dhcpRelays[iface]) return fail('no such dhcp relay');
+        delete mem.dhcpRelays[iface];
+        return { raw: '' };
+      }
+      // /ipv6 dhcp-client remove [find interface=…] — hentikan SLAAC/DHCPv6 client
+      if (/^\/ipv6\s+dhcp-client\s+remove\b/i.test(input)) {
+        const ifaceRaw = findIface || (input.match(/interface=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        if (!iface) return err('% Usage: /ipv6 dhcp-client remove [find interface=<iface>]');
+        const before = (mem.ipv6DhcpClients || []).length;
+        mem.ipv6DhcpClients = (mem.ipv6DhcpClients || []).filter((i: string) => i !== iface);
+        if (mem.ipv6DhcpClients.length === before) return fail('no such ipv6 dhcp client');
+        return { raw: '' };
+      }
+      // /routing ospf interface remove [find interface=…] — hapus cost/passive OSPF
+      if (/^\/routing\s+ospf\s+interface\s+remove\b/i.test(input)) {
+        const ifaceRaw = findIface || (input.match(/interface=([^\s\]]+)/i)?.[1] || '').replace(/[",]/g, '');
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        if (!iface) return err('% Usage: /routing ospf interface remove [find interface=<iface>]');
+        delete mem.routing.ospf.interfaceCosts[iface];
+        mem.routing.ospf.passiveInterfaces = (mem.routing.ospf.passiveInterfaces || []).filter((i: string) => i !== iface);
         return { raw: '' };
       }
       // /ip dns static remove [find name=…]
@@ -2012,6 +2158,10 @@ export class VendorDispatcher {
     } else if ((cmdResult = this.handleDeletion(rawInput, normalized, vendorId, mem, context)) !== undefined) {
       // Configuration deletion (no …, /ip … remove, delete …, undo …, uci delete …)
       // mutates real state instead of returning fake success.
+    } else if (/^(?:reload|reboot)\s*$|^\/system\s+reboot\s*$/i.test(rawInput.trim())) {
+      // Reload: restore node dari startup-config (write memory / copy run start).
+      const hadStartup = this.reloadFromStartupConfig(nodeId);
+      cmdResult = { type: 'reload', hadStartup };
     } else if ((cmdResult = snmpCommand(rawInput, vendorId, mem, context)) !== undefined) {
       // SNMP: konfigurasi agent per vendor + query snmpget/snmpwalk/snmpset.
       // Selalu dicek duluan agar perintah agent tidak tabrakan dengan parser bawaan.
@@ -2067,12 +2217,200 @@ export class VendorDispatcher {
       const down = !/^no\s+/i.test(rawInput.trim());
       setShutdownState(mem, mem.currentIface, down);
       cmdResult = { raw: '' };
+    } else if (/^(?:ip\s+)?ospf\s+cost\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+      // Cisco/Huawei: "ip ospf cost <n>" (interface view) — cost interface OSPF
+      const cost = parseInt(rawInput.trim().match(/^(?:ip\s+)?ospf\s+cost\s+(\d+)/i)?.[1] || '0', 10);
+      if (cost >= 1 && cost <= 65535) {
+        mem.routing.ospf.interfaceCosts[mem.currentIface] = cost;
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Range of values is 1 to 65535' };
+      }
+    } else if (/^passive-interface\s+(\S+)/i.test(rawInput.trim()) && mem.currentProto === 'ospf' && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "passive-interface <iface>" (router ospf view) — tidak membentuk adjacency
+      const iface = resolveIfaceName(context?.ports, rawInput.trim().match(/^passive-interface\s+(\S+)/i)?.[1] || '') || '';
+      if (iface && !mem.routing.ospf.passiveInterfaces.includes(iface)) {
+        mem.routing.ospf.passiveInterfaces.push(iface);
+      }
+      cmdResult = { raw: '' };
+    } else if (/^silent-interface\s+(\S+)/i.test(rawInput.trim()) && mem.currentProto === 'ospf' && vendorId === 'huawei') {
+      // Huawei: "silent-interface <iface>" di router ospf — padanan passive-interface
+      const iface = resolveIfaceName(context?.ports, rawInput.trim().match(/^silent-interface\s+(\S+)/i)?.[1] || '') || '';
+      if (iface && !mem.routing.ospf.passiveInterfaces.includes(iface)) {
+        mem.routing.ospf.passiveInterfaces.push(iface);
+      }
+      cmdResult = { raw: '' };
+    } else if (/^\/routing\s+ospf\s+interface\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/routing ospf interface add interface=ether1 cost=10 passive=yes"
+      const raw = rawInput.trim();
+      const ifaceRaw = raw.match(/interface=(\S+)/i)?.[1];
+      if (ifaceRaw) {
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        const cost = parseInt(raw.match(/cost=(\d+)/i)?.[1] || '0', 10);
+        if (cost >= 1) mem.routing.ospf.interfaceCosts[iface] = cost;
+        if (/passive=(?:yes|true)/i.test(raw) && !mem.routing.ospf.passiveInterfaces.includes(iface)) {
+          mem.routing.ospf.passiveInterfaces.push(iface);
+        }
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /routing ospf interface add interface=<port> cost=<1-65535> passive=yes' };
+      }
+    } else if (/^\/ip\s+dhcp-relay\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ip dhcp-relay add name=relay1 interface=ether1 dhcp-server=10.0.2.1"
+      const raw = rawInput.trim();
+      const ifaceRaw = raw.match(/interface=(\S+)/i)?.[1];
+      const server = raw.match(/dhcp-server=(\S+)/i)?.[1];
+      if (ifaceRaw && server) {
+        mem.dhcpRelays[resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw] = server;
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /ip dhcp-relay add interface=<port> dhcp-server=<ip>' };
+      }
+    } else if (/^ip\s+helper-address\s+(\d+\.\d+\.\d+\.\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "ip helper-address <ip>" (interface view) — DHCP relay
+      mem.dhcpRelays[mem.currentIface] = rawInput.trim().match(/^ip\s+helper-address\s+(\d+\.\d+\.\d+\.\d+)/i)?.[1] || '';
+      cmdResult = { raw: '' };
+    } else if (/^\/ipv6\s+dhcp-client\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ipv6 dhcp-client add interface=ether1" — SLAAC/PD pada interface
+      const ifaceRaw = rawInput.trim().match(/interface=(\S+)/i)?.[1];
+      if (ifaceRaw) {
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        if (!mem.ipv6DhcpClients.includes(iface)) mem.ipv6DhcpClients.push(iface);
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /ipv6 dhcp-client add interface=<port>' };
+      }
+    } else if (/^ipv6\s+address\s+(?:autoconfig|dhcp)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+      // Cisco/Huawei: "ipv6 address autoconfig" (interface view) — SLAAC
+      if (!mem.ipv6DhcpClients.includes(mem.currentIface)) mem.ipv6DhcpClients.push(mem.currentIface);
+      cmdResult = { raw: '' };
+    } else if (/^switchport\s+port-security$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "switchport port-security" (interface view) — aktifkan port security (max default 1)
+      const cur = mem.portSecurity[mem.currentIface] || {};
+      mem.portSecurity[mem.currentIface] = { ...cur, limit: cur.limit || 1, sticky: !!cur.sticky };
+      cmdResult = { raw: '' };
+    } else if (/^switchport\s+port-security\s+maximum\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      const m = rawInput.trim().match(/^switchport\s+port-security\s+maximum\s+(\d+)/i);
+      const limit = parseInt(m?.[1] || '1', 10);
+      if (limit >= 1 && limit <= 132) {
+        const cur = mem.portSecurity[mem.currentIface] || {};
+        mem.portSecurity[mem.currentIface] = { ...cur, limit, sticky: !!cur.sticky };
+        cmdResult = { raw: '' };
+      }
+    } else if (/^switchport\s+port-security\s+mac-address\s+sticky/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      const cur = mem.portSecurity[mem.currentIface] || {};
+      mem.portSecurity[mem.currentIface] = { ...cur, sticky: true, limit: cur.limit || 1 };
+      cmdResult = { raw: '' };
+    } else if (/^switchport\s+port-security\s+violation\s+(\S+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      const mode = rawInput.trim().match(/^switchport\s+port-security\s+violation\s+(\S+)/i)?.[1]?.toLowerCase() || 'restrict';
+      const cur = mem.portSecurity[mem.currentIface] || {};
+      mem.portSecurity[mem.currentIface] = { ...cur, violation: mode, limit: cur.limit || 1, sticky: !!cur.sticky };
+      cmdResult = { raw: '' };
+    } else if (/^switchport\s+mode\s+access/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      cmdResult = { raw: '' };
     } else if (/^\/interface\s+(disable|enable)\s+(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       // MikroTik: "/interface disable ether1" / "/interface enable ether1"
       const down = /^\/interface\s+disable\s+/i.test(rawInput.trim());
       const iface = resolveIfaceName(context?.ports, rawInput.trim().split(/\s+/).pop()) || '';
       setShutdownState(mem, iface, down);
       cmdResult = { raw: '' };
+    } else if (/^\/ipv6\s+address\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ipv6 address add address=2001:db8::1/64 interface=ether1"
+      const addr = rawInput.trim().match(/address=(\S+)/i)?.[1];
+      const ifaceRaw = rawInput.trim().match(/interface=(\S+)/i)?.[1];
+      if (addr && ifaceRaw) {
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        mem.configuredIps6[iface] = addr;
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /ipv6 address add address=<ip/prefix> interface=<port>' };
+      }
+    } else if (/^\/ipv6\s+route\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ipv6 route add dst-address=2001:db8::/64 gateway=2001:db8:ff::1"
+      const dst = rawInput.trim().match(/dst-address=(\S+)/i)?.[1];
+      const gw = rawInput.trim().match(/gateway=(\S+)/i)?.[1];
+      if (dst && gw) {
+        if (!mem.routes6.some((r: any) => r.dst === dst)) mem.routes6.push({ dst, gateway: gw });
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /ipv6 route add dst-address=<jaringan/prefix> gateway=<gw>' };
+      }
+    } else if (/(?:^ipv6\s+address\s+)(\S+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+      // Cisco/Huawei: "ipv6 address 2001:db8::1/64" (interface view)
+      const addr = rawInput.trim().match(/^ipv6\s+address\s+(\S+)/i)?.[1];
+      if (addr) {
+        mem.configuredIps6[mem.currentIface] = addr;
+        cmdResult = { raw: '' };
+      }
+    } else if (/^ipv6\s+route\s+(\S+)\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "ipv6 route 2001:db8:2::/64 2001:db8:ff::2"
+      const m = rawInput.trim().match(/^ipv6\s+route\s+(\S+)\s+(\S+)/i);
+      if (m) {
+        if (!mem.routes6.some((r: any) => r.dst === m![1] && r.gateway === m![2])) mem.routes6.push({ dst: m[1], gateway: m[2] });
+        cmdResult = { raw: '' };
+      }
+    } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^ip\s+-6\s+route\s+add\s+/i.test(rawInput.trim())) {
+      // Linux: "ip -6 route add 2001:db8:2::/64 via 2001:db8:ff::2" / "ip -6 route add default via 2001:db8:1::1"
+      const m = rawInput.trim().match(/^ip\s+-6\s+route\s+add\s+(\S+)\s+via\s+(\S+)/i);
+      if (m) {
+        const dst = m[1].toLowerCase() === 'default' ? '::/0' : m[1];
+        if (!mem.routes6.some((r: any) => r.dst === dst)) mem.routes6.push({ dst, gateway: m[2] });
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: ip -6 route add <dst> via <gateway>' };
+      }
+    } else if (/^\/routing\s+vrrp\s+instance\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/routing vrrp instance add name=vrrp1 interface=ether1 vrid=1 priority=120 address=192.168.1.254/24"
+      const raw = rawInput.trim();
+      const addr = raw.match(/address=(\S+)/i)?.[1];
+      const ifaceRaw = raw.match(/interface=(\S+)/i)?.[1];
+      const vrid = parseInt(raw.match(/vrid=(\d+)/i)?.[1] || '1', 10);
+      const priority = parseInt(raw.match(/priority=(\d+)/i)?.[1] || '100', 10);
+      if (addr && ifaceRaw) {
+        const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
+        const existing = mem.fhrpGroups.findIndex((g: any) => g.virtualAddress === addr);
+        const group = { virtualAddress: addr, interface: iface, vrid, priority };
+        if (existing >= 0) mem.fhrpGroups[existing] = { ...mem.fhrpGroups[existing], ...group };
+        else mem.fhrpGroups.push(group);
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Usage: /routing vrrp instance add name=<nama> interface=<port> vrid=<1-255> priority=<1-255> address=<ip/prefix>' };
+      }
+    } else if (/^(vrrp|standby)\s+(\d+)\s+ip\s+(\S+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "vrrp 1 ip 192.168.1.254" / "standby 1 ip 192.168.1.254" (interface view)
+      const m = rawInput.trim().match(/^(vrrp|standby)\s+(\d+)\s+ip\s+(\S+)/i);
+      if (m) {
+        const addr = m[3];
+        const vrid = parseInt(m[2], 10);
+        const existing = mem.fhrpGroups.findIndex((g: any) => g.virtualAddress === addr || (g.vrid === vrid && g.interface === mem.currentIface));
+        const group = { virtualAddress: `${addr}/24`, interface: mem.currentIface, vrid, priority: 100 };
+        if (existing >= 0) mem.fhrpGroups[existing] = { ...mem.fhrpGroups[existing], virtualAddress: `${addr}/24` };
+        else mem.fhrpGroups.push(group);
+        cmdResult = { raw: '' };
+      }
+    } else if (/^(vrrp|standby)\s+(\d+)\s+priority\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "vrrp 1 priority 120" / "standby 1 priority 120" (interface view)
+      const m = rawInput.trim().match(/^(vrrp|standby)\s+(\d+)\s+priority\s+(\d+)/i);
+      if (m) {
+        const vrid = parseInt(m[2], 10);
+        const priority = parseInt(m[3], 10);
+        const g = mem.fhrpGroups.find((x: any) => x.vrid === vrid && x.interface === mem.currentIface);
+        if (g) g.priority = priority;
+        else mem.fhrpGroups.push({ virtualAddress: '0.0.0.0/24', interface: mem.currentIface, vrid, priority });
+        cmdResult = { raw: '' };
+      }
+    } else if (/^\/routing\s+vrrp\s+instance\s+print/i.test(rawInput.trim()) || (normalized.target === 'routing_vrrp_instance' && normalized.action === 'print')) {
+      // MikroTik: "/routing vrrp instance print" — snapshot dari engine
+      const states = typeof context.fhrpProvider === 'function' ? context.fhrpProvider() : mem.fhrpGroups;
+      cmdResult = { type: 'fhrp_print', groups: states || [] };
+    } else if (/^\/ipv6\s+(?:address|route)\s+print/i.test(rawInput.trim()) || normalized.target === 'ipv6_address' || normalized.target === 'ipv6_route') {
+      // MikroTik: "/ipv6 address print" / "/ipv6 route print" — snapshot engine
+      const info = typeof context.ipv6Provider === 'function' ? context.ipv6Provider() : null;
+      cmdResult = { type: 'ipv6_print', info };
+    } else if (/^\/ipv6\s+dhcp-client\s+print/i.test(rawInput.trim()) || (normalized.target === 'ipv6_dhcp-client' && normalized.action === 'print')) {
+      // MikroTik: "/ipv6 dhcp-client print" — slider SLAAC/DHCPv6 client
+      const info = typeof context.ipv6Provider === 'function' ? context.ipv6Provider() : null;
+      cmdResult = { type: 'ipv6_dhcp_print', clients: mem.ipv6DhcpClients || [], info };
     } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^ip\s+link\s+set\s+(\S+)\s+(up|down)\s*$/i.test(rawInput.trim())) {
       // Linux: "ip link set eth0 up|down"
       const m = rawInput.trim().match(/^ip\s+link\s+set\s+(\S+)\s+(up|down)\s*$/i);
@@ -2104,10 +2442,11 @@ export class VendorDispatcher {
         cmdResult = { raw: '% Error: enter interface view first (interface <name>)' };
       }
     } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^ip\s+addr(ess)?\s+add\s+\S+\s+dev\s+\S+/i.test(rawInput.trim())) {
-      // Linux: "ip addr add 192.168.1.10/24 dev eth0"
+      // Linux: "ip addr add 192.168.1.10/24 dev eth0" / "ip addr add 2001:db8::10/64 dev eth0"
       const m = rawInput.trim().match(/^ip\s+addr(ess)?\s+add\s+(\S+)\s+dev\s+(\S+)/i);
       if (m) {
-        mem.configuredIps[resolveIfaceName(context?.ports, m[3])] = m[2];
+        const target = m[2].includes(':') ? mem.configuredIps6 : mem.configuredIps;
+        target[resolveIfaceName(context?.ports, m[3])] = m[2];
         cmdResult = { raw: '' };
       }
     } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^ip\s+route\s+add\s+\S+/i.test(rawInput.trim())) {
@@ -2646,6 +2985,16 @@ export class VendorDispatcher {
       if (m && !mem.routing[proto].networks.includes(m[1])) {
         mem.routing[proto].networks.push(m[1]);
       }
+      // OSPF lanjutan: "set protocols ospf area 0 interface eth0 passive" / "... interface eth0 cost 100"
+      const pm = rawInput.trim().match(/interface\s+(\S+)\s+passive\b/i);
+      if (pm && proto === 'ospf') {
+        const iface = resolveIfaceName(context?.ports, pm[1]) || pm[1];
+        if (!mem.routing.ospf.passiveInterfaces.includes(iface)) mem.routing.ospf.passiveInterfaces.push(iface);
+      }
+      const cm = rawInput.trim().match(/interface\s+(\S+)\s+cost\s+(\d+)/i);
+      if (cm && proto === 'ospf') {
+        mem.routing.ospf.interfaceCosts[resolveIfaceName(context?.ports, cm[1]) || cm[1]] = parseInt(cm[2], 10);
+      }
       cmdResult = { raw: '' };
     } else if (/^switchport\s+(mode\s+access|access\s+vlan\s+\d+)$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco switch: "switchport mode access" / "switchport access vlan 10"
@@ -2951,6 +3300,7 @@ export class VendorDispatcher {
     } else if (normalized.action === 'rollback') {
       cmdResult = { type: 'rollback' };
     } else if (normalized.action === 'write_mem' || normalized.action === 'save') {
+      this.saveStartupConfig(nodeId);
       cmdResult = { type: normalized.action };
     } else if (normalized.action === 'show_vlan' || (normalized.target === 'interface_vlan' && normalized.action === 'print')) {
       cmdResult = { type: 'show_vlan', vlans: mem.vlans };
@@ -4874,6 +5224,15 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     mem.routes.forEach((r: any) => {
       lines.push(`/ip route add dst-address=${r.dst} gateway=${r.gateway}`);
     });
+    Object.entries(mem.configuredIps6 || {}).forEach(([name, addr]: [string, any]) => {
+      lines.push(`/ipv6 address add address=${addr} interface=${name}`);
+    });
+    (mem.routes6 || []).forEach((r: any) => {
+      lines.push(`/ipv6 route add dst-address=${r.dst} gateway=${r.gateway}`);
+    });
+    (mem.fhrpGroups || []).forEach((g: any) => {
+      lines.push(`/routing vrrp instance add name=vrrp${g.vrid || 1} interface=${g.interface || ''} vrid=${g.vrid || 1} priority=${g.priority ?? 100} address=${g.virtualAddress}`);
+    });
     (mem.shutdownIfaces || []).forEach((name: string) => {
       lines.push(`/interface disable ${name}`);
     });
@@ -5193,6 +5552,21 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     });
     mem.routes.forEach((r: any) => {
       lines.push(`ip route ${r.dst} ${r.gateway}`);
+    });
+    // IPv6: alamat per interface + rute statis
+    Object.entries(mem.configuredIps6 || {}).forEach(([name, addr]: [string, any]) => {
+      lines.push(`interface ${name}`);
+      lines.push(` ipv6 address ${addr}`);
+    });
+    (mem.routes6 || []).forEach((r: any) => {
+      lines.push(`ipv6 route ${r.dst} ${r.gateway}`);
+    });
+    // VRRP/HSRP: virtual IP di interface
+    (mem.fhrpGroups || []).forEach((g: any) => {
+      lines.push(`interface ${g.interface || 'ether1'}`);
+      const ipOnly = String(g.virtualAddress || '').split('/')[0];
+      if (ipOnly && ipOnly !== '0.0.0.0') lines.push(` vrrp ${g.vrid || 1} ip ${ipOnly}`);
+      lines.push(` vrrp ${g.vrid || 1} priority ${g.priority ?? 100}`);
     });
   }
   return lines.join('\n');

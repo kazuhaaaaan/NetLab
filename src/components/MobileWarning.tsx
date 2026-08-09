@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { MonitorSmartphone, X } from 'lucide-react';
 
 const DISMISS_KEY = 'mklab_mobile_warning_dismissed';
@@ -33,7 +33,7 @@ export const MobileWarning: React.FC = () => {
     try {
       sessionStorage.setItem(DISMISS_KEY, '1');
     } catch {
-      // storage tidak tersedia â€” abaikan
+      // storage tidak tersedia — abaikan
     }
     setDismissed(true);
   };

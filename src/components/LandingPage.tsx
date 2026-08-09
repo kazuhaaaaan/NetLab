@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowRight,
@@ -31,7 +31,7 @@ interface LandingPageProps {
 
 const STORE_URL = 'https://toko.kazudev.my.id';
 
-// â”€â”€â”€ Hero mock-topology data (SVG preview window) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Hero mock-topology data (SVG preview window) ─────────────────────────────
 const PREVIEW_NODES = [
   { id: 'r1', x: 120, y: 84,  label: 'R1', color: '#38bdf8', type: 'router' },
   { id: 'sw', x: 300, y: 84,  label: 'SW', color: '#818cf8', type: 'switch' },
@@ -60,13 +60,13 @@ const FEATURES = [
   {
     icon: Waypoints,
     title: 'Real Packet Simulation',
-    desc: 'Bukan sekadar gambar â€” router, switch, dan firewall benar-benar mem-forward paket hop-by-hop dengan TTL, ARP, dan return-path checking.',
+    desc: 'Bukan sekadar gambar — router, switch, dan firewall benar-benar mem-forward paket hop-by-hop dengan TTL, ARP, dan return-path checking.',
     accent: '#38bdf8',
   },
   {
     icon: Terminal,
     title: '11 Vendor CLI Engine',
-    desc: 'MikroTik, Cisco IOS/NX-OS, Juniper, Huawei, Fortinet, VyOS, EdgeOS, Aruba, OpenWrt, dan Linux â€” konfigurasi asli langsung bekerja.',
+    desc: 'MikroTik, Cisco IOS/NX-OS, Juniper, Huawei, Fortinet, VyOS, EdgeOS, Aruba, OpenWrt, dan Linux — konfigurasi asli langsung bekerja.',
     accent: '#34d399',
   },
   {
@@ -84,7 +84,7 @@ const FEATURES = [
   {
     icon: Boxes,
     title: 'Topologi Persisten',
-    desc: 'Canvas, kabel, dan seluruh konfigurasi CLI tersimpan otomatis di browser â€” refresh tidak menghapus kerja kerasmu.',
+    desc: 'Canvas, kabel, dan seluruh konfigurasi CLI tersimpan otomatis di browser — refresh tidak menghapus kerja kerasmu.',
     accent: '#f472b6',
   },
   {
@@ -239,7 +239,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
     <div
       className="relative min-h-screen w-full overflow-x-hidden bg-[#0B0C0E] text-slate-100 font-sans scroll-smooth"
     >
-      {/* â”€â”€ Ambient background: grid + glow blobs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Ambient background: grid + glow blobs ─────────────────────────── */}
       <div
         className="pointer-events-none absolute inset-0"
         style={{
@@ -259,7 +259,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
       <div className="pointer-events-none absolute top-1/2 -right-40 w-[480px] h-[480px] rounded-full"
         style={{ background: 'radial-gradient(ellipse, rgba(52,211,153,0.05) 0%, transparent 65%)' }} />
 
-      {/* â”€â”€ Navbar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Navbar ───────────────────────────────────────────────────────── */}
       <header
         className={`fixed top-0 inset-x-0 z-50 transition-all duration-300 ${
           scrolled
@@ -312,7 +312,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         </nav>
       </header>
 
-      {/* â”€â”€ Hero â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Hero ─────────────────────────────────────────────────────────── */}
       <section className="relative pt-36 sm:pt-44 pb-16 sm:pb-24 px-5 sm:px-8">
         <div className="mx-auto max-w-4xl text-center">
           <motion.div
@@ -326,7 +326,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
             </span>
             Open-source Network Simulator
-            <span className="text-slate-600">Â·</span>
+            <span className="text-slate-600">·</span>
             <span className="font-mono text-[11px] text-slate-500">v1.0</span>
           </motion.div>
 
@@ -353,7 +353,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
             className="mt-6 mx-auto max-w-2xl text-[15px] sm:text-base text-slate-400 leading-relaxed"
           >
             Desain topologi, konfigurasi 11 vendor network OS lewat CLI asli, dan
-            uji konektivitas dengan simulasi paket sungguhan â€” semua berjalan
+            uji konektivitas dengan simulasi paket sungguhan — semua berjalan
             langsung di browser. Dari MikroTik sampai Cisco, dari switch L2
             sampai routing BGP.
           </motion.p>
@@ -400,11 +400,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
             transition={{ duration: 0.6, delay: 0.34 }}
             className="mt-5 text-[11px] font-mono text-slate-600"
           >
-            Free Â· No install Â· Runs 100% in your browser Â· Topologi &amp; config auto-save
+            Free · No install · Runs 100% in your browser · Topologi &amp; config auto-save
           </motion.p>
         </div>
 
-        {/* â”€â”€ App preview window â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ── App preview window ─────────────────────────────────────────── */}
         <motion.div
           initial={{ opacity: 0, y: 32, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -418,7 +418,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
               <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" />
               <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" />
               <span className="ml-3 text-[11px] font-mono text-slate-500">
-                Mikrolab â€” Enterprise Multi-Vendor Core Lab
+                Mikrolab — Enterprise Multi-Vendor Core Lab
               </span>
               <span className="ml-auto flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
                 <span className="w-1 h-1 rounded-full bg-emerald-400" style={{ animation: 'netlab-blink 1.2s ease-in-out infinite' }} />
@@ -469,14 +469,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> 3/3 links up
                 </div>
                 <div className="absolute bottom-4 left-4 hidden sm:flex items-center gap-1.5 rounded-md border border-[#1F2128] bg-[#0B0C0E]/80 backdrop-blur px-2.5 py-1 text-[10px] font-mono text-slate-400">
-                  <Zap className="w-3 h-3 text-amber-400" /> TTL 62 Â· 2 hops
+                  <Zap className="w-3 h-3 text-amber-400" /> TTL 62 · 2 hops
                 </div>
               </div>
 
               {/* terminal mock */}
               <div className="hidden md:flex flex-col border-l border-[#1F2128] bg-[#0B0C0E]/60">
                 <div className="px-3 py-2 border-b border-[#1F2128] text-[10px] font-mono text-slate-500 uppercase tracking-wider">
-                  MikroTik Â· node-1
+                  MikroTik · node-1
                 </div>
                 <div className="flex-1 p-3 space-y-1.5 font-mono text-[10.5px] leading-relaxed overflow-hidden">
                   {TERMINAL_LINES.map((line, i) => (
@@ -498,7 +498,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         </motion.div>
       </section>
 
-      {/* â”€â”€ Stats strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Stats strip ──────────────────────────────────────────────────── */}
       <section className="relative border-y border-[#14161c] bg-[#0F1015]/40 backdrop-blur">
         <div className="mx-auto max-w-6xl px-5 sm:px-8 py-8 grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
           {[
@@ -521,7 +521,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         </div>
       </section>
 
-      {/* â”€â”€ Features grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Features grid ────────────────────────────────────────────────── */}
       <section id="features" className="relative px-5 sm:px-8 py-20 sm:py-28">
         <div className="mx-auto max-w-6xl">
           <motion.div
@@ -539,7 +539,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
             </h2>
             <p className="mt-4 text-sm sm:text-[15px] text-slate-400 leading-relaxed">
               Mikrolab menggabungkan canvas topologi visual dengan mesin simulasi
-              jaringan sungguhan â€” seperti GNS3 di dalam browser, tanpa beban
+              jaringan sungguhan — seperti GNS3 di dalam browser, tanpa beban
               setup apa pun.
             </p>
           </motion.div>
@@ -573,7 +573,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         </div>
       </section>
 
-      {/* â”€â”€ Vendors strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Vendors strip ────────────────────────────────────────────────── */}
       <section id="vendors" className="relative px-5 sm:px-8 pb-20 sm:pb-28">
         <div className="mx-auto max-w-6xl">
           <motion.div
@@ -609,7 +609,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         </div>
       </section>
 
-      {/* â”€â”€ Configuration Guide Book â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Configuration Guide Book ─────────────────────────────────────── */}
       <section id="guide" className="relative px-5 sm:px-8 pb-20 sm:pb-28 scroll-mt-20">
         <div className="mx-auto max-w-6xl">
           <motion.div
@@ -633,7 +633,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
               </p>
             </div>
             <div className="text-[11px] font-mono text-slate-600 shrink-0">
-              {BEGINNER_GUIDES.length} vendor Â· semua bisa dicoba di simulator
+              {BEGINNER_GUIDES.length} vendor · semua bisa dicoba di simulator
             </div>
           </motion.div>
 
@@ -683,7 +683,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
                 <div className="flex items-center gap-2.5 min-w-0">
                   <ListChecks className="w-4 h-4 shrink-0" style={{ color: guideAccent }} />
                   <span className="text-[13px] font-bold text-slate-100 truncate">
-                    Panduan Langkah â€” {activeGuide.label}
+                    Panduan Langkah — {activeGuide.label}
                   </span>
                 </div>
                 <button
@@ -727,7 +727,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
                       <div className="mt-1 font-mono text-[11.5px] text-emerald-300 break-all">{step.command}</div>
                       {step.explain && (
                         <div className="mt-1.5 text-[11.5px] text-slate-400 leading-relaxed border-l-2 pl-2.5" style={{ borderColor: `${guideAccent}55` }}>
-                          ðŸ’¡ {step.explain}
+                          💡 {step.explain}
                         </div>
                       )}
                       {step.note && <div className="mt-1 text-[10.5px] font-mono text-slate-600">{step.note}</div>}
@@ -754,7 +754,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
                 <div className="flex items-center gap-2.5 min-w-0">
                   <BookOpenText className="w-4 h-4 shrink-0" style={{ color: guideAccent }} />
                   <span className="text-[13px] font-bold text-slate-100 truncate">
-                    Kamus Perintah CLI â€” {activeGuide.label}
+                    Kamus Perintah CLI — {activeGuide.label}
                   </span>
                 </div>
                 {guideGroups.length > 0 && (
@@ -841,12 +841,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[12px] font-bold text-slate-200 truncate">{m.label}</span>
                     <span className="text-[9px] font-mono uppercase text-slate-500 shrink-0">
-                      {m.types.join(' Â· ')}
+                      {m.types.join(' · ')}
                     </span>
                   </div>
                   <p className="mt-1 text-[11px] text-slate-400 leading-relaxed">{m.description}</p>
                   <p className="mt-1.5 text-[10px] font-mono text-slate-600 truncate">
-                    {m.specs.cpu} Â· {m.specs.ram} Â· {m.specs.ports || m.specs.flash} Â· {getPortsForModel(guideVendorId, m.label).length} port
+                    {m.specs.cpu} · {m.specs.ram} · {m.specs.ports || m.specs.flash} · {getPortsForModel(guideVendorId, m.label).length} port
                   </p>
                 </div>
               ))}
@@ -855,7 +855,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         </div>
       </section>
 
-      {/* â”€â”€ Services promo banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Services promo banner ────────────────────────────────────────── */}
       <section id="services" className="relative px-5 sm:px-8 pb-24 sm:pb-32">
         <motion.div
           initial={{ opacity: 0, y: 24 }}
@@ -882,7 +882,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
                 </h2>
                 <p className="mt-3 max-w-xl text-sm sm:text-[15px] text-slate-400 leading-relaxed">
                   Butuh website, dashboard monitoring jaringan, sistem informasi,
-                  atau aplikasi web kustom? KazuDev siap membangun produkmu â€”
+                  atau aplikasi web kustom? KazuDev siap membangun produkmu —
                   mulai dari desain hingga deployment.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1.5 text-[12px] text-slate-500">
@@ -914,14 +914,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         </motion.div>
       </section>
 
-      {/* â”€â”€ Footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Footer ───────────────────────────────────────────────────────── */}
       <footer className="relative border-t border-[#14161c]">
         <div className="mx-auto max-w-6xl px-5 sm:px-8 py-10 flex flex-col sm:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-3">
             <LogoMark size={30} />
             <div className="flex flex-col leading-none">
               <span className="text-[13px] font-bold tracking-tight text-slate-200">Mikrolab</span>
-              <span className="text-[10px] font-mono text-slate-600">Open-source network lab Â· by KazuDev</span>
+              <span className="text-[10px] font-mono text-slate-600">Open-source network lab · by KazuDev</span>
             </div>
           </div>
 
@@ -944,7 +944,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
           </div>
 
           <div className="text-[11px] font-mono text-slate-600">
-            Â© {new Date().getFullYear()} KazuDev â€” built with precision
+            © {new Date().getFullYear()} KazuDev — built with precision
           </div>
         </div>
       </footer>

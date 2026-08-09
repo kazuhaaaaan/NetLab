@@ -23,6 +23,8 @@ export interface GestureDetail {
   targetNodeId?: string;
   targetPortId?: string;
   hover?: { nodeId: string; portId: string } | null;
+  /** set when Shift held during tap (multi-select toggle) */
+  shiftKey?: boolean;
   /** set when tapping the delete-cable chip on a selected edge */
   deleteEdgeId?: string;
   scaleDelta?: number;
@@ -449,6 +451,7 @@ export class InteractionEngine {
             type: "TAP",
             point: pt,
             ...targetInfo,
+            shiftKey: e.shiftKey,
           });
           this.lastTapTime = now;
           this.lastTapPoint = pt;

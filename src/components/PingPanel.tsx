@@ -192,6 +192,74 @@ const StatsView: React.FC<{
                 </table>
               )}
             </div>
+
+            {/* Spanning tree (switch) */}
+            {stats.stp && (
+              <div>
+                <div className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1">
+                  Spanning Tree
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono px-2 pb-1">
+                  root: {stats.stp.rootName} ({stats.stp.rootId})
+                  {stats.stp.rootPort ? ` • root port: ${stats.stp.rootPort}` : ' • root bridge'}
+                </div>
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="text-[9px] text-slate-500 uppercase">
+                      <th className="px-2 py-0.5">Port</th>
+                      <th className="px-2 py-0.5">Role</th>
+                      <th className="px-2 py-0.5">State</th>
+                      <th className="px-2 py-0.5">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.stp.ports.map((p) => (
+                      <tr key={p.port} className="border-t border-slate-800/60">
+                        <StatCell>{p.port}</StatCell>
+                        <StatCell>{p.role}</StatCell>
+                        <StatCell>
+                          <span className={p.state === 'forwarding' ? 'text-emerald-400' : 'text-rose-400'}>{p.state}</span>
+                        </StatCell>
+                        <StatCell muted>{p.cost}</StatCell>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* FHRP (VRRP) */}
+            {stats.fhrp && stats.fhrp.length > 0 && (
+              <div>
+                <div className="text-[10px] font-bold text-fuchsia-400 uppercase tracking-wider mb-1">
+                  VRRP ({stats.fhrp.length})
+                </div>
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="text-[9px] text-slate-500 uppercase">
+                      <th className="px-2 py-0.5">Virtual IP</th>
+                      <th className="px-2 py-0.5">State</th>
+                      <th className="px-2 py-0.5">Master</th>
+                      <th className="px-2 py-0.5">Priority</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.fhrp.map((f, i) => (
+                      <tr key={i} className="border-t border-slate-800/60">
+                        <StatCell>{f.virtualAddress}</StatCell>
+                        <StatCell>
+                          <span className={f.isMaster ? 'text-emerald-400' : 'text-slate-400'}>
+                            {f.isMaster ? 'MASTER' : 'BACKUP'}
+                          </span>
+                        </StatCell>
+                        <StatCell muted>{f.masterName}</StatCell>
+                        <StatCell muted>{f.priority}</StatCell>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>

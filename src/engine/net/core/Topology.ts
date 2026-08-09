@@ -14,6 +14,9 @@ export interface LabProjectLike {
     targetNodeId: string;
     targetPortId: string;
     cableType: string;
+    latencyMs?: number;
+    bandwidthMbps?: number;
+    down?: boolean;
   }[];
 }
 
@@ -115,6 +118,9 @@ export class Topology {
         a: { nodeId: e.sourceNodeId, port: e.sourcePortId },
         b: { nodeId: e.targetNodeId, port: e.targetPortId },
         cableType: e.cableType,
+        latencyMs: e.latencyMs,
+        bandwidthMbps: e.bandwidthMbps,
+        down: e.down,
       });
     }
     return { nodes };
@@ -126,11 +132,17 @@ export function portOf(nodeId: string, iface: NetworkInterface): string {
   return iface.parentPort || iface.name;
 }
 
+/** Latensi efektif sebuah kabel (ms) — override custom bila di-set. */
+export function linkLatencyMs(link: Pick<LinkSpec, 'cableType' | 'latencyMs'> | null | undefined): number {
+  if (link && typeof link.latencyMs === 'number' && link.latencyMs >= 0) return link.latencyMs;
+  return linkDelayMs(link?.cableType || 'copper_straight');
+}
+
 /** Delay transmisi (propagasi + waktu kirim) untuk paket pada sebuah kabel. */
-export function transmissionDelay(cableType: string, pkt: Packet): number {
-  const base = linkDelayMs(cableType);
+export function transmissionDelay(link: LinkSpec | null | undefined, pkt: Packet): number {
+  const base = linkLatencyMs(link);
   const bits = Math.max(64, pkt.size) * 8;
-  const linkSpeed = cableType === 'fiber' ? 1000 : 1000; // Mbit/s
-  const serial = bits / (linkSpeed * 1e6) * 1000; // ms
+  const linkSpeed = link?.bandwidthMbps || 1000; // Mbit/s
+  const serial = bits / (Math.max(1, linkSpeed) * 1e6) * 1000; // ms
   return Math.max(1, Math.round(base + serial));
 }

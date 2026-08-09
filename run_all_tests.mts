@@ -943,7 +943,853 @@ console.log('\n== 9. STP (loop-breaking & failover) ==');
   }
 }
 
+// ── 12. Integrasi: konfigurasi CLI → engine → konektivitas antar-device ──
+// Mensimulasikan alur App persis: perintah CLI vendor → VendorDispatcher memory
+// → sync ke NetworkSimulator (setNodeConfig/setRouting/setNat/...) → verifikasi
+// ping/TCP lintas perangkat yang benar-benar terhubung (lintas vendor).
+console.log('\n== 12. Integrasi CLI antar perangkat terhubung (alur App) ==');
+{
+  const iPorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `ether${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const iNode = (id: string, name: string, vendor: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor, model: deviceType, deviceType,
+    ports: iPorts(portCount, macSeed),
+  });
+  const iEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+
+  // Replika App.syncNodeToEngine + App.syncDhcpPools
+  const syncCli = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string) => {
+    const mem = dis.getNodeMemory(nodeId);
+    sim.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
+    sim.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
+    sim.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+    sim.setRouting(nodeId, mem.routing || undefined);
+    sim.setBgp(nodeId, mem.bgp || undefined);
+    sim.setSnmp(nodeId, mem.snmp || undefined);
+    sim.setAcls(nodeId, mem.acls || undefined);
+    sim.setNatRules(nodeId, mem.natRules || undefined);
+    sim.setDnsRecords(nodeId, mem.dnsRecords || undefined);
+    sim.setDnsServers(nodeId, mem.dnsServers || undefined);
+    sim.setWebServer(nodeId, mem.webServer || undefined);
+    sim.setPortVlans(nodeId, mem.portVlans || undefined);
+    sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    sim.setStp(nodeId, mem.stp || undefined);
+    sim.setWireless(nodeId, mem.wireless || mem.wirelessSecurityProfiles
+      ? { interfaces: mem.wireless || {}, profiles: mem.wirelessSecurityProfiles || {} }
+      : undefined);
+    sim.setQos(nodeId, mem.queues || undefined, mem.mangleRules || undefined);
+    sim.setDhcpRelays(nodeId, mem.dhcpRelays || undefined);
+    sim.setPortSecurity(nodeId, mem.portSecurity || undefined);
+    sim.setIpv6DhcpClients(nodeId, mem.ipv6DhcpClients || undefined);
+  };
+  const syncPools = (dis: VendorDispatcher, sim: NetworkSimulator) => {
+    const poolsByNode: Record<string, any[]> = {};
+    for (const [nodeId, m] of Object.entries(dis.serializeMemory())) {
+      if (m && Array.isArray(m.dhcpPools) && m.dhcpPools.length > 0) poolsByNode[nodeId] = m.dhcpPools;
+    }
+    sim.setDhcpPools(poolsByNode);
+  };
+  // Konteks CLI replika App.handleTerminalCommand
+  const iCtx = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string, name: string, ports: any[]) => ({
+    nodeId,
+    name,
+    ports,
+    dhcpClientGrant: (iface: string, addDefaultRoute: boolean) => {
+      const granted = sim.grantDhcpLease(nodeId, iface);
+      return granted ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId } : null;
+    },
+    pingSimulator: (host: string, vendorId: string) => formatPingOutput(vendorId, host, sim.simulatePing(nodeId, host)),
+    ospfNeighborProvider: () => sim.getOspfNeighbors(nodeId),
+  });
+
+  // 12a. Rute statis CLI lintas vendor: Cisco R1 ↔ MikroTik R2
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, '61'), iNode('sw1', 'SW1', 'mikrotik', 'switch', 4, '62'),
+        iNode('r1', 'R1', 'cisco_ios', 'router', 3, '63'), iNode('r2', 'R2', 'mikrotik', 'router', 3, '64'),
+        iNode('sw2', 'SW2', 'mikrotik', 'switch', 4, '65'), iNode('svr1', 'SVR1', 'linux', 'server', 1, '66'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+        iEdge('e3', 'r1', 'ether2', 'r2', 'ether1'), iEdge('e4', 'r2', 'ether2', 'sw2', 'ether1'),
+        iEdge('e5', 'sw2', 'ether2', 'svr1', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    for (const n of project.nodes) {
+      if (n.vendor === 'linux') {
+        dis.dispatch('linux', 'hostname ' + n.name, iCtx(dis, sim, n.id, n.name, n.ports));
+      } else {
+        dis.dispatch('mikrotik', '/system identity set name=' + n.name, iCtx(dis, sim, n.id, n.name, n.ports));
+      }
+    }
+    // PC1 & SVR1 (linux)
+    let ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    dis.dispatch('linux', 'ip addr add 10.0.1.2/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 10.0.1.1', ctx);
+    ctx = iCtx(dis, sim, 'svr1', 'SVR1', project.nodes[5].ports);
+    dis.dispatch('linux', 'ip addr add 10.0.2.10/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 10.0.2.1', ctx);
+    // R1 (cisco): IP + rute statis
+    ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.1.1 255.255.255.0', ctx);
+    dis.dispatch('cisco_ios', 'interface ether2', ctx);
+    dis.dispatch('cisco_ios', 'ip address 192.168.1.1 255.255.255.252', ctx);
+    dis.dispatch('cisco_ios', 'ip route 10.0.2.0 255.255.255.0 192.168.1.2', ctx);
+    // R2 (mikrotik): IP + rute statis
+    ctx = iCtx(dis, sim, 'r2', 'R2', project.nodes[3].ports);
+    dis.dispatch('mikrotik', '/ip address add address=192.168.1.2/30 interface=ether1', ctx);
+    dis.dispatch('mikrotik', '/ip address add address=10.0.2.1/24 interface=ether2', ctx);
+    dis.dispatch('mikrotik', '/ip route add dst-address=10.0.1.0/24 gateway=192.168.1.1', ctx);
+    // Sync alur App
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    syncPools(dis, sim);
+
+    const m1 = dis.getNodeMemory('r1');
+    const m2 = dis.getNodeMemory('r2');
+    check('12a r1 memori IP 2 interface', Object.keys(m1.configuredIps).length === 2, JSON.stringify(m1.configuredIps));
+    check('12a r2 memori IP 2 interface', Object.keys(m2.configuredIps).length === 2, JSON.stringify(m2.configuredIps));
+    check('12a r1 route statis tersimpan', m1.routes.some((r: any) => r.dst.includes('10.0.2.0')), JSON.stringify(m1.routes));
+    check('12a r2 route statis tersimpan', m2.routes.some((r: any) => r.dst === '10.0.1.0/24'), JSON.stringify(m2.routes));
+    check('12a ping pc1→gateway R1', sim.simulatePing('pc1', '10.0.1.1').success);
+    check('12a ping pc1→svr1 lintas 2 router', sim.simulatePing('pc1', '10.0.2.10').success);
+    check('12a ping balik svr1→pc1', sim.simulatePing('svr1', '10.0.1.2').success);
+    const tcp = sim.simulateTcpConnect('pc1', '10.0.2.10', 80);
+    check('12a TCP web pc1→svr1', tcp.ok && tcp.status === 200, JSON.stringify(tcp));
+    const showRoute = dis.dispatch('cisco_ios', 'show ip route', iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports));
+    check('12a show ip route menampilkan 10.0.2.0', typeof showRoute === 'string' && showRoute.includes('10.0.2.0'), JSON.stringify(showRoute?.slice?.(0, 120)));
+  }
+
+  // 12b. DHCP via CLI: pool Cisco → klien Linux (dhclient)
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, '71'), iNode('sw1', 'SW1', 'mikrotik', 'switch', 4, '72'),
+        iNode('r1', 'R1', 'cisco_ios', 'router', 3, '73'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    // R1 (cisco): IP + DHCP pool
+    const r1ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', r1ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.1.1 255.255.255.0', r1ctx);
+    dis.dispatch('cisco_ios', 'ip dhcp pool LAN', r1ctx);
+    dis.dispatch('cisco_ios', 'network 10.0.1.0 255.255.255.0', r1ctx);
+    dis.dispatch('cisco_ios', 'default-router 10.0.1.1', r1ctx);
+    syncCli(dis, sim, 'r1');
+    syncPools(dis, sim);
+    // PC1 (linux): DHCP client — pool sudah masuk engine (alur App: sync tiap perintah)
+    const pc1ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    const dhcpOut = dis.dispatch('linux', 'dhclient ether1', pc1ctx);
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    syncPools(dis, sim);
+
+    const pool = dis.getNodeMemory('r1').dhcpPools;
+    check('12b pool DHCP tersimpan (cisco)', Array.isArray(pool) && pool.length === 1 && pool[0]?.name === 'LAN', JSON.stringify(pool));
+    check('12b dhclient menghasilkan output', typeof dhcpOut === 'string' && dhcpOut.trim().length > 0, JSON.stringify(dhcpOut?.slice?.(0, 80)));
+    const lease = sim.getLeaseFor('pc1');
+    check('12b lease DHCP ter-grant ke PC1', !!lease && lease.gateway === '10.0.1.1', JSON.stringify(lease));
+    check('12b pc1 bisa ping gateway dari IP DHCP', sim.simulatePing('pc1', '10.0.1.1').success);
+    const dhcpPrint = dis.dispatch('linux', 'ip addr show ether1', pc1ctx);
+    check('12b CLI menampilkan IP hasil DHCP', typeof dhcpPrint === 'string' && dhcpPrint.includes('10.0.1.'), JSON.stringify(dhcpPrint?.slice?.(0, 120)));
+  }
+
+  // 12b2. Host tanpa klien DHCP: ping pertama memicu DORA otomatis
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, 'c1'), iNode('sw1', 'SW1', 'mikrotik', 'switch', 4, 'c2'),
+        iNode('r1', 'R1', 'cisco_ios', 'router', 3, 'c3'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    const r1ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', r1ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.1.1 255.255.255.0', r1ctx);
+    dis.dispatch('cisco_ios', 'ip dhcp pool LAN', r1ctx);
+    dis.dispatch('cisco_ios', 'network 10.0.1.0 255.255.255.0', r1ctx);
+    dis.dispatch('cisco_ios', 'default-router 10.0.1.1', r1ctx);
+    syncCli(dis, sim, 'r1');
+    syncPools(dis, sim);
+    for (const n of project.nodes) if (n.id !== 'r1') syncCli(dis, sim, n.id);
+
+    const ping = sim.simulatePing('pc1', '10.0.1.1');
+    check('12b2 DHCP otomatis saat ping (dhcpGranted)', ping.dhcpGranted === true, JSON.stringify(ping));
+    check('12b2 lease tersimpan setelah ping', !!sim.getLeaseFor('pc1'), JSON.stringify(sim.getLeaseFor('pc1')));
+  }
+
+  // 12c. OSPF CLI lintas vendor (Cisco ↔ MikroTik) — tanpa rute statis
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, '81'), iNode('sw1', 'SW1', 'mikrotik', 'switch', 4, '82'),
+        iNode('r1', 'R1', 'cisco_ios', 'router', 3, '83'), iNode('r2', 'R2', 'mikrotik', 'router', 3, '84'),
+        iNode('sw2', 'SW2', 'mikrotik', 'switch', 4, '85'), iNode('svr1', 'SVR1', 'linux', 'server', 1, '86'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+        iEdge('e3', 'r1', 'ether2', 'r2', 'ether1'), iEdge('e4', 'r2', 'ether2', 'sw2', 'ether1'),
+        iEdge('e5', 'sw2', 'ether2', 'svr1', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    let ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    dis.dispatch('linux', 'ip addr add 10.0.1.2/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 10.0.1.1', ctx);
+    ctx = iCtx(dis, sim, 'svr1', 'SVR1', project.nodes[5].ports);
+    dis.dispatch('linux', 'ip addr add 10.0.2.10/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 10.0.2.1', ctx);
+    // R1 (cisco): IP + OSPF
+    ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.1.1 255.255.255.0', ctx);
+    dis.dispatch('cisco_ios', 'interface ether2', ctx);
+    dis.dispatch('cisco_ios', 'ip address 192.168.1.1 255.255.255.252', ctx);
+    dis.dispatch('cisco_ios', 'router ospf 1', ctx);
+    dis.dispatch('cisco_ios', 'network 10.0.1.0 0.0.0.255 area 0', ctx);
+    dis.dispatch('cisco_ios', 'network 192.168.1.0 0.0.0.3 area 0', ctx);
+    // R2 (mikrotik): IP + OSPF
+    ctx = iCtx(dis, sim, 'r2', 'R2', project.nodes[3].ports);
+    dis.dispatch('mikrotik', '/ip address add address=192.168.1.2/30 interface=ether1', ctx);
+    dis.dispatch('mikrotik', '/ip address add address=10.0.2.1/24 interface=ether2', ctx);
+    dis.dispatch('mikrotik', '/routing ospf instance add name=ospf1', ctx);
+    dis.dispatch('mikrotik', '/routing ospf network add network=192.168.1.0/30 area=0', ctx);
+    dis.dispatch('mikrotik', '/routing ospf network add network=10.0.2.0/24 area=0', ctx);
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    syncPools(dis, sim);
+    sim.computeDynamicRoutes();
+
+    const ospfMem = dis.getNodeMemory('r1').routing.ospf;
+    const ospfMem2 = dis.getNodeMemory('r2').routing.ospf;
+    check('12c ospf r1 enabled + 2 network', ospfMem.enabled === true && ospfMem.networks.length === 2, JSON.stringify(ospfMem));
+    check('12c ospf r2 enabled + 2 network', ospfMem2.enabled === true && ospfMem2.networks.length === 2, JSON.stringify(ospfMem2));
+    check('12c tetangga OSPF R1 Established', sim.getOspfNeighbors('r1').some((n) => /^Full/.test(n.state)), JSON.stringify(sim.getOspfNeighbors('r1')));
+    check('12c r1 belajar 10.0.2.0/24 (dynamic)', sim.getDeviceStats('r1')?.routes.some((r) => r.dst === '10.0.2.0/24' && r.kind === 'dynamic'));
+    check('12c r2 belajar 10.0.1.0/24 (dynamic)', sim.getDeviceStats('r2')?.routes.some((r) => r.dst === '10.0.1.0/24' && r.kind === 'dynamic'));
+    check('12c ping lintas OSPF multi-vendor', sim.simulatePing('pc1', '10.0.2.10').success);
+    const ospfOut = dis.dispatch('cisco_ios', 'show ip ospf neighbor', iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports));
+    check('12c show ip ospf neighbor berisi tetangga', typeof ospfOut === 'string' && ospfOut.toLowerCase().includes('full'), JSON.stringify(ospfOut?.slice?.(0, 120)));
+  }
+
+  // 12d. VLAN via CLI (cisco switch) + trunk + router-on-a-stick (cisco router)
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, '91'), iNode('pc3', 'PC3', 'linux', 'pc', 1, '92'),
+        iNode('sw1', 'SW1', 'cisco_ios', 'switch', 4, '93'), iNode('r1', 'R1', 'cisco_ios', 'router', 3, '94'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'pc3', 'ether1', 'sw1', 'ether3'),
+        iEdge('e3', 'sw1', 'ether4', 'r1', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    // SW1 (cisco): VLAN 10/20, port akses, trunk ke router
+    let ctx = iCtx(dis, sim, 'sw1', 'SW1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'vlan 10', ctx);
+    dis.dispatch('cisco_ios', 'vlan 20', ctx);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'switchport access vlan 10', ctx);
+    dis.dispatch('cisco_ios', 'interface ether3', ctx);
+    dis.dispatch('cisco_ios', 'switchport access vlan 20', ctx);
+    dis.dispatch('cisco_ios', 'interface ether4', ctx);
+    dis.dispatch('cisco_ios', 'switchport mode trunk', ctx);
+    // R1 (cisco): subinterface trunk
+    ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[3].ports);
+    dis.dispatch('cisco_ios', 'interface ether1.10', ctx);
+    dis.dispatch('cisco_ios', 'encapsulation dot1q 10', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.1.1 255.255.255.0', ctx);
+    dis.dispatch('cisco_ios', 'interface ether1.20', ctx);
+    dis.dispatch('cisco_ios', 'encapsulation dot1q 20', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.2.1 255.255.255.0', ctx);
+    // Host
+    ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    dis.dispatch('linux', 'ip addr add 10.0.1.2/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 10.0.1.1', ctx);
+    ctx = iCtx(dis, sim, 'pc3', 'PC3', project.nodes[1].ports);
+    dis.dispatch('linux', 'ip addr add 10.0.2.2/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 10.0.2.1', ctx);
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    syncPools(dis, sim);
+
+    const vlanMem = dis.getNodeMemory('sw1');
+    check('12d VLAN 10 & 20 tersimpan', vlanMem.vlans.some((v: any) => v.id === '10') && vlanMem.vlans.some((v: any) => v.id === '20'), JSON.stringify(vlanMem.vlans));
+    check('12d portVlans tersimpan', vlanMem.portVlans.ether1 === 10 && vlanMem.portVlans.ether3 === 20, JSON.stringify(vlanMem.portVlans));
+    check('12d trunk tersimpan', vlanMem.trunkPorts.includes('ether4'), JSON.stringify(vlanMem.trunkPorts));
+    check('12d subinterface r1 ada 2', dis.getNodeMemory('r1').subinterfaces.length === 2, JSON.stringify(dis.getNodeMemory('r1').subinterfaces));
+    check('12d ping inter-VLAN (10→20) lewat trunk', sim.simulatePing('pc1', '10.0.2.2').success);
+    check('12d ping balik (20→10)', sim.simulatePing('pc3', '10.0.1.2').success);
+    check('12d ping ke gateway VLAN10', sim.simulatePing('pc1', '10.0.1.1').success);
+  }
+
+  // 12e. NAT masquerade via CLI (MikroTik) — keluar ke "internet"
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, 'a1'), iNode('sw1', 'SW1', 'mikrotik', 'switch', 4, 'a2'),
+        iNode('r1', 'R1', 'mikrotik', 'router', 3, 'a3'), iNode('r2', 'R2-ISP', 'mikrotik', 'router', 3, 'a4'),
+        iNode('pub', 'PUB', 'linux', 'server', 1, 'a5'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+        iEdge('e3', 'r1', 'ether2', 'r2', 'ether1'), iEdge('e4', 'r2', 'ether2', 'pub', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    let ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    dis.dispatch('linux', 'ip addr add 192.168.1.10/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 192.168.1.1', ctx);
+    ctx = iCtx(dis, sim, 'pub', 'PUB', project.nodes[4].ports);
+    dis.dispatch('linux', 'ip addr add 8.8.8.8/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 8.8.8.1', ctx);
+    // R2 ISP (mikrotik): dua segmen connected
+    ctx = iCtx(dis, sim, 'r2', 'R2-ISP', project.nodes[3].ports);
+    dis.dispatch('mikrotik', '/ip address add address=203.0.113.254/24 interface=ether1', ctx);
+    dis.dispatch('mikrotik', '/ip address add address=8.8.8.1/24 interface=ether2', ctx);
+    // R1 (mikrotik): IP + default route + NAT masquerade
+    ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('mikrotik', '/ip address add address=192.168.1.1/24 interface=ether1', ctx);
+    dis.dispatch('mikrotik', '/ip address add address=203.0.113.1/24 interface=ether2', ctx);
+    dis.dispatch('mikrotik', '/ip route add dst-address=0.0.0.0/0 gateway=203.0.113.254', ctx);
+    dis.dispatch('mikrotik', '/ip firewall nat add chain=srcnat out-interface=ether2 action=masquerade', ctx);
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    syncPools(dis, sim);
+
+    const natMem = dis.getNodeMemory('r1').natRules;
+    check('12e NAT rule tersimpan', Array.isArray(natMem) && natMem.length === 1 && natMem[0].chain === 'srcnat', JSON.stringify(natMem));
+    check('12e ping pc1→internet via NAT', sim.simulatePing('pc1', '8.8.8.8').success);
+    const tcp = sim.simulateTcpConnect('pc1', '8.8.8.8', 80);
+    check('12e TCP pc1→8.8.8.8 via NAT', tcp.ok && tcp.status === 200, JSON.stringify(tcp));
+  }
+
+  // 12f. Fungsi CLI device: shutdown/up + write memory
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, 'b1'), iNode('sw1', 'SW1', 'cisco_ios', 'switch', 4, 'b2'),
+        iNode('r1', 'R1', 'cisco_ios', 'router', 3, 'b3'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    let ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    dis.dispatch('linux', 'ip addr add 10.0.1.2/24 dev ether1', ctx);
+    ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.1.1 255.255.255.0', ctx);
+    ctx = iCtx(dis, sim, 'sw1', 'SW1', project.nodes[1].ports);
+    dis.dispatch('cisco_ios', 'interface ether2', ctx);
+    dis.dispatch('cisco_ios', 'shutdown', ctx);
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    syncPools(dis, sim);
+    check('12f shutdown tersimpan di memori', dis.getNodeMemory('sw1').shutdownIfaces.includes('ether2'), JSON.stringify(dis.getNodeMemory('sw1').shutdownIfaces));
+    check('12f link down: ping pc1→r1 gagal', !sim.simulatePing('pc1', '10.0.1.1').success);
+    ctx = iCtx(dis, sim, 'sw1', 'SW1', project.nodes[1].ports);
+    dis.dispatch('cisco_ios', 'interface ether2', ctx);
+    dis.dispatch('cisco_ios', 'no shutdown', ctx);
+    syncCli(dis, sim, 'sw1');
+    check('12f no shutdown: ping pulih', sim.simulatePing('pc1', '10.0.1.1').success);
+    const wm = dis.dispatch('cisco_ios', 'write memory', ctx);
+    check('12f write memory = Building config [OK]', typeof wm === 'string' && wm.includes('[OK]'), JSON.stringify(wm));
+    const cp = dis.dispatch('cisco_ios', 'copy running-config startup-config', ctx);
+    check('12f copy run start juga [OK]', typeof cp === 'string' && cp.includes('[OK]'), JSON.stringify(cp));
+  }
+}
+
+// ── 13. Fitur CLI baru: IPv6 & VRRP (FHRP) antar perangkat ───────────────
+console.log('\n== 13. IPv6 & VRRP via CLI antar perangkat ==');
+{
+  const iPorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `ether${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const iNode = (id: string, name: string, vendor: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor, model: deviceType, deviceType,
+    ports: iPorts(portCount, macSeed),
+  });
+  const iEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  const syncCli = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string) => {
+    const mem = dis.getNodeMemory(nodeId);
+    sim.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
+    sim.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
+    sim.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+    sim.applyNodeConfig6(nodeId, mem.configuredIps6 || {}, mem.routes6 || []);
+    sim.setRouting(nodeId, mem.routing || undefined);
+    sim.setBgp(nodeId, mem.bgp || undefined);
+    sim.setSnmp(nodeId, mem.snmp || undefined);
+    sim.setAcls(nodeId, mem.acls || undefined);
+    sim.setNatRules(nodeId, mem.natRules || undefined);
+    sim.setDnsRecords(nodeId, mem.dnsRecords || undefined);
+    sim.setDnsServers(nodeId, mem.dnsServers || undefined);
+    sim.setWebServer(nodeId, mem.webServer || undefined);
+    sim.setPortVlans(nodeId, mem.portVlans || undefined);
+    sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    sim.setStp(nodeId, mem.stp || undefined);
+    sim.setFhrp(nodeId, mem.fhrpGroups || undefined);
+  };
+  const iCtx = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string, name: string, ports: any[]) => ({
+    nodeId,
+    name,
+    ports,
+    pingSimulator: (host: string, vendorId: string) => formatPingOutput(vendorId, host, sim.simulatePing(nodeId, host)),
+    ospfNeighborProvider: () => sim.getOspfNeighbors(nodeId),
+    fhrpProvider: () => sim.getFhrpInfo(nodeId),
+  });
+
+  // 13a. IPv6 via CLI: Cisco R1 ↔ MikroTik R2, routing v6 statis, ping6 lintas
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, 'd1'), iNode('sw1', 'SW1', 'mikrotik', 'switch', 4, 'd2'),
+        iNode('r1', 'R1', 'cisco_ios', 'router', 3, 'd3'), iNode('r2', 'R2', 'mikrotik', 'router', 3, 'd4'),
+        iNode('sw2', 'SW2', 'mikrotik', 'switch', 4, 'd5'), iNode('svr1', 'SVR1', 'linux', 'server', 1, 'd6'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+        iEdge('e3', 'r1', 'ether2', 'r2', 'ether1'), iEdge('e4', 'r2', 'ether2', 'sw2', 'ether1'),
+        iEdge('e5', 'sw2', 'ether2', 'svr1', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    let ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    dis.dispatch('linux', 'ip addr add 2001:db8:1::10/64 dev ether1', ctx);
+    dis.dispatch('linux', 'ip -6 route add default via 2001:db8:1::1', ctx);
+    ctx = iCtx(dis, sim, 'svr1', 'SVR1', project.nodes[5].ports);
+    dis.dispatch('linux', 'ip addr add 2001:db8:2::10/64 dev ether1', ctx);
+    dis.dispatch('linux', 'ip -6 route add default via 2001:db8:2::1', ctx);
+    // R1 (cisco): IPv6 interface + rute ke subnet R2
+    ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ipv6 address 2001:db8:1::1/64', ctx);
+    dis.dispatch('cisco_ios', 'interface ether2', ctx);
+    dis.dispatch('cisco_ios', 'ipv6 address 2001:db8:ff::1/64', ctx);
+    dis.dispatch('cisco_ios', 'ipv6 route 2001:db8:2::/64 2001:db8:ff::2', ctx);
+    // R2 (mikrotik): IPv6 interface + rute balik
+    ctx = iCtx(dis, sim, 'r2', 'R2', project.nodes[3].ports);
+    dis.dispatch('mikrotik', '/ipv6 address add address=2001:db8:ff::2/64 interface=ether1', ctx);
+    dis.dispatch('mikrotik', '/ipv6 address add address=2001:db8:2::1/64 interface=ether2', ctx);
+    dis.dispatch('mikrotik', '/ipv6 route add dst-address=2001:db8:1::/64 gateway=2001:db8:ff::1', ctx);
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    sim.computeDynamicRoutes();
+
+    check('13a r1 memori IPv6 2 alamat', Object.keys(dis.getNodeMemory('r1').configuredIps6).length === 2, JSON.stringify(dis.getNodeMemory('r1').configuredIps6));
+    check('13a r2 memori IPv6 2 alamat', Object.keys(dis.getNodeMemory('r2').configuredIps6).length === 2, JSON.stringify(dis.getNodeMemory('r2').configuredIps6));
+    check('13a r1 rute v6 tersimpan', dis.getNodeMemory('r1').routes6.length === 1, JSON.stringify(dis.getNodeMemory('r1').routes6));
+    check('13a r2 rute v6 tersimpan', dis.getNodeMemory('r2').routes6.length === 1, JSON.stringify(dis.getNodeMemory('r2').routes6));
+    const ping6 = sim.simulatePing('pc1', '2001:db8:2::10');
+    check('13a ping6 pc1→svr1 lintas 2 router', ping6.success, JSON.stringify(ping6));
+    const ping6b = sim.simulatePing('svr1', '2001:db8:1::10');
+    check('13a ping6 balik svr1→pc1', ping6b.success, JSON.stringify(ping6b));
+    const cfg = dis.dispatch('cisco_ios', 'show running-config', ctx);
+    check('13a show running-config memuat ipv6', typeof cfg === 'string' && cfg.includes('ipv6 address 2001:db8'), JSON.stringify(cfg?.slice?.(0, 120)));
+    const cfgMt = dis.dispatch('mikrotik', 'export', ctx);
+    check('13a export mikrotik memuat /ipv6 address', typeof cfgMt === 'string' && cfgMt.includes('/ipv6 address add'), JSON.stringify(cfgMt?.slice?.(0, 100)));
+  }
+
+  // 13b. VRRP via CLI (Cisco): master/backup + ping via virtual IP
+  {
+    const dis = new VendorDispatcher();
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        iNode('pc1', 'PC1', 'linux', 'pc', 1, 'e1'), iNode('sw1', 'SW1', 'cisco_ios', 'switch', 4, 'e2'),
+        iNode('r1', 'R1', 'cisco_ios', 'router', 3, 'e3'), iNode('r2', 'R2', 'cisco_ios', 'router', 3, 'e4'),
+      ],
+      edges: [
+        iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'), iEdge('e2', 'sw1', 'ether2', 'r1', 'ether1'),
+        iEdge('e3', 'sw1', 'ether3', 'r2', 'ether1'),
+      ],
+    };
+    sim.syncTopology(project);
+    let ctx = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+    dis.dispatch('linux', 'ip addr add 192.168.1.10/24 dev ether1', ctx);
+    dis.dispatch('linux', 'ip route add default via 192.168.1.254', ctx);
+    // R1 (cisco): IP + VRRP prioritas tinggi
+    ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[2].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 192.168.1.1 255.255.255.0', ctx);
+    dis.dispatch('cisco_ios', 'vrrp 1 ip 192.168.1.254', ctx);
+    dis.dispatch('cisco_ios', 'vrrp 1 priority 120', ctx);
+    // R2 (cisco): IP + VRRP prioritas default (100) → backup
+    ctx = iCtx(dis, sim, 'r2', 'R2', project.nodes[3].ports);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 192.168.1.2 255.255.255.0', ctx);
+    dis.dispatch('cisco_ios', 'vrrp 1 ip 192.168.1.254', ctx);
+    for (const n of project.nodes) syncCli(dis, sim, n.id);
+    sim.computeDynamicRoutes();
+
+    const g1 = dis.getNodeMemory('r1').fhrpGroups;
+    const g2 = dis.getNodeMemory('r2').fhrpGroups;
+    check('13b R1 punya group VRRP', Array.isArray(g1) && g1.length === 1 && g1[0].vrid === 1 && g1[0].priority === 120, JSON.stringify(g1));
+    check('13b R2 punya group VRRP', Array.isArray(g2) && g2.length === 1 && g2[0].priority === 100, JSON.stringify(g2));
+    const st1 = sim.getFhrpInfo('r1');
+    const st2 = sim.getFhrpInfo('r2');
+    check('13b R1 = MASTER (prioritas 120)', !!st1 && st1.length === 1 && st1[0].isMaster && st1[0].masterName === 'R1', JSON.stringify(st1));
+    check('13b R2 = BACKUP', !!st2 && st2.length === 1 && !st2[0].isMaster, JSON.stringify(st2));
+    const pingVip = sim.simulatePing('pc1', '192.168.1.254');
+    check('13b ping PC→virtual IP 192.168.1.254', pingVip.success, JSON.stringify(pingVip));
+    check('13b ping ke R1 fisik tetap jalan', sim.simulatePing('pc1', '192.168.1.1').success);
+    // Failover: master dimatikan → backup naik jadi master
+    sim.setNodePowered('r1', false);
+    sim.computeDynamicRoutes();
+    const st2b = sim.getFhrpInfo('r2');
+    check('13b failover: R2 jadi MASTER setelah R1 mati', !!st2b && st2b[0].isMaster, JSON.stringify(st2b));
+    const pingVip2 = sim.simulatePing('pc1', '192.168.1.254');
+    check('13b ping VIP tetap sukses (failover)', pingVip2.success, JSON.stringify(pingVip2));
+    // CLI print via engine snapshot
+    ctx = iCtx(dis, sim, 'r2', 'R2', project.nodes[3].ports);
+    const vrrpPrint = dis.dispatch('mikrotik', '/routing vrrp instance print', ctx);
+    check('13b mikrotik vrrp print menampilkan state', typeof vrrpPrint === 'string' && vrrpPrint.includes('MASTER'), JSON.stringify(vrrpPrint?.slice?.(0, 120)));
+    // R1 hidup lagi → master kembali
+    sim.setNodePowered('r1', true);
+    sim.computeDynamicRoutes();
+    const st1c = sim.getFhrpInfo('r1');
+    check('13b R1 kembali jadi master', !!st1c && st1c[0].isMaster, JSON.stringify(st1c));
+  }
+}
+
 // ── Ringkasan ────────────────────────────────────────────────────────────
+// ── 14. Fitur baru: reload, OSPF cost/passive, port-security, DHCP relay, SLAAC ──
+// Harness lokal (helper section 12/13 berada di scope blok masing-masing).
+{
+  const iPorts = (n: number, seed: string) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `ether${i + 1}`, name: `ether${i + 1}`, status: 'up',
+      macAddress: `00:0c:29:${seed}:${(i + 1).toString().padStart(2, '0')}:01`,
+    }));
+  const iNode = (id: string, name: string, vendor: string, model: string, n: number, seed: string) => ({
+    id, name, vendor, model, deviceType: model === 'switch' ? 'switch' : model === 'pc' || model === 'server' ? model : 'router',
+    ports: iPorts(n, seed),
+  });
+  const iEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  function iCtx(dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string, name: string, ports: any[], extra: Record<string, any> = {}) {
+    const node = (sim as any).nodes.get(nodeId);
+    const ctx: any = {
+      nodeId, name, ports,
+      dhcpClientGrant: (iface: string, addDefaultRoute: boolean) => {
+        const granted = sim.grantDhcpLease(nodeId, iface);
+        return granted ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId } : null;
+      },
+      pingSimulator: (host: string, vendorId: string) => formatPingOutput(vendorId, host, sim.simulatePing(nodeId, host)),
+      ospfNeighborProvider: () => sim.getOspfNeighbors(nodeId),
+      fhrpProvider: () => sim.getFhrpInfo(node),
+      ipv6Provider: () => sim.getIpv6Info(nodeId),
+    };
+    return { ...ctx, ...extra };
+  }
+  const syncCli = (d: VendorDispatcher, s: NetworkSimulator, nodeId: string) => {
+    const mem = d.getNodeMemory(nodeId);
+    s.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
+    s.setDhcpPools({ [nodeId]: mem.dhcpPools });
+    s.setRouting(nodeId, mem.routing);
+    s.setBgp(nodeId, mem.bgp);
+    s.setDnsRecords(nodeId, mem.dnsRecords);
+    s.setDnsServers(nodeId, mem.dnsServers);
+    s.setAcls(nodeId, mem.acls);
+    s.setNatRules(nodeId, mem.natRules);
+    s.setPortVlans(nodeId, mem.portVlans as Record<string, number>);
+    s.setShutdownIfaces(nodeId, mem.shutdownIfaces);
+    s.setSubinterfaces(nodeId, mem.subinterfaces);
+    s.setTrunkPorts(nodeId, mem.trunkPorts);
+    s.setStp(nodeId, mem.stp);
+    s.setFhrp(nodeId, mem.fhrpGroups);
+    s.applyNodeConfig6(nodeId, mem.configuredIps6, mem.routes6);
+    s.setDhcpRelays(nodeId, mem.dhcpRelays);
+    s.setPortSecurity(nodeId, mem.portSecurity);
+    s.setIpv6DhcpClients(nodeId, mem.ipv6DhcpClients);
+    s.setWireless(nodeId, { interfaces: mem.wireless, profiles: mem.wirelessSecurityProfiles });
+    s.setQos(nodeId, mem.queues, mem.mangleRules);
+    s.setSnmp(nodeId, mem.snmp);
+  };
+
+// ── 14a. reload: restore node dari startup-config ──────────────
+{
+  const dis = new VendorDispatcher();
+  const sim = new NetworkSimulator();
+  const project: LabProjectLike = {
+    nodes: [
+      iNode('r1', 'R1', 'cisco_ios', 'router', 3, 'a1'),
+      iNode('svr1', 'SVR1', 'linux', 'server', 1, 'a2'),
+    ],
+    edges: [iEdge('e1', 'r1', 'ether1', 'svr1', 'ether1')],
+  };
+  sim.syncTopology(project);
+  let ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[0].ports);
+  dis.dispatch('cisco_ios', 'interface ether1', ctx);
+  dis.dispatch('cisco_ios', 'ip address 192.168.1.1 255.255.255.0', ctx);
+  dis.dispatch('cisco_ios', 'exit', ctx);
+  dis.dispatch('cisco_ios', 'ip route 0.0.0.0 0.0.0.0 192.168.1.254', ctx);
+  dis.dispatch('cisco_ios', 'write memory', ctx);
+  // Tambahan konfigurasi SETELAH write memory → harus hilang saat reload.
+  dis.dispatch('cisco_ios', 'interface ether2', ctx);
+  dis.dispatch('cisco_ios', 'ip address 10.0.0.1 255.255.255.0', ctx);
+  dis.dispatch('cisco_ios', 'exit', ctx);
+  dis.dispatch('cisco_ios', 'ip route 172.16.0.0 255.255.0.0 10.0.0.254', ctx);
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+
+  const memPre = dis.getNodeMemory('r1');
+  check('14a sebelum reload: ether2 terkonfigurasi', !!memPre.configuredIps['ether2']);
+  check('14a sebelum reload: rute 172.16 ada', memPre.routes.some((r: any) => r.dst === '172.16.0.0 255.255.0.0'));
+  const pre = sim.getDeviceStats('r1');
+  check('14a sebelum reload: engine punya rute 172.16', !!pre?.routes.some((r) => r.dst === '172.16.0.0/16'));
+
+  const reloadOut = dis.dispatch('cisco_ios', 'reload', ctx);
+  const memPost = dis.getNodeMemory('r1');
+  check('14a reload output menyebut restart', typeof reloadOut === 'string' && /restart|reload/i.test(reloadOut), JSON.stringify(reloadOut));
+  check('14a sesudah reload: ether2 hilang', !memPost.configuredIps['ether2']);
+  check('14a sesudah reload: ether1 & default route tersimpan', !!memPost.configuredIps['ether1'] && memPost.routes.some((r: any) => r.dst === '0.0.0.0 0.0.0.0'));
+  check('14a sesudah reload: rute 172.16 hilang', !memPost.routes.some((r: any) => r.dst === '172.16.0.0 255.255.0.0'));
+
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+  const post = sim.getDeviceStats('r1');
+  check('14a engine ikut reset: 172.16 tidak ada', !post?.routes.some((r) => r.dst === '172.16.0.0/16'));
+  check('14a engine: ether2 IP hilang', !post?.interfaces.some((i) => i.ip === '10.0.0.1'));
+}
+
+// ── 14b. OSPF cost interface + passive-interface ───────────────
+{
+  const dis = new VendorDispatcher();
+  const sim = new NetworkSimulator();
+  const project: LabProjectLike = {
+    nodes: [
+      iNode('r2', 'R2', 'cisco_ios', 'router', 3, 'b2'),
+      iNode('r3', 'R3', 'cisco_ios', 'router', 3, 'b3'),
+      iNode('r4', 'R4', 'cisco_ios', 'router', 3, 'b4'),
+    ],
+    edges: [
+      iEdge('e1', 'r2', 'ether1', 'r4', 'ether1'),
+      iEdge('e2', 'r2', 'ether2', 'r3', 'ether1'),
+      iEdge('e3', 'r4', 'ether2', 'r3', 'ether2'),
+    ],
+  };
+  sim.syncTopology(project);
+  // Segment S1: r2.e1–r4.e1 (192.168.1.0/30) · S2: r2.e2–r3.e1 (192.168.2.0/30)
+  // S3: r4.e2–r3.e2 (192.168.3.0/30) · LAN r3.e3: 192.168.4.0/24
+  const cfg = (id: string, ips: Record<string, string>) => {
+    const ctx = iCtx(dis, sim, id, id.toUpperCase(), project.nodes.find((n) => n.id === id)!.ports);
+    for (const [iface, ip] of Object.entries(ips)) {
+      dis.dispatch('cisco_ios', `interface ${iface}`, ctx);
+      dis.dispatch('cisco_ios', `ip address ${ip}`, ctx);
+      dis.dispatch('cisco_ios', 'exit', ctx);
+    }
+    return ctx;
+  };
+  const ctxR2 = cfg('r2', { ether1: '192.168.1.1 255.255.255.252', ether2: '192.168.2.1 255.255.255.252' });
+  cfg('r3', { ether1: '192.168.2.2 255.255.255.252', ether2: '192.168.3.2 255.255.255.252', ether3: '192.168.4.1 255.255.255.0' });
+  cfg('r4', { ether1: '192.168.1.2 255.255.255.252', ether2: '192.168.3.1 255.255.255.252' });
+
+  const ospf = (id: string, nets: string[]) => {
+    const ctx = iCtx(dis, sim, id, id.toUpperCase(), project.nodes.find((n) => n.id === id)!.ports);
+    dis.dispatch('cisco_ios', 'router ospf 1', ctx);
+    for (const n of nets) dis.dispatch('cisco_ios', `network ${n} area 0`, ctx);
+    dis.dispatch('cisco_ios', 'exit', ctx);
+  };
+  ospf('r2', ['192.168.1.0 0.0.0.3', '192.168.2.0 0.0.0.3']);
+  ospf('r3', ['192.168.2.0 0.0.0.3', '192.168.3.0 0.0.0.3', '192.168.4.0 0.0.0.255']);
+  ospf('r4', ['192.168.1.0 0.0.0.3', '192.168.3.0 0.0.0.3']);
+
+  // Jalur ke LAN R3 (192.168.4.0/24) dari R2:
+  //   langsung r2→r3 via S2 (cost r3.ether1 = 100)
+  //   vs r2→r4→r3 via S3+S1 (cost r3.ether2 = 1 + cost r4.ether1 = 1 → total 2).
+  // Cost dipasang di sisi ADVERTISER (r3) sesuai model metrik flooding engine.
+  const ctxR3 = cfg('r3', {});
+  dis.dispatch('cisco_ios', 'interface ether1', ctxR3);
+  dis.dispatch('cisco_ios', 'ip ospf cost 100', ctxR3);
+  dis.dispatch('cisco_ios', 'exit', ctxR3);
+  dis.dispatch('cisco_ios', 'interface ether2', ctxR3);
+  dis.dispatch('cisco_ios', 'ip ospf cost 1', ctxR3);
+  dis.dispatch('cisco_ios', 'exit', ctxR3);
+  const costMem = dis.getNodeMemory('r3').routing.ospf;
+  check('14b cost interface tersimpan', (costMem as any).interfaceCosts?.ether1 === 100 && (costMem as any).interfaceCosts?.ether2 === 1, JSON.stringify((costMem as any).interfaceCosts));
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+  sim.computeDynamicRoutes();
+
+  const r2Route = () =>
+    sim.getDeviceStats('r2')?.routes.find((x) => x.dst === '192.168.4.0/24' && x.kind === 'dynamic')?.gateway || '';
+  // Jalur murah: r2→r4→r3 (2) < r2→r3 langsung (100) → via R4.
+  check('14b R2 memilih jalur murah via R4', r2Route() === '192.168.1.2', r2Route());
+  const pingCheap = sim.simulatePing('r2', '192.168.4.1');
+  check('14b ping ke R3/LAN sukses lewat jalur murah', pingCheap.success, JSON.stringify(pingCheap));
+  const neighborsCheap = sim.getOspfNeighbors('r2');
+  check('14b OSPF neighbor r2: 2 tetangga', neighborsCheap.length === 2, JSON.stringify(neighborsCheap));
+
+  // Naikkan cost r3.ether2 (ke R4) menjadi 1000 → R2 beralih ke jalur langsung r2→r3.
+  dis.dispatch('cisco_ios', 'interface ether2', ctxR3);
+  dis.dispatch('cisco_ios', 'ip ospf cost 1000', ctxR3);
+  dis.dispatch('cisco_ios', 'exit', ctxR3);
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+  sim.computeDynamicRoutes();
+  check('14b R2 berpindah ke jalur langsung R3', r2Route() === '192.168.2.2', r2Route());
+  check('14b ping tetap sukses setelah cost naik', sim.simulatePing('r2', '192.168.4.1').success);
+
+  // passive-interface di sisi r2 (ether1 ke r4): adjacency r2–r4 hilang.
+  dis.dispatch('cisco_ios', 'router ospf 1', ctxR2);
+  dis.dispatch('cisco_ios', 'passive-interface ether1', ctxR2);
+  dis.dispatch('cisco_ios', 'exit', ctxR2);
+  const passMem = dis.getNodeMemory('r2').routing.ospf;
+  check('14b passive-interface tersimpan', (passMem as any).passiveInterfaces?.includes('ether1'), JSON.stringify((passMem as any).passiveInterfaces));
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+  sim.computeDynamicRoutes();
+
+  const n2 = sim.getOspfNeighbors('r2');
+  const n4 = sim.getOspfNeighbors('r4');
+  check('14b passive: r2 tidak melihat R4', n2.length === 1 && n2[0].routerId === '192.168.2.2', JSON.stringify(n2));
+  check('14b passive: r4 tidak melihat R2', n4.length === 1 && n4[0].routerId === '192.168.2.2', JSON.stringify(n4));
+  check('14b passive: rute R2 masih ada (via R3 langsung)', r2Route() === '192.168.2.2', r2Route());
+  check('14b passive: ping R2→LAN R3 tetap sukses', sim.simulatePing('r2', '192.168.4.1').success);
+  check('14b passive: ping R4→LAN R3 tetap sukses', sim.simulatePing('r4', '192.168.4.1').success);
+}
+
+// ── 14c. port-security (Cisco switch): config → engine → stats ─
+{
+  const dis = new VendorDispatcher();
+  const sim = new NetworkSimulator();
+  const project: LabProjectLike = {
+    nodes: [
+      iNode('pc1', 'PC1', 'linux', 'pc', 1, 'c1'),
+      iNode('pc2', 'PC2', 'linux', 'pc', 1, 'c2'),
+      iNode('sw1', 'SW1', 'cisco_ios', 'switch', 3, 'c3'),
+    ],
+    edges: [
+      iEdge('e1', 'pc1', 'ether1', 'sw1', 'ether1'),
+      iEdge('e2', 'pc2', 'ether1', 'sw1', 'ether2'),
+    ],
+  };
+  sim.syncTopology(project);
+  const ctxPc1 = iCtx(dis, sim, 'pc1', 'PC1', project.nodes[0].ports);
+  const ctxPc2 = iCtx(dis, sim, 'pc2', 'PC2', project.nodes[1].ports);
+  dis.dispatch('linux', 'ip addr add 192.168.1.10/24 dev ether1', ctxPc1);
+  dis.dispatch('linux', 'ip addr add 192.168.1.20/24 dev ether1', ctxPc2);
+  const ctxSw1 = iCtx(dis, sim, 'sw1', 'SW1', project.nodes[2].ports);
+  dis.dispatch('cisco_ios', 'interface ether1', ctxSw1);
+  dis.dispatch('cisco_ios', 'switchport port-security', ctxSw1);
+  dis.dispatch('cisco_ios', 'switchport port-security maximum 1', ctxSw1);
+  dis.dispatch('cisco_ios', 'switchport port-security mac-address sticky', ctxSw1);
+  dis.dispatch('cisco_ios', 'switchport port-security violation restrict', ctxSw1);
+  dis.dispatch('cisco_ios', 'exit', ctxSw1);
+  const psMem = dis.getNodeMemory('sw1').portSecurity;
+  check('14c config port-security tersimpan', !!psMem['ether1'] && psMem['ether1'].limit === 1 && psMem['ether1'].sticky === true, JSON.stringify(psMem));
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+
+  const stats1 = sim.getDeviceStats('sw1');
+  check('14c engine mendapat port-security (limit+sticky)', !!stats1?.portSecurity && stats1.portSecurity['ether1']?.limit === 1 && stats1.portSecurity['ether1']?.sticky === true, JSON.stringify(stats1?.portSecurity));
+  // Operasi normal: satu MAC per port tetap lancar dengan port-security aktif.
+  const pingOk = sim.simulatePing('pc1', '192.168.1.20');
+  check('14c forwarding normal dengan port-security aktif', pingOk.success, JSON.stringify(pingOk));
+  const stats2 = sim.getDeviceStats('sw1');
+  check('14c MAC dipelajari per port', (stats2?.portSecurity?.['ether1']?.learned?.length ?? 0) >= 1, JSON.stringify(stats2?.portSecurity));
+
+  dis.dispatch('cisco_ios', 'interface ether1', ctxSw1);
+  dis.dispatch('cisco_ios', 'no switchport port-security', ctxSw1);
+  dis.dispatch('cisco_ios', 'exit', ctxSw1);
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+  const stats3 = sim.getDeviceStats('sw1');
+  check('14c no port-security → config hilang dari engine', !stats3?.portSecurity?.['ether1'], JSON.stringify(stats3?.portSecurity));
+  check('14c ping tetap sukses setelah nonaktif', sim.simulatePing('pc1', '192.168.1.20').success);
+}
+
+// ── 14d. DHCP relay (ip helper-address) ─────────────────────────
+{
+  const dis = new VendorDispatcher();
+  const sim = new NetworkSimulator();
+  const project: LabProjectLike = {
+    nodes: [
+      iNode('pc1', 'PC1', 'linux', 'pc', 1, 'd1'),
+      iNode('r1', 'R1', 'cisco_ios', 'router', 2, 'd2'),
+      iNode('r2', 'R2', 'mikrotik', 'router', 2, 'd3'),
+    ],
+    edges: [
+      iEdge('e1', 'pc1', 'ether1', 'r1', 'ether1'),
+      iEdge('e2', 'r1', 'ether2', 'r2', 'ether1'),
+    ],
+  };
+  sim.syncTopology(project);
+  let ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[1].ports);
+  dis.dispatch('cisco_ios', 'interface ether1', ctx);
+  dis.dispatch('cisco_ios', 'ip address 192.168.1.1 255.255.255.0', ctx);
+  dis.dispatch('cisco_ios', 'ip helper-address 10.0.1.2', ctx);
+  dis.dispatch('cisco_ios', 'interface ether2', ctx);
+  dis.dispatch('cisco_ios', 'ip address 10.0.1.1 255.255.255.0', ctx);
+  dis.dispatch('cisco_ios', 'exit', ctx);
+  check('14d helper-address tersimpan', dis.getNodeMemory('r1').dhcpRelays['ether1'] === '10.0.1.2', JSON.stringify(dis.getNodeMemory('r1').dhcpRelays));
+
+  ctx = iCtx(dis, sim, 'r2', 'R2', project.nodes[2].ports);
+  dis.dispatch('mikrotik', '/ip address add address=10.0.1.2/24 interface=ether1', ctx);
+  dis.dispatch('mikrotik', '/ip pool add name=pool1 ranges=192.168.1.100-192.168.1.200', ctx);
+  dis.dispatch('mikrotik', '/ip dhcp-server add name=dhcp1 interface=ether1 address-pool=pool1', ctx);
+  const poolsMem = dis.getNodeMemory('r2').dhcpPools;
+  check('14d pool server tersimpan', poolsMem.some((p: any) => p.name === 'pool1'), JSON.stringify(poolsMem));
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+
+  const lease = sim.grantDhcpLease('pc1', 'ether1');
+  check('14d client dapat IP via relay', !!lease && lease.ip === '192.168.1.100', JSON.stringify(lease));
+  check('14d IP tercatat di leases', sim.getLeases().some((l) => l.nodeId === 'pc1' && l.ip === '192.168.1.100'));
+}
+
+// ── 14e. SLAAC / DHCPv6 client (MikroTik) ───────────────────────
+{
+  const dis = new VendorDispatcher();
+  const sim = new NetworkSimulator();
+  const project: LabProjectLike = {
+    nodes: [
+      iNode('r1', 'R1', 'cisco_ios', 'router', 2, 'e1'),
+      iNode('r2', 'R2', 'mikrotik', 'router', 2, 'e2'),
+    ],
+    edges: [iEdge('e1', 'r1', 'ether1', 'r2', 'ether1')],
+  };
+  sim.syncTopology(project);
+  let ctx = iCtx(dis, sim, 'r1', 'R1', project.nodes[0].ports);
+  dis.dispatch('cisco_ios', 'interface ether1', ctx);
+  dis.dispatch('cisco_ios', 'ipv6 address 2001:db8:1::1/64', ctx);
+  dis.dispatch('cisco_ios', 'exit', ctx);
+  const mem6 = dis.getNodeMemory('r1');
+  check('14e ipv6 r1 terkonfigurasi', mem6.configuredIps6['ether1'] === '2001:db8:1::1/64', JSON.stringify(mem6.configuredIps6));
+
+  ctx = iCtx(dis, sim, 'r2', 'R2', project.nodes[1].ports);
+  dis.dispatch('mikrotik', '/ipv6 dhcp-client add interface=ether1', ctx);
+  check('14e dhcp-client r2 tersimpan', dis.getNodeMemory('r2').ipv6DhcpClients.length === 1, JSON.stringify(dis.getNodeMemory('r2').ipv6DhcpClients));
+  for (const n of project.nodes) syncCli(dis, sim, n.id);
+
+  const info = sim.getIpv6Info('r2');
+  const addr6 = info?.addresses?.find((i) => i.iface === 'ether1')?.address || '';
+  check('14e SLAAC r2 dapat global address', typeof addr6 === 'string' && addr6.startsWith('2001:db8:1:'), JSON.stringify(info));
+  const ping6 = sim.simulatePing6('r2', '2001:db8:1::1');
+  check('14e ping6 r2 ke gateway sukses', ping6.success, JSON.stringify(ping6));
+  const out = dis.dispatch('mikrotik', '/ipv6 dhcp-client print', iCtx(dis, sim, 'r2', 'R2', project.nodes[1].ports));
+  check('14e print dhcp-client BOUND', typeof out === 'string' && /bound/i.test(out), JSON.stringify(out));
+}
+}
+
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('\nFAILED:');

@@ -55,6 +55,12 @@ export interface LabEdge {
   targetNodeId: string;
   targetPortId: string;
   cableType: 'copper_straight' | 'copper_cross' | 'fiber' | 'serial';
+  /** latensi kabel (ms) — override nilai default sesuai tipe kabel */
+  latencyMs?: number;
+  /** bandwidth link (Mbps) */
+  bandwidthMbps?: number;
+  /** true = link sengaja dimatikan (failure injection) */
+  down?: boolean;
   selected?: boolean;
 }
 

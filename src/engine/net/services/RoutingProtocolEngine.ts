@@ -79,6 +79,16 @@ export class RoutingProtocolEngine {
     return null;
   }
 
+  /** Cost OSPF sebuah interface: override CLI ("ip ospf cost") menang,
+   *  selain itu otomatis dari bandwidth (referensi 100 Mbps). */
+  private ospfIfaceCost(dev: NetworkDevice, iface: { name: string; speedMbps?: number } | null): number {
+    if (!iface) return 1;
+    const override = ((dev.routingCfg as any).ospf?.interfaceCosts || {})[iface.name];
+    if (override && override > 0) return override;
+    const speed = iface.speedMbps || 100;
+    return Math.max(1, Math.round(100 / speed));
+  }
+
   private normalizeNetworkEntry(dev: NetworkDevice, entry: string): string | null {
     const trimmed = entry.trim();
     const parsed = parseCidr(trimmed);
@@ -133,6 +143,8 @@ export class RoutingProtocolEngine {
       for (const dev of l3) {
         const myEntries = tables.get(dev.id);
         if (!myEntries) continue;
+        const proto = dev.routingCfg.ospf?.enabled ? 'ospf' : dev.routingCfg.rip?.enabled ? 'rip' : dev.routingCfg.eigrp?.enabled ? 'eigrp' : null;
+        if (!proto) continue;
         const myKeys = new Set<string>();
         for (const link of links.linksOf(dev.id)) {
           const myPort = link.a.nodeId === dev.id ? link.a.port : link.b.port;
@@ -141,13 +153,33 @@ export class RoutingProtocolEngine {
         for (const key of myKeys) {
           const myIp = this.ipOnSegment(dev, key, segments, links);
           if (!myIp) continue;
+          // passive-interface OSPF: interface lokal di segmen ini tidak
+          // membentuk adjacency → subnet tetap diiklankan, tapi tidak
+          // ada pertukaran rute lewat segmen ini.
+          const localIface = dev.getInterfaces().find((i) => i.ip && i.ip.address === myIp) || null;
+          const myPassive =
+            proto === 'ospf' &&
+            !!localIface &&
+            ((dev.routingCfg as any).ospf?.passiveInterfaces || []).includes(localIface.name);
+          if (myPassive) continue;
+          // Cost OSPF interface (eksplisit via CLI atau auto dari bandwidth).
+          const hopCost = proto === 'ospf' ? this.ospfIfaceCost(dev, localIface) : 1;
           for (const other of l3) {
             if (other.id === dev.id) continue;
             if (!other.routingCfg.ospf?.enabled && !other.routingCfg.rip?.enabled && !other.routingCfg.eigrp?.enabled) continue;
             const otherIp = this.ipOnSegment(other, key, segments, links);
             if (!otherIp) continue;
+            // Sisi penerima juga passive → adjacency tidak terbentuk.
+            const otherIface = other.getInterfaces().find((i) => i.ip && i.ip.address === otherIp);
+            if (
+              otherIface &&
+              proto === 'ospf' &&
+              ((other.routingCfg as any).ospf?.passiveInterfaces || []).includes(otherIface.name)
+            ) {
+              continue;
+            }
             for (const e of myEntries) {
-              candidates.push({ peerId: other.id, dst: e.dst, gateway: myIp, metric: e.metric + 1 });
+              candidates.push({ peerId: other.id, dst: e.dst, gateway: myIp, metric: e.metric + hopCost });
             }
           }
         }

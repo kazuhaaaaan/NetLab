@@ -9,7 +9,7 @@
 import { EventScheduler } from './EventScheduler';
 import { TimeManager } from './TimeManager';
 import { EventBus } from './EventBus';
-import { Topology, LabProjectLike, transmissionDelay } from './Topology';
+import { Topology, LabProjectLike, transmissionDelay, linkLatencyMs } from './Topology';
 import { NetworkDevice } from '../devices/NetworkDevice';
 import { DeviceProcessor, SimulatorCore, processorKind } from '../devices/DeviceProcessor';
 import { SwitchProcessor } from '../devices/SwitchProcessor';
@@ -17,13 +17,16 @@ import { WirelessProcessor } from '../devices/WirelessProcessor';
 import { RouterProcessor } from '../devices/RouterProcessor';
 import { HostProcessor } from '../devices/HostProcessor';
 import { arpResolveAndSend } from '../devices/sendUtils';
+import { ndpResolveAndSend } from '../devices/ndpUtils';
 import { RoutingProtocolEngine } from '../services/RoutingProtocolEngine';
 import { computeStp, StpConfig, StpPortState } from '../services/StpService';
+import { computeFhrp, FhrpGroup, FhrpState } from '../services/FhrpService';
 import { computeWireless, WirelessIfaceCfg, WirelessProfileCfg } from '../services/WirelessService';
 import { applyMangle, applyQos, freshQosState, MangleRule, qosStatsOf, SimpleQueue } from '../services/QosService';
-import { Packet, RunResult, SimEvent, SimEventType } from './types';
+import { NetworkInterfaceModel } from '../interfaces/NetworkInterface';
+import { NetworkInterface, Packet, RunResult, SimEvent, SimEventType } from './types';
 import { isValidIp, inSameSubnet } from './ip';
-import { isIpv6Address } from './ipv6';
+import { isIpv6Address, inSameIpv6Subnet, ipv6NetworkString, macToIpv6 } from './ipv6';
 import { buildTcpSegment, TCP_SYN } from '../layer4/Tcp';
 import { AclRule, DnsRecord, NatRule } from './types';
 import {
@@ -103,6 +106,12 @@ export class NetworkSimulator implements SimulatorCore {
   private dnsServers = new Map<string, string[]>();
   private webServers = new Map<string, WebServerInfo>();
   private stps = new Map<string, StpConfig>();
+  private fhrpGroups = new Map<string, FhrpGroup[]>();
+  private fhrpState = new Map<string, FhrpState[]>();
+  private fhrpMasters = new Map<string, string>();
+  private dhcpRelays = new Map<string, Record<string, string>>();
+  private portSecurities = new Map<string, Record<string, { limit?: number; sticky?: boolean; violation?: string; learned?: string[] }>>();
+  private slaacIfaces = new Map<string, string[]>();
   private wirelessCfgs = new Map<string, { interfaces: Record<string, WirelessIfaceCfg>; profiles: Record<string, WirelessProfileCfg> }>();
   private qoses = new Map<string, { queues: SimpleQueue[]; mangleRules: MangleRule[] }>();
 
@@ -167,6 +176,9 @@ export class NetworkSimulator implements SimulatorCore {
     if (iface && iface.type === 'vlan' && iface.vlanId) pkt.vlan = iface.vlanId;
     const neighbor = this.topology.links.neighborOf(device.id, portId);
     if (!neighbor) return false;
+    // Link dimatikan (failure injection) → frame hilang di kabel.
+    const link = this.topology.links.linkById(neighbor.linkId);
+    if (link?.down) return false;
     // Perangkat tujuan mati = link down: frame hilang di kabel tanpa
     // menggagalkan run (fisiknya memang tidak sampai ke perangkat).
     if (!this.isNodePowered(neighbor.nodeId)) return false;
@@ -179,9 +191,7 @@ export class NetworkSimulator implements SimulatorCore {
         return false;
       }
     }
-    const link = this.topology.links.linkById(neighbor.linkId);
-    const cableType = link?.cableType || 'copper_straight';
-    const delay = transmissionDelay(cableType, pkt);
+    const delay = transmissionDelay(link, pkt);
 
     // track lintasan request (dir=req) pada run
     if (pkt.flags['dir'] === 'req' && pkt.correlationId === traceId) {
@@ -394,6 +404,14 @@ export class NetworkSimulator implements SimulatorCore {
       }
       const stp = this.stps.get(dev.id);
       if (stp) dev.stpConfig = { ...dev.stpConfig, ...stp };
+      const fhrp = this.fhrpGroups.get(dev.id);
+      if (fhrp) dev.fhrpGroups = [...fhrp];
+      const relays = this.dhcpRelays.get(dev.id);
+      if (relays) dev.dhcpRelays = { ...relays };
+      const ps = this.portSecurities.get(dev.id);
+      if (ps) dev.portSecurityCfg = JSON.parse(JSON.stringify(ps));
+      const slaac = this.slaacIfaces.get(dev.id);
+      if (slaac) dev.slaacIfaces = [...slaac];
       const wl = this.wirelessCfgs.get(dev.id);
       if (wl) {
         dev.wirelessCfg = { ...wl.interfaces };
@@ -427,7 +445,45 @@ export class NetworkSimulator implements SimulatorCore {
     this.computeFhrp();
     this.computeWireless();
   }
-  private computeFhrp(): void {}
+
+  /** Konfigurasi FHRP (via CLI): kelompok VRRP yang diikuti perangkat. */
+  setFhrp(nodeId: string, groups: FhrpGroup[] | undefined): void {
+    if (groups && groups.length > 0) this.fhrpGroups.set(nodeId, groups);
+    else this.fhrpGroups.delete(nodeId);
+    const dev = this.nodes.get(nodeId);
+    if (dev) dev.fhrpGroups = groups && groups.length > 0 ? groups : [];
+    this.recomputeProtocols();
+  }
+
+  /** Snapshot FHRP perangkat (provider CLI `routing vrrp instance print`). */
+  getFhrpInfo(nodeId: string): FhrpState[] | null {
+    const states = this.fhrpState.get(nodeId);
+    if (!states || states.length === 0) return null;
+    return states;
+  }
+
+  /**
+   * Pemilihan master VRRP per virtual IP: yang menyala + prioritas
+   * tertinggi menang (tie-break: id node terkecil). Hanya master yang
+   * "memiliki" virtual IP (device.hasIp), sehingga ping ke virtual IP
+   * selalu menuju master — failover otomatis bila master dimatikan.
+   */
+  private computeFhrp(): void {
+    const devices = [...this.nodes.values()];
+    const prevMasters = this.fhrpMasters;
+    const res = computeFhrp(devices, this.fhrpGroups, (id) => this.isNodePowered(id));
+    this.fhrpState = res.states;
+    this.fhrpMasters = res.masters;
+    for (const [vip, newMaster] of res.masters) {
+      const oldMaster = prevMasters ? prevMasters.get(vip) : undefined;
+      if (oldMaster && oldMaster !== newMaster) {
+        // Failover FHRP: master berubah → ARP cache yang berisi VIP ini
+        // sudah lama (MAC master lama) → bersihkan supaya host melakukan
+        // ARP ulang dan menemukan master baru.
+        for (const dev of devices) dev.arpCache.clear();
+      }
+    }
+  }
 
   private applyConfigToDevice(dev: NetworkDevice, cfg: { ips: Record<string, string>; routes: { dst: string; gateway: string | null }[] }): void {
     for (const [ifaceName, cidr] of Object.entries(cfg.ips)) dev.setIpByName(ifaceName, cidr);
@@ -627,6 +683,75 @@ export class NetworkSimulator implements SimulatorCore {
     }
   }
 
+  /** DHCP relay per perangkat: port (nama interface) → server diteruskan. */
+  setDhcpRelays(nodeId: string, relays: Record<string, string> | undefined): void {
+    if (relays && Object.keys(relays).length > 0) this.dhcpRelays.set(nodeId, { ...relays });
+    else this.dhcpRelays.delete(nodeId);
+    const dev = this.nodes.get(nodeId);
+    if (dev) dev.dhcpRelays = relays && Object.keys(relays).length > 0 ? { ...relays } : {};
+  }
+
+  /** Port-security per port switch: { limit, sticky, violation }. */
+  setPortSecurity(nodeId: string, cfg: Record<string, { limit?: number; sticky?: boolean; violation?: string; learned?: string[] }> | undefined): void {
+    if (cfg && Object.keys(cfg).length > 0) this.portSecurities.set(nodeId, cfg);
+    else this.portSecurities.delete(nodeId);
+    const dev = this.nodes.get(nodeId);
+    if (dev) {
+      dev.portSecurityCfg = {};
+      if (cfg) {
+        for (const [port, c] of Object.entries(cfg)) {
+          dev.portSecurityCfg[port] = { limit: c.limit, sticky: c.sticky, learned: [] };
+        }
+      }
+    }
+  }
+
+  /** Interface dengan SLAAC/DHCPv6 client (autoconfig IPv6). */
+  setIpv6DhcpClients(nodeId: string, ifaces: string[] | undefined): void {
+    if (ifaces && ifaces.length > 0) this.slaacIfaces.set(nodeId, [...ifaces]);
+    else this.slaacIfaces.delete(nodeId);
+    const dev = this.nodes.get(nodeId);
+    if (dev) dev.slaacIfaces = ifaces && ifaces.length > 0 ? [...ifaces] : [];
+  }
+
+  /** Snapshot port-security (untuk DeviceStats/PingPanel + tes). */
+  getPortSecurityInfo(nodeId: string): Record<string, { limit: number; sticky: boolean; learned: string[] }> | null {
+    const dev = this.nodes.get(nodeId);
+    if (!dev || Object.keys(dev.portSecurityCfg).length === 0) return null;
+    const out: Record<string, { limit: number; sticky: boolean; learned: string[] }> = {};
+    for (const [port, c] of Object.entries(dev.portSecurityCfg)) {
+      out[port] = { limit: c.limit || 1, sticky: !!c.sticky, learned: [...(c.learned || [])] };
+    }
+    return out;
+  }
+
+  /** SLAAC: host tanpa alamat v6 otomatis mendapat alamat dari prefix router
+   *  terhubung (EUI-64) + default route — dipanggil sebelum ping6/print. */
+  private slaacAutoConfig(src: NetworkDevice): boolean {
+    for (const link of this.topology.links.linksOf(src.id)) {
+      const peerId = link.a.nodeId === src.id ? link.b.nodeId : link.a.nodeId;
+      const peer = this.nodes.get(peerId);
+      if (!peer || !this.isNodePowered(peerId)) continue;
+      const myPort = link.a.nodeId === src.id ? link.a.port : link.b.port;
+      const peerPort = link.a.nodeId === peerId ? link.a.port : link.b.port;
+      const myIface = src.getIfaceByPortId(myPort) || src.getIfaceByName(myPort);
+      const peerIface = peer.getIfaceByPortId(peerPort) || peer.getIfaceByName(peerPort);
+      if (!myIface || !peerIface?.ipv6) continue;
+      const network = ipv6NetworkString(peerIface.ipv6.address, peerIface.ipv6.prefix);
+      const addr = macToIpv6(myIface.mac, network, Math.min(peerIface.ipv6.prefix, 64));
+      if (!addr) continue;
+      src.setIpv6ByName(myIface.name, `${addr}/${peerIface.ipv6.prefix}`);
+      const gw = peerIface.ipv6.address;
+      if (!src.ipv6StaticRoutes.some((r) => r.dst === '::/0')) {
+        src.ipv6StaticRoutes.push({ dst: '::/0', gateway: gw, iface: null, kind: 'static' });
+        src.ipv6Routing.addRoute({ dst: '::/0', gateway: gw, iface: null, kind: 'static' });
+      }
+      src.slaacAddresses[myIface.name] = `${addr}/${peerIface.ipv6.prefix}`;
+      return true;
+    }
+    return false;
+  }
+
   setRouting(nodeId: string, cfg: RoutingMemoryShape | undefined): void {
     const enabled = cfg && (cfg.ospf?.enabled || cfg.rip?.enabled || cfg.eigrp?.enabled);
     if (enabled) this.routings.set(nodeId, cfg);
@@ -703,10 +828,20 @@ export class NetworkSimulator implements SimulatorCore {
   }
 
   setShutdownIfaces(nodeId: string, names: string[] | undefined): void {
-    if (names && names.length > 0) this.shutIfaces.set(nodeId, new Set(names));
+    const prev = this.shutIfaces.get(nodeId);
+    const next = names && names.length > 0 ? new Set(names) : new Set<string>();
+    if (next.size > 0) this.shutIfaces.set(nodeId, next);
     else this.shutIfaces.delete(nodeId);
     const dev = this.nodes.get(nodeId);
-    if (dev) for (const n of names || []) dev.setIfaceUp(n, false);
+    if (!dev) return;
+    // Interface yang baru masuk daftar shutdown → turunkan.
+    for (const n of next) dev.setIfaceUp(n, false);
+    // Interface yang keluar dari daftar (no shutdown) → hidupkan kembali.
+    if (prev) {
+      for (const n of prev) {
+        if (!next.has(n)) dev.setIfaceUp(n, true);
+      }
+    }
   }
 
   setSubinterfaces(nodeId: string, subs: { name: string; parentPort: string; vlanId: number }[] | undefined): void {
@@ -734,6 +869,8 @@ export class NetworkSimulator implements SimulatorCore {
   getDeviceStats(nodeId: string): DeviceStatsSnapshot | null {
     const dev = this.nodes.get(nodeId);
     if (!dev) return null;
+    const stp = dev.stpState;
+    const fhrp = this.getFhrpInfo(nodeId);
     return {
       name: dev.name,
       deviceType: dev.deviceType,
@@ -746,6 +883,36 @@ export class NetworkSimulator implements SimulatorCore {
       arp: dev.arpCache.entriesList().map((e) => ({ ip: e.ip, mac: e.mac })),
       macTable: dev.macTable.entriesList().map((e) => ({ mac: e.mac, port: e.port })),
       routes: dev.getRoutes().map((r) => ({ dst: r.dst, gateway: r.gateway || '', iface: r.iface || '', kind: r.kind })),
+      stp: stp
+        ? {
+            rootId: stp.rootId,
+            rootName: stp.rootName,
+            rootPort: stp.rootPort,
+            ports: [...stp.ports.entries()].map(([port, s]) => ({
+              port,
+              role: s.role,
+              state: s.state,
+              cost: s.cost,
+            })),
+          }
+        : undefined,
+      fhrp: fhrp && fhrp.length > 0 ? fhrp.map((f) => ({
+        virtualAddress: f.virtualAddress,
+        vip: f.vip,
+        isMaster: f.isMaster,
+        masterName: f.masterName,
+        priority: f.priority,
+        interface: f.interface,
+        vrid: f.vrid,
+      })) : undefined,
+      portSecurity: Object.keys(dev.portSecurityCfg).length > 0
+        ? Object.fromEntries(
+            Object.entries(dev.portSecurityCfg).map(([port, c]) => [
+              port,
+              { limit: c.limit || 1, sticky: !!c.sticky, learned: [...c.learned] },
+            ])
+          )
+        : undefined,
     };
   }
 
@@ -816,6 +983,18 @@ export class NetworkSimulator implements SimulatorCore {
     return null;
   }
 
+  /** Perkiraan RTT (ms) sebuah lintasan: 2 × latensi propagasi tiap hop. */
+  private rttOf(edgeIds: string[]): number {
+    let oneWay = 0;
+    const seen = new Set<string>();
+    for (const id of edgeIds) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      oneWay += linkLatencyMs(this.topology.links.linkById(id));
+    }
+    return oneWay * 2;
+  }
+
   // ── Simulasi flow ──────────────────────────────────────────────
   simulatePing(srcNodeId: string, dstIp: string): PingSimResult {
     const src = this.nodes.get(srcNodeId);
@@ -866,6 +1045,7 @@ export class NetworkSimulator implements SimulatorCore {
         edgeIds: run.fwdEdges,
         ttlAtDestination: run.ttlAtDst ?? DEFAULT_TTL,
         dhcpGranted: dhcpGranted || undefined,
+        rttMs: this.rttOf(run.fwdEdges),
       };
     }
     return this.pingFail(mapReason(run.reason));
@@ -881,7 +1061,19 @@ export class NetworkSimulator implements SimulatorCore {
       return { success: true, path: [src.name], edgeIds: [], ttlAtDestination: DEFAULT_TTL, reason: 'self' };
     }
     const iface = src.getInterfaces().find((i) => i.ipv6 && i.up);
-    if (!iface || !iface.ipv6) return this.pingFail('no-ip');
+    if (!iface || !iface.ipv6) {
+      // SLAAC/DHCPv6 client: host dengan interface autoconfig mendapatkan
+      // alamat dari prefix router terhubung sebelum ping.
+      if (src.slaacIfaces.length > 0 && this.slaacAutoConfig(src)) {
+        const newIface = src.getInterfaces().find((i) => i.ipv6 && i.up);
+        if (newIface?.ipv6) return this.continueSimulatePing6(src, newIface, dstIp);
+      }
+      return this.pingFail('no-ip');
+    }
+    return this.continueSimulatePing6(src, iface, dstIp);
+  }
+
+  private continueSimulatePing6(src: NetworkDevice, iface: NetworkInterfaceModel, dstIp: string): PingSimResult {
 
     const traceId = `ping6-${++this.runSeq}`;
     const run = this.beginRun(traceId);
@@ -901,7 +1093,7 @@ export class NetworkSimulator implements SimulatorCore {
     });
     run.rootPktId = req.id;
 
-    if (!this.inject(src, req, traceId)) return this.pingFail('unreachable');
+    if (!this.inject6(src, req, traceId)) return this.pingFail('unreachable');
     this.processUntil(traceId);
 
     if (run.status === 'ok') {
@@ -911,6 +1103,7 @@ export class NetworkSimulator implements SimulatorCore {
         path,
         edgeIds: run.fwdEdges,
         ttlAtDestination: run.ttlAtDst ?? DEFAULT_TTL,
+        rttMs: this.rttOf(run.fwdEdges),
       };
     }
     return this.pingFail(mapReason(run.reason));
@@ -924,6 +1117,11 @@ export class NetworkSimulator implements SimulatorCore {
   } | null {
     const dev = this.nodes.get(nodeId);
     if (!dev) return null;
+    // SLAAC/DHCPv6 client: alamat otomatis dari prefix router terhubung
+    // dipicu saat info diminta (print /ipv6 dhcp-client).
+    if (dev.slaacIfaces.length > 0 && !dev.getInterfaces().some((i) => i.ipv6 && i.up)) {
+      this.slaacAutoConfig(dev);
+    }
     return {
       addresses: dev
         .getInterfaces()
@@ -1070,28 +1268,50 @@ export class NetworkSimulator implements SimulatorCore {
   private inject(src: NetworkDevice, pkt: Packet, traceId: string): boolean {
     const candidates = src.getInterfaces().filter((i) => i.ip && i.up);
     const sameSub = candidates.find((i) => inSameSubnet(i.ip!.address, i.ip!.prefix, pkt.dstIp));
-    const iface = sameSub || candidates[0];
-    if (!iface || !iface.ip) return false;
 
     const nh = src.routing.lookup(pkt.dstIp);
     let nextHop: string | null = null;
     if (nh && nh.gateway) nextHop = nh.gateway;
-    else if (nh && nh.iface && iface.name === nh.iface) nextHop = pkt.dstIp;
-    else if (sameSub) nextHop = pkt.dstIp;
+    else if (nh && nh.iface && sameSub) nextHop = pkt.dstIp;
     else {
       const def = src.getRoutes().find((r) => r.kind === 'static' && (r.dst === '0.0.0.0/0' || r.dst === '0.0.0.0'));
       nextHop = def?.gateway || null;
     }
     if (!nextHop) {
       // host yang dapat IP via DHCP memakai gateway lease sebagai default route
-      const lease = src.leases.get(iface.name);
+      const lease = src.leases.get(sameSub?.name || candidates[0]?.name || '');
       if (lease?.gateway) nextHop = lease.gateway;
     }
     if (!nextHop) return false;
 
+    // Interface keluar = subnet yang memuat next-hop (bukan sekadar iface pertama),
+    // agar paket tidak tersasar ke link lain.
+    const nhIface = src.resolveEgressIface(nextHop);
+    const iface = nhIface || sameSub || candidates[0];
+    if (!iface || !iface.ip) return false;
+
     pkt.srcIp = iface.ip.address;
     pkt.srcMac = iface.mac;
     return arpResolveAndSend(src, pkt, iface.name, nextHop, this, traceId);
+  }
+
+  private inject6(src: NetworkDevice, pkt: Packet, traceId: string): boolean {
+    const candidates = src.getInterfaces().filter((i) => i.ipv6 && i.up);
+    const sameSub = candidates.find((i) => inSameIpv6Subnet(i.ipv6!.address, i.ipv6!.prefix, pkt.dstIp));
+
+    const nh = src.ipv6Routing.lookup(pkt.dstIp);
+    let nextHop: string | null = null;
+    if (nh && nh.gateway) nextHop = nh.gateway;
+    else if (sameSub) nextHop = pkt.dstIp;
+    if (!nextHop) return false;
+
+    const nhIface = src.resolveEgressIface6(nextHop);
+    const iface = nhIface || sameSub || candidates[0];
+    if (!iface || !iface.ipv6) return false;
+
+    pkt.srcIp = iface.ipv6.address;
+    pkt.srcMac = iface.mac;
+    return ndpResolveAndSend(src, pkt, iface.name, nextHop, this, traceId);
   }
 
   private pingFail(reason: PingSimResult['reason']): PingSimResult {
@@ -1140,9 +1360,16 @@ export class NetworkSimulator implements SimulatorCore {
       if (!peer.routingCfg.ospf?.enabled) continue;
       const peerIp = peer.getIpAddress();
       if (!peerIp || seen.has(peerIp)) continue;
-      seen.add(peerIp);
       const myPort = link.a.nodeId === nodeId ? link.a.port : link.b.port;
-      out.push({ routerId: peerIp, ip: peerIp, iface: dev.getIfaceByPortId(myPort)?.name || myPort, state: 'Full/ -' });
+      const peerPort = link.a.nodeId === peerId ? link.a.port : link.b.port;
+      // passive-interface: salah satu sisi tidak membentuk adjacency
+      const myIface = dev.getIfaceByPortId(myPort) || dev.getIfaceByName(myPort);
+      const peerIface = peer.getIfaceByPortId(peerPort) || peer.getIfaceByName(peerPort);
+      const myPassive = dev.routingCfg.ospf?.passiveInterfaces?.includes(myIface?.name || myPort) ?? false;
+      const peerPassive = peer.routingCfg.ospf?.passiveInterfaces?.includes(peerIface?.name || peerPort) ?? false;
+      if (myPassive || peerPassive) continue;
+      seen.add(peerIp);
+      out.push({ routerId: peerIp, ip: peerIp, iface: myIface?.name || myPort, state: 'Full/ -' });
     }
     return out;
   }
