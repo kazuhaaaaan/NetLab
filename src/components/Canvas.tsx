@@ -146,6 +146,8 @@ interface CanvasProps {
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
   onNodePositionChange: (nodeId: string, pos: { x: number; y: number }) => void;
+  /** Mobile: TAP biasa pada perangkat (tanpa drag) — buka sheet aksi perangkat. */
+  onNodeTap?: (nodeId: string) => void;
   onOpenTerminal: (nodeId: string) => void;
   onPortClick: (nodeId: string, portId: string) => void;
   onCableConnect: (
@@ -231,6 +233,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   onSelectNodes,
   onToggleNodeSelected,
   onUpdateEdge,
+  onNodeTap,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const handleGestureRef = useRef<(gesture: GestureDetail) => void>(() => {});
@@ -448,6 +451,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         } else {
           onSelectNode(gesture.nodeId);
           onSelectEdge(null);
+          if (onNodeTap) onNodeTap(gesture.nodeId);
         }
       } else if (gesture.targetType === "edge" && gesture.targetId) {
         onSelectEdge(gesture.targetId);

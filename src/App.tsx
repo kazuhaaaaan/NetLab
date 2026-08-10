@@ -11,6 +11,11 @@ import { GradingModal } from './components/GradingModal';
 import { MonorepoExplorerModal } from './components/MonorepoExplorerModal';
 import { ContextMenu } from './components/ContextMenu';
 import { MobileToolbar } from './components/MobileToolbar';
+import { MobileHeader } from './components/mobile/MobileHeader';
+import { MobileAddDeviceSheet } from './components/mobile/MobileAddDeviceSheet';
+import { MobileDeviceActions } from './components/mobile/MobileDeviceActions';
+import { MobileInspectorSheet } from './components/mobile/MobileInspectorSheet';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { PingPanel, PingResult } from './components/PingPanel';
 import { SplashScreen } from './components/SplashScreen';
 import { LandingPage } from './components/LandingPage';
@@ -230,6 +235,10 @@ export default function App() {
   });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetId?: string; targetType?: string } | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>(() => loadUiState()?.theme ?? 'dark');
+  // Mobile: deteksi viewport <768px → layout canvas-first
+  const isMobile = useMediaQuery('(max-width: 767px)');
+  // Mobile: sheet aktif — 'add' | 'device' | 'inspector'
+  const [mobileSheet, setMobileSheet] = useState<null | 'add' | 'device' | 'inspector'>(null);
 
   // Ping PDU simulation state
   const [pingResults, setPingResults] = useState<PingResult[]>([]);
@@ -1150,68 +1159,117 @@ export default function App() {
   }
 
   return (
-    <div className={`w-screen h-screen flex flex-col overflow-hidden font-sans ${theme === 'dark' ? 'bg-[#0B0C0E] text-slate-100' : 'bg-[#f4f5f8] text-slate-900'}`}>
-      {/* Navigation Header */}
-      <Navbar
-        project={project}
-        onGoHome={goToHome}
-        onNewProject={() => {
-          if (confirm('Create new empty lab topology?')) {
-            setProject({
-              ...TEMPLATE_BASIC,
-              nodes: [],
-              edges: []
-            });
-            vendorDispatcher.restoreMemory(null);
-            StorageEngine.clearDeviceConfigs();
-          }
-        }}
-        onExportMlab={() => StorageEngine.exportProjectAsFile(project)}
-        onImportMlab={async (file) => {
-          try {
-            const imported = await StorageEngine.parseProjectFile(file);
-            setProject(imported);
-          } catch (err: any) {
-            alert(`Failed to import .mlab file: ${err.message}`);
-          }
-        }}
-        onOpenMonorepo={() => setIsMonorepoOpen(true)}
-        onOpenTutorial={() => setIsTutorialOpen(true)}
-        onOpenGrading={() => setIsGradingOpen(true)}
-        onOpenAiChat={() => setIsAiChatOpen(true)}
-        theme={theme}
-        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-        onLoadTemplate={(tpl) => {
-          if (tpl === 'basic') setProjectWithHistory(TEMPLATE_BASIC);
-          if (tpl === 'enterprise') setProjectWithHistory(TEMPLATE_ENTERPRISE);
-        }}
-        onOpenDonate={() => setIsDonateOpen(true)}
-        onShare={handleShare}
-        onExportPng={() => exportTopologyPng(project, theme)}
-        onExportSvg={() => exportTopologySvg(project, theme)}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-      />
+    <div className={`w-full h-dvh flex flex-col overflow-hidden font-sans ${theme === 'dark' ? 'bg-[#0B0C0E] text-slate-100' : 'bg-[#f4f5f8] text-slate-900'}`}>
+      {/* Navigation Header — desktop punya sidebar, mobile pakai header khusus */}
+      {!isMobile && (
+        <Navbar
+          project={project}
+          onGoHome={goToHome}
+          onNewProject={() => {
+            if (confirm('Create new empty lab topology?')) {
+              setProject({
+                ...TEMPLATE_BASIC,
+                nodes: [],
+                edges: []
+              });
+              vendorDispatcher.restoreMemory(null);
+              StorageEngine.clearDeviceConfigs();
+            }
+          }}
+          onExportMlab={() => StorageEngine.exportProjectAsFile(project)}
+          onImportMlab={async (file) => {
+            try {
+              const imported = await StorageEngine.parseProjectFile(file);
+              setProject(imported);
+            } catch (err: any) {
+              alert(`Failed to import .mlab file: ${err.message}`);
+            }
+          }}
+          onOpenMonorepo={() => setIsMonorepoOpen(true)}
+          onOpenTutorial={() => setIsTutorialOpen(true)}
+          onOpenGrading={() => setIsGradingOpen(true)}
+          onOpenAiChat={() => setIsAiChatOpen(true)}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          onLoadTemplate={(tpl) => {
+            if (tpl === 'basic') setProjectWithHistory(TEMPLATE_BASIC);
+            if (tpl === 'enterprise') setProjectWithHistory(TEMPLATE_ENTERPRISE);
+          }}
+          onOpenDonate={() => setIsDonateOpen(true)}
+          onShare={handleShare}
+          onExportPng={() => exportTopologyPng(project, theme)}
+          onExportSvg={() => exportTopologySvg(project, theme)}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+        />
+      )}
+      {isMobile && (
+        <MobileHeader
+          project={project}
+          onGoHome={goToHome}
+          onNewProject={() => {
+            if (confirm('Create new empty lab topology?')) {
+              setProject({
+                ...TEMPLATE_BASIC,
+                nodes: [],
+                edges: []
+              });
+              vendorDispatcher.restoreMemory(null);
+              StorageEngine.clearDeviceConfigs();
+            }
+          }}
+          onExportMlab={() => StorageEngine.exportProjectAsFile(project)}
+          onImportMlab={async (file) => {
+            try {
+              const imported = await StorageEngine.parseProjectFile(file);
+              setProject(imported);
+            } catch (err: any) {
+              alert(`Failed to import .mlab file: ${err.message}`);
+            }
+          }}
+          onOpenMonorepo={() => setIsMonorepoOpen(true)}
+          onOpenTutorial={() => setIsTutorialOpen(true)}
+          onOpenGrading={() => setIsGradingOpen(true)}
+          onOpenAiChat={() => setIsAiChatOpen(true)}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          onLoadTemplate={(tpl) => {
+            if (tpl === 'basic') setProjectWithHistory(TEMPLATE_BASIC);
+            if (tpl === 'enterprise') setProjectWithHistory(TEMPLATE_ENTERPRISE);
+          }}
+          onOpenDonate={() => setIsDonateOpen(true)}
+          onShare={handleShare}
+          onExportPng={() => exportTopologyPng(project, theme)}
+          onExportSvg={() => exportTopologySvg(project, theme)}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onOpenAddDevice={() => setMobileSheet('add')}
+        />
+      )}
 
       {/* Main Workspace Layout */}
       <div className="flex-1 relative flex overflow-hidden">
-        {/* Left Sidebar */}
-        <Sidebar
-          selectedNode={selectedNode}
-          onAddNode={handleAddNode}
-          onUpdateNodeName={handleUpdateNodeName}
-          onUpdateNodeModel={handleUpdateNodeModel}
-          onDeleteNode={handleDeleteNode}
-          onTogglePower={handleTogglePower}
-          onOpenTerminal={handleOpenTerminal}
-          isOpen={isSidebarOpen}
-          onToggleOpen={() => setIsSidebarOpen(!isSidebarOpen)}
-        />
+        {/* Left Sidebar — hanya desktop, mobile pakai sheet */}
+        {!isMobile && (
+          <Sidebar
+            selectedNode={selectedNode}
+            onAddNode={handleAddNode}
+            onUpdateNodeName={handleUpdateNodeName}
+            onUpdateNodeModel={handleUpdateNodeModel}
+            onDeleteNode={handleDeleteNode}
+            onTogglePower={handleTogglePower}
+            onOpenTerminal={handleOpenTerminal}
+            isOpen={isSidebarOpen}
+            onToggleOpen={() => setIsSidebarOpen(!isSidebarOpen)}
+          />
+        )}
 
         {/* Central Canvas Engine */}
-        <main className={`flex-1 relative transition-all duration-300 ${isSidebarOpen ? 'ml-80' : 'ml-0'} ${isTerminalOpen ? 'mb-80 md:mb-96' : 'mb-0'}`}>
+        <main className={`flex-1 relative transition-all duration-300 ${!isMobile && isSidebarOpen ? 'ml-80' : 'ml-0'} ${isTerminalOpen ? 'mb-80 md:mb-96' : 'mb-0'}`}>
           <Canvas
             nodes={project.nodes}
             edges={project.edges}
@@ -1262,6 +1320,14 @@ export default function App() {
             viewPorts={viewPorts}
             onToggleViewPorts={() => setViewPorts((v) => !v)}
             packetAnimations={packetAnimations}
+            onNodeTap={
+              isMobile
+                ? (id) => {
+                    if (activeTool === 'ping') return;
+                    setMobileSheet('device');
+                  }
+                : undefined
+            }
           />
 
           {/* Context Menu Popup */}
@@ -1280,16 +1346,21 @@ export default function App() {
             />
           )}
 
-          {/* Floating Mobile / Gesture Bottom Toolbar */}
-          <MobileToolbar
-            activeTool={activeTool}
-            onSelectTool={setActiveTool}
-            onZoomIn={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.min(prev.viewport.zoom + 0.15, 3.0) } }))}
-            onZoomOut={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.max(prev.viewport.zoom - 0.15, 0.25) } }))}
-            onResetView={() => setProject((prev) => ({ ...prev, viewport: { x: 0, y: 0, zoom: 1.0 } }))}
-            onToggleTerminal={() => setIsTerminalOpen(!isTerminalOpen)}
-            onQuickAddRouter={() => handleAddNode('mikrotik', 'router')}
-          />
+          {/* Floating Mobile Bottom Toolbar — hanya viewport mobile */}
+          {isMobile && (
+            <MobileToolbar
+              activeTool={activeTool}
+              onSelectTool={setActiveTool}
+              onOpenAddDevice={() => setMobileSheet('add')}
+              onZoomIn={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.min(prev.viewport.zoom + 0.15, 3.0) } }))}
+              onZoomOut={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.max(prev.viewport.zoom - 0.15, 0.25) } }))}
+              onResetView={() => setProject((prev) => ({ ...prev, viewport: { x: 0, y: 0, zoom: 1.0 } }))}
+              onToggleTerminal={() => {
+                setMobileSheet(null);
+                setIsTerminalOpen(!isTerminalOpen);
+              }}
+            />
+          )}
         </main>
       </div>
 
@@ -1386,6 +1457,38 @@ export default function App() {
 
       {/* Mobile desktop-optimization warning */}
       <MobileWarning />
+
+      {/* Mobile bottom sheets */}
+      {isMobile && (
+        <>
+          <MobileAddDeviceSheet
+            open={mobileSheet === 'add'}
+            onClose={() => setMobileSheet(null)}
+            onAddNode={(vendor, deviceType, model) => handleAddNode(vendor, deviceType, model)}
+          />
+          <MobileDeviceActions
+            open={mobileSheet === 'device'}
+            onClose={() => setMobileSheet(null)}
+            node={selectedNode}
+            onOpenTerminal={handleOpenTerminal}
+            onStartCable={() => setActiveTool('cable')}
+            onStartPing={() => setActiveTool('ping')}
+            onTogglePower={handleTogglePower}
+            onDelete={handleDeleteNode}
+            onInspect={() => setMobileSheet('inspector')}
+          />
+          <MobileInspectorSheet
+            open={mobileSheet === 'inspector'}
+            onClose={() => setMobileSheet(null)}
+            node={selectedNode}
+            onUpdateNodeName={handleUpdateNodeName}
+            onUpdateNodeModel={handleUpdateNodeModel}
+            onTogglePower={handleTogglePower}
+            onDeleteNode={handleDeleteNode}
+            onOpenTerminal={handleOpenTerminal}
+          />
+        </>
+      )}
 
       {/* Monorepo Package Explorer Modal */}
       <MonorepoExplorerModal isOpen={isMonorepoOpen} onClose={() => setIsMonorepoOpen(false)} />

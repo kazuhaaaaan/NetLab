@@ -288,7 +288,7 @@ export const PingPanel: React.FC<PingPanelProps> = ({
 
   if (!isOpen) {
     return (
-      <div className="fixed bottom-4 right-4 z-40">
+      <div className="fixed bottom-20 md:bottom-4 right-4 z-40">
         <button
           onClick={onToggle}
           className="relative flex items-center justify-center p-3 bg-slate-900 border border-emerald-500/50 hover:bg-slate-800 rounded-full shadow-lg shadow-emerald-900/20 text-emerald-400 transition"
@@ -306,7 +306,7 @@ export const PingPanel: React.FC<PingPanelProps> = ({
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-full max-w-[480px] font-mono select-none rounded-xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col">
+    <div className="fixed bottom-20 md:bottom-4 right-4 z-40 w-full max-w-[480px] font-mono select-none rounded-xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col">
       {/* Header bar */}
       <div className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800 text-xs">
         <div className="flex items-center space-x-2 text-emerald-400 font-bold">

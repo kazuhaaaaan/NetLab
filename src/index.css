@@ -48,6 +48,27 @@
   animation-play-state: paused !important;
 }
 
+/* Mobile canvas-first: cegah bounce/scroll & perkecil ukuran viewport browser */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  overscroll-behavior: none;
+}
+
+body {
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.simulator-root {
+  height: 100dvh;
+  overflow: hidden;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

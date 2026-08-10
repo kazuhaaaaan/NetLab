@@ -39,7 +39,7 @@ export const MobileWarning: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-3 left-3 right-3 sm:left-4 sm:right-auto sm:max-w-md z-[85] animate-in slide-in-from-bottom-4 fade-in duration-200">
+    <div className="fixed bottom-20 md:bottom-3 left-3 right-3 sm:left-4 sm:right-auto sm:max-w-md z-[85] animate-in slide-in-from-bottom-4 fade-in duration-200">
       <div className="bg-[#0F1015]/95 backdrop-blur-md border border-amber-500/40 rounded-xl shadow-2xl p-3.5">
         <div className="flex items-start space-x-3">
           <div className="p-2 bg-amber-500/15 text-amber-400 rounded-lg border border-amber-500/30 flex-shrink-0">
