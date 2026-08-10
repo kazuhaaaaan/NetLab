@@ -18,6 +18,9 @@ import {
   Image,
   FileImage,
   ClipboardCheck,
+  Menu,
+  X,
+  ChevronDown,
   Bot
 } from 'lucide-react';
 import { LabProject } from '../types';
@@ -43,6 +46,49 @@ interface NavbarProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+}
+
+function MobileItem({
+  icon,
+  label,
+  sub,
+  onClick,
+  href,
+  disabled,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  sub?: string;
+  onClick?: () => void;
+  href?: string;
+  disabled?: boolean;
+}) {
+  const cls = `w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] font-medium transition ${
+    disabled
+      ? 'text-slate-600 cursor-not-allowed'
+      : 'text-slate-200 hover:bg-slate-800'
+  }`;
+  const inner = (
+    <>
+      {icon}
+      <span className="min-w-0">
+        <span className="block truncate">{label}</span>
+        {sub && <span className="block text-[10px] text-slate-500 truncate">{sub}</span>}
+      </span>
+    </>
+  );
+  if (href) {
+    return (
+      <a href={href} download className={cls} onClick={onClick}>
+        {inner}
+      </a>
+    );
+  }
+  return (
+    <button className={cls} onClick={onClick} disabled={disabled}>
+      {inner}
+    </button>
+  );
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -71,6 +117,20 @@ export const Navbar: React.FC<NavbarProps> = ({
   const tplBtnRef = useRef<HTMLButtonElement>(null);
   const [isTemplateOpen, setIsTemplateOpen] = useState(false);
   const [tplMenuPos, setTplMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [mobileTplOpen, setMobileTplOpen] = useState(false);
+
+  const chooseTemplate = (name: 'basic' | 'enterprise') => {
+    onLoadTemplate(name);
+    toggleTemplateMenu();
+    setIsMobileOpen(false);
+    setMobileTplOpen(false);
+  };
+
+  const closeMobile = () => {
+    setIsMobileOpen(false);
+    setMobileTplOpen(false);
+  };
 
   const toggleTemplateMenu = () => {
     const btn = tplBtnRef.current;
@@ -110,7 +170,106 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       {/* Toolbar Controls */}
-      <div className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto scrollbar-hide px-2">
+      <div className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto scrollbar-hide px-2 lg:hidden flex-shrink">
+        {/* Mobile hamburger */}
+        <button
+          onClick={() => setIsMobileOpen((o) => !o)}
+          title="Menu"
+          aria-label="Menu utama"
+          className={`flex-shrink-0 p-2 rounded-md border transition ${
+            isMobileOpen
+              ? 'bg-slate-700 text-slate-100 border-emerald-500/50'
+              : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+          }`}
+        >
+          {isMobileOpen ? <X className="w-4.5 h-4.5" /> : <Menu className="w-4.5 h-4.5" />}
+        </button>
+
+        {isMobileOpen && (
+          <>
+            <div className="fixed inset-0 z-[55]" onClick={closeMobile} />
+            <div className="fixed z-[70] right-0 top-14 bottom-0 w-[300px] max-w-[85vw] bg-[#0F1015] border-l border-[#2B2D31] overflow-y-auto flex flex-col shadow-2xl">
+              {/* Header panel */}
+              <div className="px-4 py-3 border-b border-[#2B2D31] flex items-center gap-2">
+                <span className="text-[11px] font-mono text-slate-500 uppercase tracking-wider shrink-0">Menu</span>
+                <span className="truncate text-[12px] font-semibold text-slate-200">{project.metadata.name}</span>
+                <span className="ml-auto text-[10px] font-mono text-slate-500 shrink-0">{project.nodes.length}N · {project.edges.length}C</span>
+              </div>
+
+              {/* Groups */}
+              <div className="flex-1 px-2 py-2 space-y-3 overflow-y-auto">
+                <div className="space-y-0.5">
+                  <div className="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-widest text-slate-600">Project</div>
+                  <MobileItem icon={<Home className="w-4 h-4 text-sky-400" />} label="Home" onClick={() => { onGoHome(); closeMobile(); }} />
+                  <MobileItem icon={<Plus className="w-4 h-4 text-blue-400" />} label="New Topology" onClick={() => { onNewProject(); closeMobile(); }} />
+                  <div className="flex items-center space-x-1 px-1 pt-1">
+                    <MobileItem icon={<Undo2 className="w-4 h-4 text-slate-400" />} label="Undo" disabled={!canUndo} onClick={() => { onUndo(); }} />
+                    <MobileItem icon={<Redo2 className="w-4 h-4 text-slate-400" />} label="Redo" disabled={!canRedo} onClick={() => { onRedo(); }} />
+                  </div>
+                </div>
+
+                <div className="space-y-0.5">
+                  <div className="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-widest text-slate-600">Templates</div>
+                  <button
+                    onClick={() => setMobileTplOpen((o) => !o)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] font-medium text-slate-200 hover:bg-slate-800 transition"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <FolderTree className="w-4 h-4 text-emerald-400" />
+                      Templates
+                    </span>
+                    <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform duration-200 ${mobileTplOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {mobileTplOpen && (
+                    <div className="ml-4 mt-1 border-l border-slate-700 pl-2 space-y-1 pb-1">
+                      <MobileItem label="Mudah: Router + Switch + PC" sub="MikroTik gateway, switch Cisco, 1 PC" onClick={() => chooseTemplate('basic')} />
+                      <MobileItem label="ISP / Data Center Lab" sub="16 perangkat: ISP, firewall, core, server" onClick={() => chooseTemplate('enterprise')} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-0.5">
+                  <div className="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-widest text-slate-600">File</div>
+                  <MobileItem icon={<Upload className="w-4 h-4 text-amber-400" />} label="Import (.mlab)" onClick={() => { fileInputRef.current?.click(); closeMobile(); }} />
+                  <MobileItem icon={<FileCode className="w-4 h-4 text-indigo-400" />} label="Export (.mlab)" onClick={() => { onExportMlab(); closeMobile(); }} />
+                  <MobileItem icon={<Image className="w-4 h-4 text-cyan-400" />} label="Export PNG" onClick={() => { onExportPng(); closeMobile(); }} />
+                  <MobileItem icon={<FileImage className="w-4 h-4 text-fuchsia-400" />} label="Export SVG" onClick={() => { onExportSvg(); closeMobile(); }} />
+                  <MobileItem icon={<Share2 className="w-4 h-4 text-emerald-400" />} label="Share Link" onClick={() => { onShare(); closeMobile(); }} />
+                </div>
+
+                <div className="space-y-0.5">
+                  <div className="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-widest text-slate-600">Learning</div>
+                  <MobileItem icon={<Bot className="w-4 h-4 text-violet-400" />} label="AI Mentor" onClick={() => { onOpenAiChat(); closeMobile(); }} />
+                  <MobileItem icon={<ClipboardCheck className="w-4 h-4 text-violet-400" />} label="Auto-Grading" onClick={() => { onOpenGrading(); closeMobile(); }} />
+                  <MobileItem icon={<PackageCheck className="w-4 h-4 text-blue-400" />} label="Monorepo Docs" onClick={() => { onOpenMonorepo(); closeMobile(); }} />
+                </div>
+
+                <div className="space-y-0.5">
+                  <div className="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-widest text-slate-600">Support</div>
+                  <MobileItem icon={<Download className="w-4 h-4 text-emerald-400" />} label="Download Foundation ZIP" href="/MikroLab-Foundation-v1.zip" onClick={closeMobile} />
+                  <MobileItem icon={<Heart className="w-4 h-4 text-rose-400" />} label="Donate (QRIS)" onClick={() => { onOpenDonate(); closeMobile(); }} />
+                  <MobileItem icon={<HelpCircle className="w-4 h-4 text-cyan-400" />} label="Tutorial / Panduan" onClick={() => { onOpenTutorial(); closeMobile(); }} />
+                </div>
+              </div>
+
+              {/* Footer: theme toggle */}
+              <div className="px-3 py-3 border-t border-[#2B2D31] flex items-center justify-between">
+                <span className="text-[12px] font-medium text-slate-300">Tema</span>
+                <button
+                  onClick={() => { onToggleTheme(); }}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                >
+                  {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-400" />}
+                  <span className="text-[12px]">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Desktop toolbar */}
+      <div className="hidden lg:flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto scrollbar-hide px-2">
         <button
           onClick={onGoHome}
           title="Back to Home Page"
