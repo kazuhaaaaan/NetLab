@@ -32,10 +32,10 @@ const ToolButton: React.FC<ToolButtonProps> = ({ label, icon, active, accent, on
   return (
     <button
       onClick={onClick}
-      className={`flex flex-col items-center justify-center gap-0.5 w-[22%] h-[52px] max-w-[72px] rounded-xl ${base} transition active:scale-95`}
+      className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 h-[52px] rounded-xl ${base} transition active:scale-95`}
     >
-      {icon}
-      <span className="text-[9px] font-semibold leading-none">{label}</span>
+      {icon && <span className="flex items-center justify-center shrink-0">{icon}</span>}
+      <span className="text-[9px] font-semibold leading-none whitespace-nowrap max-w-full truncate">{label}</span>
     </button>
   );
 };
@@ -53,7 +53,7 @@ export const MobileToolbar: React.FC<MobileToolbarProps> = ({
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-30 px-3 pt-0.5 pb-[env(safe-area-inset-bottom)] bg-gradient-to-t from-black/80 via-black/50 to-transparent pointer-events-none">
-      <div className="pointer-events-auto relative mx-auto max-w-md bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl px-2 py-1.5 flex items-center justify-between">
+      <div className="pointer-events-auto relative mx-auto w-full max-w-md box-border bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl px-2 py-1.5 flex items-center gap-1">
         <ToolButton
           label="Select"
           icon={<Hand className="w-5 h-5" />}
@@ -72,7 +72,7 @@ export const MobileToolbar: React.FC<MobileToolbarProps> = ({
           accent="blue"
           onClick={onOpenAddDevice}
         />
-        <div className="relative">
+        <div className="relative flex-1 min-w-0 flex">
           <ToolButton
             label="View"
             icon={<Expand className="w-5 h-5" />}
@@ -81,24 +81,27 @@ export const MobileToolbar: React.FC<MobileToolbarProps> = ({
           {viewOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setViewOpen(false)} />
-              <div className="absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full z-20 w-44 rounded-2xl bg-[#141519] border border-[#2B2D31] shadow-2xl p-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150">
+              <div
+                className="absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full z-20 w-max min-w-44 max-w-[88vw] rounded-2xl bg-[#141519] border border-[#2B2D31] shadow-2xl p-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <button
                   onClick={() => { onZoomIn(); setViewOpen(false); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-medium text-slate-200 hover:bg-slate-800 transition"
                 >
-                  <ZoomIn className="w-4 h-4" /> Perbesar
+                  <ZoomIn className="w-4 h-4 shrink-0" /> Perbesar
                 </button>
                 <button
                   onClick={() => { onZoomOut(); setViewOpen(false); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-medium text-slate-200 hover:bg-slate-800 transition"
                 >
-                  <ZoomOut className="w-4 h-4" /> Perkecil
+                  <ZoomOut className="w-4 h-4 shrink-0" /> Perkecil
                 </button>
                 <button
                   onClick={() => { onResetView(); setViewOpen(false); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-medium text-slate-200 hover:bg-slate-800 transition"
                 >
-                  <Maximize2 className="w-4 h-4" /> Reset View
+                  <Maximize2 className="w-4 h-4 shrink-0" /> Reset View
                 </button>
               </div>
             </>
