@@ -9,7 +9,6 @@ import {
   Copy,
   Cpu,
   ExternalLink,
-  Globe,
   Heart,
   Layers,
   ListChecks,
@@ -18,11 +17,11 @@ import {
   Sparkles,
   Terminal,
   Waypoints,
-  Zap,
 } from 'lucide-react';
 import { BEGINNER_GUIDES, VendorGuide } from '../data/beginnerGuide';
 import { CLI_HINTS, CliHint } from '../data/cliHints';
 import { getModelsForVendor, getPortsForModel } from '../data/deviceModels';
+import { HeroTopology } from './ui/hero-topology';
 
 interface LandingPageProps {
   onLaunch: () => void;
@@ -30,31 +29,6 @@ interface LandingPageProps {
 }
 
 const STORE_URL = 'https://toko.kazudev.my.id';
-
-// ─── Hero mock-topology data (SVG preview window) ─────────────────────────────
-const PREVIEW_NODES = [
-  { id: 'r1', x: 120, y: 84,  label: 'R1', color: '#38bdf8', type: 'router' },
-  { id: 'sw', x: 300, y: 84,  label: 'SW', color: '#818cf8', type: 'switch' },
-  { id: 'fw', x: 470, y: 84,  label: 'FW', color: '#f87171', type: 'firewall' },
-  { id: 'pc', x: 190, y: 196, label: 'PC', color: '#34d399', type: 'pc' },
-  { id: 'srv', x: 400, y: 196, label: 'SRV', color: '#fb923c', type: 'server' },
-] as const;
-
-const PREVIEW_EDGES = [
-  { from: 0, to: 1 },
-  { from: 1, to: 2 },
-  { from: 0, to: 3 },
-  { from: 1, to: 4 },
-];
-
-const TERMINAL_LINES = [
-  { text: '[admin@MikroTik] > /ip address print', color: '#34d399' },
-  { text: ' 0 192.168.88.1/24     ether1', color: '#94a3b8' },
-  { text: ' 1 10.0.0.1/30        ether2', color: '#94a3b8' },
-  { text: '[admin@MikroTik] > ping 192.168.88.2', color: '#34d399' },
-  { text: '   0 192.168.88.2 56 64 0ms echo reply', color: '#38bdf8' },
-  { text: '   sent=3 received=3 packet-loss=0%', color: '#a3e635' },
-];
 
 const FEATURES = [
   {
@@ -196,7 +170,6 @@ const VENDOR_ACCENTS: Record<string, string> = {
 
 export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate }) => {
   const [scrolled, setScrolled] = useState(false);
-  const [pingLine, setPingLine] = useState(0);
   const [guideVendorId, setGuideVendorId] = useState('mikrotik');
   const [copiedKey, setCopiedKey] = useState('');
 
@@ -220,14 +193,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
     return () => window.removeEventListener('scroll', onScroll);
-  }, []);
-
-  // Animate the terminal lines in the hero preview
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      setPingLine((p) => (p + 1) % TERMINAL_LINES.length);
-    }, 1400);
-    return () => window.clearInterval(t);
   }, []);
 
   const launch = () => {
@@ -313,190 +278,23 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
       </header>
 
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <section className="relative pt-36 sm:pt-44 pb-16 sm:pb-24 px-5 sm:px-8">
-        <div className="mx-auto max-w-4xl text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.55, ease: 'easeOut' }}
-            className="inline-flex items-center gap-2 rounded-full border border-[#1F2128] bg-[#0F1015]/70 backdrop-blur px-3.5 py-1.5 text-[12px] font-medium text-slate-300"
-          >
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" style={{ animation: 'netlab-pulse-ring 1.6s ease-out infinite' }} />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            </span>
-            Open-source Network Simulator
-            <span className="text-slate-600">·</span>
-            <span className="font-mono text-[11px] text-slate-500">v1.0</span>
-          </motion.div>
-
-          <motion.h1
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.08, ease: 'easeOut' }}
-            className="mt-7 text-4xl sm:text-6xl lg:text-[68px] font-extrabold tracking-[-0.04em] leading-[1.05] text-slate-50"
-          >
+      <HeroTopology
+        title={
+          <>
             Simulate &amp; Architect
             <br />
-            <span
-              className="bg-gradient-to-r from-sky-400 via-indigo-400 to-emerald-400 bg-clip-text text-transparent"
-            >
+            <span className="bg-gradient-to-r from-sky-400 via-indigo-400 to-emerald-400 bg-clip-text text-transparent">
               Network Systems
             </span>{' '}
             with Precision
-          </motion.h1>
-
-          <motion.p
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.16, ease: 'easeOut' }}
-            className="mt-6 mx-auto max-w-2xl text-[15px] sm:text-base text-slate-400 leading-relaxed"
-          >
-            Desain topologi, konfigurasi 11 vendor network OS lewat CLI asli, dan
-            uji konektivitas dengan simulasi paket sungguhan — semua berjalan
-            langsung di browser. Dari MikroTik sampai Cisco, dari switch L2
-            sampai routing BGP.
-          </motion.p>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.24, ease: 'easeOut' }}
-            className="mt-9 flex flex-col sm:flex-row items-center justify-center gap-3.5"
-          >
-            <button
-              onClick={launch}
-              className="group flex items-center gap-2 rounded-lg bg-white text-slate-900 text-sm font-semibold px-6 py-3 transition-all duration-200 hover:bg-slate-200 hover:scale-[1.03] active:scale-[0.98] shadow-[0_0_36px_-10px_rgba(255,255,255,0.5)]"
-            >
-              Launch Simulator
-              <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
-            </button>
-
-            <a
-              href={STORE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="group flex items-center gap-2 rounded-lg border border-[#1F2128] bg-[#0F1015]/60 backdrop-blur text-slate-200 text-sm font-medium px-6 py-3 transition-all duration-200 hover:border-sky-500/40 hover:bg-[#0F1015] hover:scale-[1.03] active:scale-[0.98]"
-            >
-              Book Custom Web / Order Services
-              <ArrowUpRight className="w-4 h-4 text-slate-500 transition-all group-hover:text-sky-400 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            </a>
-
-            <a
-              href="https://kazudev.my.id"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="group flex items-center gap-2 rounded-lg border border-[#1F2128] bg-[#0F1015]/60 backdrop-blur text-slate-400 text-sm font-medium px-5 py-3 transition-all duration-200 hover:border-indigo-500/40 hover:bg-[#0F1015] hover:text-slate-200 hover:scale-[1.03] active:scale-[0.98]"
-            >
-              <Globe className="w-4 h-4 text-slate-500 transition-all group-hover:text-indigo-400" />
-              kazudev.my.id
-              <ArrowUpRight className="w-3.5 h-3.5 text-slate-600 transition-all group-hover:text-indigo-400 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            </a>
-          </motion.div>
-
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.6, delay: 0.34 }}
-            className="mt-5 text-[11px] font-mono text-slate-600"
-          >
-            Gratis · Tanpa Install · 100% Di Browser · Topologi &amp; konfigurasi auto-save
-          </motion.p>
-        </div>
-
-        {/* ── App preview window ─────────────────────────────────────────── */}
-        <motion.div
-          initial={{ opacity: 0, y: 32, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.7, delay: 0.32, ease: 'easeOut' }}
-          className="mx-auto mt-16 sm:mt-20 max-w-5xl"
-        >
-          <div className="relative rounded-2xl border border-[#1F2128] bg-[#0F1015]/70 backdrop-blur-xl shadow-[0_24px_80px_-24px_rgba(0,0,0,0.8)]">
-            {/* window chrome */}
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-[#1F2128] rounded-t-2xl">
-              <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" />
-              <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" />
-              <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" />
-              <span className="ml-3 text-[11px] font-mono text-slate-500">
-                Mikrolab — Enterprise Multi-Vendor Core Lab
-              </span>
-              <span className="ml-auto flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
-                <span className="w-1 h-1 rounded-full bg-emerald-400" style={{ animation: 'netlab-blink 1.2s ease-in-out infinite' }} />
-                SIMULATING
-              </span>
-            </div>
-
-            <div className="grid md:grid-cols-[1fr_240px]">
-              {/* topology canvas mock */}
-              <div className="relative p-4 min-h-[300px] md:min-h-[320px] overflow-hidden">
-                <div className="absolute inset-0" style={{
-                  backgroundImage: 'linear-gradient(rgba(148,163,184,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.04) 1px, transparent 1px)',
-                  backgroundSize: '28px 28px',
-                }} />
-                <svg viewBox="0 0 600 280" className="relative w-full h-full">
-                  {PREVIEW_EDGES.map((e, i) => {
-                    const a = PREVIEW_NODES[e.from];
-                    const b = PREVIEW_NODES[e.to];
-                    return (
-                      <g key={i}>
-                        <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#2b2d33" strokeWidth="1.5" />
-                        <line
-                          x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                          stroke={a.color} strokeWidth="1.5" strokeOpacity="0.55"
-                          strokeDasharray="5 5"
-                          style={{ animation: 'netlab-packet 1.4s linear infinite', animationDelay: `${i * 0.35}s` }}
-                        />
-                      </g>
-                    );
-                  })}
-                  {PREVIEW_NODES.map((n) => (
-                    <g key={n.id}>
-                      <circle cx={n.x} cy={n.y} r="20" fill="#0f172a" stroke={n.color} strokeWidth="1.5"
-                        style={{ filter: `drop-shadow(0 0 8px ${n.color}44)`, animation: 'netlab-float 4s ease-in-out infinite' }} />
-                      <circle cx={n.x} cy={n.y} r="20" fill="none" stroke={n.color} strokeWidth="1" strokeOpacity="0.4">
-                        <animate attributeName="r" values="20;28;20" dur="2.6s" begin={`${n.id.charCodeAt(1) * 0.2}s`} repeatCount="indefinite" />
-                        <animate attributeName="stroke-opacity" values="0.4;0;0.4" dur="2.6s" begin={`${n.id.charCodeAt(1) * 0.2}s`} repeatCount="indefinite" />
-                      </circle>
-                      <text x={n.x} y={n.y + 4} textAnchor="middle" fill={n.color} fontSize="10" fontFamily="monospace" fontWeight="700">
-                        {n.label}
-                      </text>
-                    </g>
-                  ))}
-                </svg>
-
-                {/* floating status chips */}
-                <div className="absolute top-4 right-4 hidden sm:flex items-center gap-1.5 rounded-md border border-[#1F2128] bg-[#0B0C0E]/80 backdrop-blur px-2.5 py-1 text-[10px] font-mono text-slate-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> 4/4 links up
-                </div>
-                <div className="absolute bottom-4 left-4 hidden sm:flex items-center gap-1.5 rounded-md border border-[#1F2128] bg-[#0B0C0E]/80 backdrop-blur px-2.5 py-1 text-[10px] font-mono text-slate-400">
-                  <Zap className="w-3 h-3 text-amber-400" /> TTL 62 · 2 hops
-                </div>
-              </div>
-
-              {/* terminal mock */}
-              <div className="hidden md:flex flex-col border-l border-[#1F2128] bg-[#0B0C0E]/60">
-                <div className="px-3 py-2 border-b border-[#1F2128] text-[10px] font-mono text-slate-500 uppercase tracking-wider">
-                  MikroTik · node-1
-                </div>
-                <div className="flex-1 p-3 space-y-1.5 font-mono text-[10.5px] leading-relaxed overflow-hidden">
-                  {TERMINAL_LINES.map((line, i) => (
-                    <div
-                      key={i}
-                      className={`whitespace-pre-wrap transition-opacity duration-500 ${i > pingLine ? 'opacity-25' : 'opacity-100'}`}
-                      style={{ color: line.color }}
-                    >
-                      {line.text}
-                    </div>
-                  ))}
-                  <div className="text-emerald-400">
-                    [admin@MikroTik] &gt; <span className="inline-block w-1.5 h-3 bg-slate-300 align-middle" style={{ animation: 'netlab-blink 1s steps(2) infinite' }} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      </section>
+          </>
+        }
+        subtitle="Desain topologi, konfigurasi 11 vendor network OS lewat CLI asli, dan uji konektivitas dengan simulasi paket sungguhan — semua berjalan langsung di browser. Dari MikroTik sampai Cisco, dari switch L2 sampai routing BGP."
+        primary={{ label: 'Launch Simulator', onClick: launch, icon: 'arrow' }}
+        secondary={{ label: 'Book Custom Web / Order Services', href: STORE_URL, external: true, icon: 'arrowUp' }}
+        tertiary={{ label: 'kazudev.my.id', href: 'https://kazudev.my.id', external: true, icon: 'globe' }}
+        footnote="Gratis · Tanpa Install · 100% Di Browser · Topologi &amp; konfigurasi auto-save"
+      />
 
       {/* ── Stats strip ──────────────────────────────────────────────────── */}
       <section className="relative border-y border-[#14161c] bg-[#0F1015]/40 backdrop-blur">

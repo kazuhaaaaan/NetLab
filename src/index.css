@@ -31,6 +31,23 @@
   50%      { transform: translateY(-8px); }
 }
 
+@keyframes netlab-fade-in {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes netlab-joinring {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Pause all in-scope animations when the simulation is paused */
+.netlab-paused *,
+.netlab-paused *::before,
+.netlab-paused *::after {
+  animation-play-state: paused !important;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
