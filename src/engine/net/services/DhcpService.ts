@@ -44,6 +44,10 @@ export function allocateIp(
   usedIps: Set<string>
 ): { ip: string; prefix: number; gateway: string } | null {
   const serverIface = pool.iface ? server.getIfaceByName(pool.iface) : null;
+  // Prefix dari pool.network, fallback prefix interface server, terakhir /24.
+  const poolPrefix = pool.network ? parseCidr(pool.network)?.prefix : undefined;
+  const prefix = poolPrefix ?? serverIface?.ip?.prefix ?? 24;
+  const gateway = pool.gateway || serverIface?.ip?.address || '';
 
   if (pool.range) {
     const m = pool.range.match(/(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)/);
@@ -52,15 +56,14 @@ export function allocateIp(
       const end = ipToInt(m[2]);
       for (let n = start; n <= end; n++) {
         const ip = intToIp(n);
-        if (!usedIps.has(ip)) {
-          return { ip, prefix: 24, gateway: pool.gateway || serverIface?.ip?.address || '' };
-        }
+        if (ip === gateway || usedIps.has(ip)) continue;
+        return { ip, prefix, gateway };
       }
       return null;
     }
     const single = pool.range.trim();
-    if (!usedIps.has(single)) {
-      return { ip: single, prefix: 24, gateway: pool.gateway || serverIface?.ip?.address || '' };
+    if (single !== gateway && !usedIps.has(single)) {
+      return { ip: single, prefix, gateway };
     }
     return null;
   }
@@ -74,11 +77,17 @@ export function allocateIp(
       server.getInterfaces().find(
         (i) => i.ip && i.up && networkOf(i.ip.address, i.ip.prefix) === networkOf(parsed.address, i.ip.prefix)
       );
-    const gateway = pool.gateway || serverIface?.ip?.address || facing?.ip?.address || '';
-    for (let n = base + 2; n < base + 250; n++) {
+    const gw = gateway || facing?.ip?.address || '';
+    // Jumlah host valid per prefix: /31 → 2 (point-to-point), /32 → 0,
+    // lainnya network & broadcast tidak boleh dilease.
+    const hostBits = 32 - parsed.prefix;
+    if (hostBits < 1) return null;
+    const first = hostBits === 1 ? 0 : 1;
+    const last = hostBits === 1 ? 1 : 2 ** hostBits - 2;
+    for (let n = base + first; n <= base + last; n++) {
       const ip = intToIp(n);
-      if (ip === gateway || usedIps.has(ip)) continue;
-      return { ip, prefix: parsed.prefix, gateway };
+      if (ip === gw || usedIps.has(ip)) continue;
+      return { ip, prefix: parsed.prefix, gateway: gw };
     }
     return null;
   }

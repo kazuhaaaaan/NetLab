@@ -147,6 +147,14 @@ export interface AclRule {
   proto?: string;
   src?: string;
   dst?: string;
+  /** Port sumber (mis. '80', '8000-9000') — berlaku untuk tcp/udp. */
+  srcPort?: string;
+  /** Port tujuan (mis. '443', '1-1024'). */
+  dstPort?: string;
+  /** Interface tempat paket MASUK (nama interface, mis. 'ether1'/'eth0'). */
+  inInterface?: string;
+  /** Interface tempat paket KELUAR (opsional; tidak semua jalur punya info ini). */
+  outInterface?: string;
 }
 
 export interface NatRule {

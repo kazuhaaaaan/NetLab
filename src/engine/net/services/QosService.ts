@@ -111,7 +111,12 @@ export function applyQos(dev: NetworkDevice, pkt: Packet, now: number): boolean 
 
     const st = dev.qosState;
     const key = q.name || 'q';
-    const burst = Math.max(rate / 500, 1); // token awal & burst (byte) = 2 detik rate
+    // Token awal & burst ≈ 0.16 detik rate (burst-time default RouterOS),
+    // dalam byte: rate(bit/s) / 8 × 0.16 = rate/50. Bug lama memakai
+    // rate/500 (= 2 ms) sehingga paket MTU pertama di-drop di link idle
+    // untuk rate rendah; nilai 0.16s masih cukup ketat untuk menahan
+    // traffic yang melebihi rate.
+    const burst = Math.max(rate / 50, 16);
     let tokens = st.tokens.get(key) ?? burst;
     const last = st.lastRefill.get(key) ?? now;
     const elapsed = Math.max(0, now - last);

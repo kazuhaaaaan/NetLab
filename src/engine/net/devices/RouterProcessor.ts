@@ -107,8 +107,11 @@ export class RouterProcessor implements DeviceProcessor {
       return;
     }
 
-    // Firewall ingress — rule dibaca per paket
-    if (aclBlocks(dev, pkt)) {
+    // Firewall ingress — rule dibaca per paket. DHCP bootstrap (udp 67/68)
+    // dikecualikan: klien harus tetap bisa memperoleh alamat dari router
+    // meski ada aturan deny-all (input chain tidak memblokir DHCP).
+    const isDhcpBootstrap = pkt.protocol === 'udp' && (pkt.dstPort === UDP_BOOTPS || pkt.dstPort === UDP_BOOTPC);
+    if (!isDhcpBootstrap && aclBlocks(dev, pkt, inPort)) {
       core.emit('FIREWALL_BLOCK', traceId, { dstIp: pkt.dstIp, srcIp: pkt.srcIp }, dev.id, inPort);
       const run = core.getRun(traceId);
       if (run && run.status === 'running') {
@@ -138,7 +141,7 @@ export class RouterProcessor implements DeviceProcessor {
 
     // Trafik balik NAT masquerade: tujuan IP saya tapi ada sesi → kembalikan dstIp asli
     if (dev.hasIp(pkt.dstIp)) {
-      if (dev.nat.unmasquerade(pkt)) {
+      if (dev.nat.unmasquerade(pkt, core.now)) {
         core.emit('NAT_REWRITE', traceId, { action: 'unmasquerade', to: pkt.dstIp }, dev.id, inPort);
       }
     }
@@ -235,8 +238,12 @@ export class RouterProcessor implements DeviceProcessor {
     // srcnat masquerade di interface keluar
     const masq = NatTranslator.srcnatRule(dev.natRules, egress.name);
     if (masq && pkt.srcIp !== egress.ip.address) {
-      dev.nat.masquerade(pkt, egress.ip.address, egress.name);
-      core.emit('NAT_REWRITE', traceId, { action: 'masquerade', to: egress.ip.address }, dev.id, egress.name);
+      if (dev.nat.masquerade(pkt, egress.ip.address, egress.name, core.now)) {
+        core.emit('NAT_REWRITE', traceId, { action: 'masquerade', to: egress.ip.address, port: pkt.srcPort }, dev.id, egress.name);
+      } else {
+        core.drop(dev, pkt, 'nat-port-exhausted', traceId);
+        return;
+      }
     }
 
     // ARP untuk next hop → rewrite MAC, baru transmit
@@ -372,7 +379,8 @@ export class RouterProcessor implements DeviceProcessor {
       protocol: 'icmp',
       srcMac: inIface.mac,
       dstMac: pkt.srcMac,
-      srcIp: pkt.dstIp || inIface.ip?.address || '0.0.0.0',
+      // Source IP ICMP error harus milik router (interface masuk), bukan dstIp asli paket.
+      srcIp: inIface.ip?.address || pkt.dstIp || '0.0.0.0',
       dstIp: pkt.srcIp,
       ttl: 64,
       traceId,
@@ -547,7 +555,9 @@ export class RouterProcessor implements DeviceProcessor {
     if (pkt.dstPort === UDP_DNS) {
       const name = String((pkt.payload as Record<string, unknown> | null)?.name || '');
       const rec = staticRecord(dev, name);
-      if (rec && pkt.srcIp && pkt.srcIp !== '0.0.0.0' && pkt.srcMac) {
+      if (pkt.srcIp && pkt.srcIp !== '0.0.0.0' && pkt.srcMac) {
+        // Jawab SELALU (termasuk saat record tidak ada → NXDOMAIN), jangan
+        // drop diam-diam agar klien tidak menunggu sampai timeout.
         const reply = core.createPacket({
           protocol: 'udp',
           srcMac: iface.mac,
@@ -558,7 +568,7 @@ export class RouterProcessor implements DeviceProcessor {
           dstPort: pkt.srcPort,
           ttl: 64,
           traceId,
-          payload: { address: rec, name },
+          payload: { address: rec, name, nxdomain: !rec },
         });
         core.transmit(dev, reply, iface.name, traceId);
       }
@@ -724,8 +734,31 @@ export class RouterProcessor implements DeviceProcessor {
         return;
       }
       const requestedIp = String(p.requestedIp || '');
+      const used = core.usedIps();
+      const inPool = requestedIp !== '' && this.ipInPool(requestedIp, pool);
+      const ownedByClient = core.isIpLeasedTo?.(requestedIp, pkt.srcMac) ?? false;
+      // IP diminta sudah dipakai klien lain → NAK (cegah double-allocation).
+      if (inPool && used.has(requestedIp) && !ownedByClient) {
+        const serverIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+        const nak = core.createPacket({
+          protocol: 'udp',
+          srcMac: serverIface?.mac || pkt.dstMac,
+          dstMac: pkt.srcMac,
+          srcIp: serverIface?.ip?.address || '0.0.0.0',
+          dstIp: pkt.srcIp === '0.0.0.0' ? '255.255.255.255' : pkt.srcIp,
+          srcPort: UDP_BOOTPS,
+          dstPort: UDP_BOOTPC,
+          ttl: 64,
+          traceId,
+          payload: relayed ? { type: 'nak', xid: p.xid, ip: requestedIp, relayed } : { type: 'nak', xid: p.xid, ip: requestedIp },
+        });
+        core.transmit(dev, nak, inPort, traceId);
+        core.emit('DHCP_REQUEST', traceId, { xid: p.xid, nak: true, ip: requestedIp }, dev.id, inPort);
+        core.drop(dev, pkt, 'dhcp-nak', traceId);
+        return;
+      }
       const grant =
-        requestedIp && this.ipInPool(requestedIp, pool)
+        inPool && (ownedByClient || !used.has(requestedIp))
           ? this.ackForPool(pool, requestedIp)
           : this.grantFromPool(dev, pool, core);
       if (!grant) {

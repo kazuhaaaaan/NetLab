@@ -16,6 +16,21 @@ export interface NatSession {
 
 export class NatTranslator {
   private sessions = new Map<string, NatSession>();
+  /** session.key → waktu virtual terakhir dipakai (untuk aging). */
+  private lastUsed = new Map<string, number>();
+
+  /** Masa hidup sesi NAT (ms waktu virtual) — lebih dari ini di-prune. */
+  static readonly SESSION_TTL_MS = 10 * 60 * 1000;
+
+  /** Bersihkan sesi yang sudah tidak dipakai selama SESSION_TTL_MS. */
+  prune(now: number): void {
+    for (const [key, at] of this.lastUsed) {
+      if (now - at > NatTranslator.SESSION_TTL_MS) {
+        this.sessions.delete(key);
+        this.lastUsed.delete(key);
+      }
+    }
+  }
 
   /** Cari rule srcnat masquerade yang cocok untuk interface keluar. */
   static srcnatRule(rules: NatRule[], outInterface: string): NatRule | null {
@@ -53,8 +68,9 @@ export class NatTranslator {
   }
 
   /** Catat sesi translasi untuk dipakai membalik trafik reply. */
-  record(session: NatSession): void {
+  record(session: NatSession, now?: number): void {
     this.sessions.set(session.key, session);
+    this.lastUsed.set(session.key, now ?? 0);
   }
 
   lookup(key: string): NatSession | null {
@@ -63,37 +79,64 @@ export class NatTranslator {
 
   forget(key: string): void {
     this.sessions.delete(key);
+    this.lastUsed.delete(key);
   }
 
-  /** Terapkan masquerade pada paket keluar: ganti srcIp ke IP interface egress. */
-  masquerade(pkt: Packet, egressIp: string, egressIface: string): boolean {
+  /**
+   * Terapkan masquerade pada paket keluar: ganti srcIp ke IP interface egress.
+   * PAT: bila tuple terjemahan sudah dipakai sesi lain (dua host internal
+   * dengan srcPort sama ke tujuan sama), alokasikan port ephemeral baru
+   * agar reply tidak tertukar antar klien.
+   */
+  masquerade(pkt: Packet, egressIp: string, egressIface: string, now?: number): boolean {
     if (pkt.srcIp === egressIp) return false;
-    // Sesi dicatat dengan tuple TERJEMAHAN (src=egressIp) agar reply
-    // yang datang ke egressIp bisa dibalik lewat natKeyReverse().
-    const key = `${egressIp}:${pkt.srcPort}->${pkt.dstIp}:${pkt.dstPort}|${pkt.protocol}`;
+    let port = pkt.srcPort;
+    let key = natKey(egressIp, port, pkt.dstIp, pkt.dstPort, pkt.protocol);
+    const occupied = this.sessions.get(key);
+    if (occupied && occupied.original.ip !== pkt.srcIp) {
+      // Konflik port → cari port ephemeral bebas (1024..65535).
+      const base = (pkt.srcPort || 10000) % 60000;
+      let found = false;
+      for (let i = 1; i <= 60000; i++) {
+        port = 1024 + ((base + i * 53) % 60000);
+        key = natKey(egressIp, port, pkt.dstIp, pkt.dstPort, pkt.protocol);
+        const occ = this.sessions.get(key);
+        if (!occ || (occ.original.ip === pkt.srcIp && occ.original.port === pkt.srcPort)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) return false;
+    }
     this.record({
       key,
       original: { ip: pkt.srcIp, port: pkt.srcPort },
-      translated: { ip: egressIp, port: pkt.srcPort },
+      translated: { ip: egressIp, port },
       outInterface: egressIface,
-    });
+    }, now);
     pkt.srcIp = egressIp;
+    pkt.srcPort = port;
     return true;
   }
 
   /** Balikkan masquerade untuk trafik yang menuju IP hasil NAT. */
-  unmasquerade(pkt: Packet): boolean {
+  unmasquerade(pkt: Packet, now?: number): boolean {
     const key = natKeyReverse(pkt);
     const session = this.sessions.get(key);
     if (!session) return false;
+    if (now !== undefined) this.lastUsed.set(key, now);
     pkt.dstIp = session.original.ip;
     pkt.dstPort = session.original.port;
     return true;
   }
 }
 
+function natKey(srcIp: string, srcPort: number, dstIp: string, dstPort: number, protocol: string): string {
+  return `${srcIp}:${srcPort}->${dstIp}:${dstPort}|${protocol}`;
+}
+
 function natKeyReverse(pkt: Packet): string {
-  return `${pkt.dstIp}:${pkt.dstPort}->${pkt.srcIp}:${pkt.srcPort}|${pkt.protocol}`;
+  return natKey(pkt.dstIp, pkt.dstPort, pkt.srcIp, pkt.srcPort, pkt.protocol);
 }
 
 function addrInSpec(ip: string, spec: string): boolean {

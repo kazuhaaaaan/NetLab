@@ -131,6 +131,8 @@ export class NetworkSimulator implements SimulatorCore {
       data,
     };
     this.eventLog.push(evt);
+    // Batasi log agar sesi panjang tidak menumpuk memori tanpa batas.
+    if (this.eventLog.length > 5000) this.eventLog.splice(0, this.eventLog.length - 5000);
     this.bus.emit(evt);
   }
 
@@ -240,10 +242,11 @@ export class NetworkSimulator implements SimulatorCore {
 
   usedIps(): Set<string> {
     const set = new Set<string>();
+    const now = this.time.now();
     for (const dev of this.nodes.values()) {
       for (const i of dev.getInterfaces()) if (i.ip) set.add(i.ip.address);
-      for (const lease of dev.leases.values()) set.add(lease.ip);
-      if (dev.dhcpClient?.offered) set.add(dev.dhcpClient.offered.ip);
+      // Lease kedaluwarsa tidak dihitung (IP dikembalikan ke pool).
+      for (const lease of dev.leases.values()) if (lease.expiresAt > now) set.add(lease.ip);
     }
     return set;
   }
@@ -253,6 +256,17 @@ export class NetworkSimulator implements SimulatorCore {
     if (run) return run;
     const created = this.createRun(traceId);
     return created;
+  }
+
+  isIpLeasedTo(ip: string, mac: string): boolean {
+    const m = (mac || '').toLowerCase();
+    for (const dev of this.nodes.values()) {
+      for (const lease of dev.leases.values()) {
+        if (lease.ip !== ip) continue;
+        if ([...dev.getInterfaces()].some((i) => i.mac.toLowerCase() === m)) return true;
+      }
+    }
+    return false;
   }
 
   // ── Manajemen run ──────────────────────────────────────────────
@@ -330,6 +344,12 @@ export class NetworkSimulator implements SimulatorCore {
       if (agedMac.length > 0) this.emit('MAC_AGED', `aging-${dev.id}`, { macs: agedMac }, dev.id);
       const agedArp = dev.arpCache.age(now);
       if (agedArp.length > 0) this.emit('DEBUG_TRACE', `aging-${dev.id}`, { arpAged: agedArp }, dev.id);
+      // Lease DHCP yang kedaluwarsa dikembalikan ke pool.
+      for (const [iface, lease] of [...dev.leases.entries()]) {
+        if (lease.expiresAt <= now) dev.leases.delete(iface);
+      }
+      // Sesi NAT yang menganggur dibersihkan.
+      dev.nat.prune(now);
     }
     // jadwal ulang
     const next = now + 5000;
@@ -471,7 +491,7 @@ export class NetworkSimulator implements SimulatorCore {
   private computeFhrp(): void {
     const devices = [...this.nodes.values()];
     const prevMasters = this.fhrpMasters;
-    const res = computeFhrp(devices, this.fhrpGroups, (id) => this.isNodePowered(id));
+    const res = computeFhrp(devices, this.fhrpGroups, (id) => this.isNodePowered(id), this.topology.links);
     this.fhrpState = res.states;
     this.fhrpMasters = res.masters;
     for (const [vip, newMaster] of res.masters) {

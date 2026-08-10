@@ -19,6 +19,8 @@ export interface SimulatorCore {
   flushArp(device: NetworkDevice, ip: string, mac: string, traceId: string): void;
   /** Daftar IP yang sudah terpakai di seluruh topologi (untuk alokasi DHCP). */
   usedIps(): Set<string>;
+  /** True bila lease dengan IP itu dimiliki klien MAC ini (renewal DHCP). */
+  isIpLeasedTo?(ip: string, mac: string): boolean;
   /** Status flow yang sedang berjalan (dibaca processor untuk menandai sukses/gagal). */
   getRun(traceId: string): RunResult;
 }

@@ -12,6 +12,16 @@ interface TableEntry {
   dst: string;
   gateway: string;
   metric: number;
+  /** AS-path BGP (kosong untuk rute origin lokal / non-BGP). */
+  asPath?: number[];
+}
+
+/** Protokol distance-vector aktif sebuah perangkat (satu protokol pada satu waktu). */
+function protoOf(cfg: NetworkDevice['routingCfg']): 'ospf' | 'rip' | 'eigrp' | null {
+  if (cfg?.ospf?.enabled) return 'ospf';
+  if (cfg?.rip?.enabled) return 'rip';
+  if (cfg?.eigrp?.enabled) return 'eigrp';
+  return null;
 }
 
 export class RoutingProtocolEngine {
@@ -119,7 +129,7 @@ export class RoutingProtocolEngine {
 
     for (const dev of l3) {
       const cfg = dev.routingCfg;
-      const proto = cfg.ospf?.enabled ? 'ospf' : cfg.rip?.enabled ? 'rip' : cfg.eigrp?.enabled ? 'eigrp' : null;
+      const proto = protoOf(cfg);
       if (!proto) continue;
       const nets = (cfg[proto]?.networks || []).map((n) => this.normalizeNetworkEntry(dev, n)).filter((n): n is string => !!n);
       if (nets.length === 0) continue;
@@ -143,7 +153,7 @@ export class RoutingProtocolEngine {
       for (const dev of l3) {
         const myEntries = tables.get(dev.id);
         if (!myEntries) continue;
-        const proto = dev.routingCfg.ospf?.enabled ? 'ospf' : dev.routingCfg.rip?.enabled ? 'rip' : dev.routingCfg.eigrp?.enabled ? 'eigrp' : null;
+        const proto = protoOf(dev.routingCfg);
         if (!proto) continue;
         const myKeys = new Set<string>();
         for (const link of links.linksOf(dev.id)) {
@@ -166,7 +176,9 @@ export class RoutingProtocolEngine {
           const hopCost = proto === 'ospf' ? this.ospfIfaceCost(dev, localIface) : 1;
           for (const other of l3) {
             if (other.id === dev.id) continue;
-            if (!other.routingCfg.ospf?.enabled && !other.routingCfg.rip?.enabled && !other.routingCfg.eigrp?.enabled) continue;
+            // Isolasi protokol: adjacency hanya terbentuk antar perangkat
+            // yang menjalankan protokol SAMA (OSPF↔OSPF, RIP↔RIP, ...).
+            if (protoOf(other.routingCfg) !== proto) continue;
             const otherIp = this.ipOnSegment(other, key, segments, links);
             if (!otherIp) continue;
             // Sisi penerima juga passive → adjacency tidak terbentuk.
@@ -225,33 +237,47 @@ export class RoutingProtocolEngine {
       const entries: TableEntry[] = [];
       for (const iface of dev.getInterfaces()) {
         if (iface.ip && iface.up) {
-          entries.push({ dst: `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`, gateway: '', metric: 0 });
+          entries.push({ dst: `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`, gateway: '', metric: 0, asPath: [] });
         }
       }
       for (const n of cfg.networks || []) {
         const norm = this.normalizeNetworkEntry(dev, n);
-        if (norm && !entries.some((e) => e.dst === norm)) entries.push({ dst: norm, gateway: '', metric: 0 });
+        if (norm && !entries.some((e) => e.dst === norm)) entries.push({ dst: norm, gateway: '', metric: 0, asPath: [] });
       }
       tables.set(dev.id, entries);
     }
 
     const deviceById = (ip: string) => devices.find((d) => d.hasIp(ip)) || null;
+    const peerRouterOf = (p: { remoteAs: number; remoteAddr: string }): { id: string; asn: number } | null => {
+      const peerId = deviceById(p.remoteAddr)?.id;
+      if (!peerId || !bgpRouters.some((b) => b.id === peerId)) return null;
+      return { id: peerId, asn: bgpRouters.find((b) => b.id === peerId)!.bgpCfg!.asn };
+    };
 
     for (let round = 0; round < bgpRouters.length; round++) {
-      const candidates: { peerId: string; dst: string; gateway: string; metric: number }[] = [];
+      const candidates: { peerId: string; dst: string; gateway: string; metric: number; asPath: number[] }[] = [];
       for (const dev of bgpRouters) {
         const myEntries = tables.get(dev.id);
         if (!myEntries) continue;
+        const myAsn = dev.bgpCfg!.asn;
         for (const p of dev.bgpCfg!.peers) {
-          const peerId = deviceById(p.remoteAddr)?.id;
-          if (!peerId || !bgpRouters.some((b) => b.id === peerId)) continue;
+          const peerRouter = peerRouterOf(p);
+          if (!peerRouter) continue;
+          // iBGP bila AS sama, eBGP bila berbeda.
+          const sameAs = peerRouter.asn === myAsn;
           // Next-hop BGP = IP interface yang menghadap peer (langsung atau via path),
           // bukan IP pertama perangkat — kalau tidak, rute belajar mengarah ke
           // gateway yang tidak terjangkau.
           const nextHop = this.egressIpToward(dev, p.remoteAddr, devices, links, segments) || dev.getIpAddress();
           if (!nextHop) continue;
           for (const e of myEntries) {
-            candidates.push({ peerId, dst: e.dst, gateway: nextHop, metric: e.metric + 1 });
+            // Loop prevention: jangan iklankan kembali ke AS yang sudah ada di path.
+            if (e.asPath && e.asPath.includes(peerRouter.asn)) continue;
+            // iBGP: rute yang dipelajari dari iBGP tidak diiklankan ke iBGP lain
+            // (hanya origin lokal atau rute eBGP yang diteruskan).
+            if (sameAs && e.asPath && e.asPath.length > 0) continue;
+            const asPath = sameAs ? [...(e.asPath || [])] : [myAsn, ...(e.asPath || [])];
+            candidates.push({ peerId: peerRouter.id, dst: e.dst, gateway: nextHop, metric: e.metric + 1, asPath });
           }
         }
       }
@@ -263,10 +289,11 @@ export class RoutingProtocolEngine {
         const list = tables.get(c.peerId) || [];
         const existing = list.find((t) => t.dst === c.dst);
         if (!existing || c.metric < existing.metric) {
-          if (!existing) list.push({ dst: c.dst, gateway: c.gateway, metric: c.metric });
+          if (!existing) list.push({ dst: c.dst, gateway: c.gateway, metric: c.metric, asPath: c.asPath });
           else {
             existing.gateway = c.gateway;
             existing.metric = c.metric;
+            existing.asPath = c.asPath;
           }
           tables.set(c.peerId, list);
           changed = true;

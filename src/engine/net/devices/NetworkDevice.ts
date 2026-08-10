@@ -24,6 +24,30 @@ export interface WebServerState {
   content: string;
 }
 
+/**
+ * MAC default deterministik & unik per (deviceId, portId, index):
+ * hash FNV-1a 32-bit dari id device+port, plus byte port index agar
+ * dua port ber-id sama panjang tidak saling bentrok (bug lama:
+ * `${p.id.length % 16}` menghasilkan MAC identik/malformed).
+ */
+function defaultPortMac(deviceId: string, portId: string, portIndex: number): string {
+  let h1 = 2166136261;
+  const s = `${deviceId}|${portId}`;
+  for (let i = 0; i < s.length; i++) {
+    h1 ^= s.charCodeAt(i);
+    h1 = Math.imul(h1, 16777619) >>> 0;
+  }
+  const bytes = [
+    0x02,
+    (h1 >>> 24) & 0xff,
+    (h1 >>> 16) & 0xff,
+    (h1 >>> 8) & 0xff,
+    h1 & 0xff,
+    (h1 >>> 24) ^ (portIndex & 0xff) ^ ((h1 >>> 8) & 0xff),
+  ];
+  return bytes.map((b) => b.toString(16).padStart(2, '0')).join(':');
+}
+
 export class NetworkDevice {
   readonly id: string;
   name: string;
@@ -134,7 +158,7 @@ export class NetworkDevice {
 
   syncPorts(ports: { id: string; name: string; macAddress?: string; status?: string; ipAddress?: string; speedMbps?: number }[]): void {
     const seen = new Set<string>();
-    for (const p of ports) {
+    ports.forEach((p, portIndex) => {
       seen.add(p.id);
       const existing = this.interfaces.get(p.id);
       const parsed = p.ipAddress ? parseCidr(p.ipAddress) : undefined;
@@ -147,14 +171,14 @@ export class NetworkDevice {
         this.interfaces.set(p.id, new NetworkInterfaceModel({
           portId: p.id,
           name: p.name,
-          mac: p.macAddress || `02:00:00:00:00:${p.id.length % 16}`,
+          mac: p.macAddress || defaultPortMac(this.id, p.id, portIndex),
           ip: parsed,
           up: p.status === 'up',
           speedMbps: p.speedMbps,
         }));
       }
       this.nameIndex.set(p.name.toLowerCase(), p.id);
-    }
+    });
     for (const id of [...this.interfaces.keys()]) {
       if (!seen.has(id)) {
         const oldName = this.interfaces.get(id)!.name;
@@ -194,7 +218,7 @@ export class NetworkDevice {
     for (const iface of this.interfaces.values()) {
       if (!iface.ipv6 || !iface.up) continue;
       this.ipv6Routing.addRoute({
-        dst: ipv6NetworkString(iface.ipv6.address, iface.ipv6.prefix),
+        dst: `${ipv6NetworkString(iface.ipv6.address, iface.ipv6.prefix)}/${iface.ipv6.prefix}`,
         gateway: null,
         iface: iface.name,
         kind: 'connected',
@@ -353,9 +377,11 @@ export class NetworkDevice {
       if (!iface.ip || !iface.up) continue;
       const g = parseCidr(`${gateway}/${iface.ip.prefix}`);
       if (!g) continue;
-      if (Math.trunc(ipNum(g.address)) >> (32 - iface.ip.prefix) === Math.trunc(ipNum(iface.ip.address)) >> (32 - iface.ip.prefix)) {
-        return iface;
-      }
+      // >>> 0: bandingkan bilangan unsigned (>> signed salah untuk bit-31-set
+      // dan prefix 0 → >>32 di JS bernilai >>0, selalu cocok).
+      const gw = ipNum(g.address) >>> (32 - iface.ip.prefix);
+      const self = ipNum(iface.ip.address) >>> (32 - iface.ip.prefix);
+      if (gw === self) return iface;
     }
     return null;
   }

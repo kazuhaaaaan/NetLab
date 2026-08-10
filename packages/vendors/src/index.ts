@@ -104,6 +104,17 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
         target = 'ip_service';
         action = s1 || 'print';
       }
+      if (isPrefix(action, 'interface')) {
+        // "/interface print|set|disable|enable <name>" langsung di level interface;
+        // selain itu (bridge/wireless/vlan) → sub-target tersendiri.
+        if (!s0 || isPrefix(s0, 'print') || isPrefix(s0, 'set') || isPrefix(s0, 'disable') || isPrefix(s0, 'enable') || isPrefix(s0, 'monitor')) {
+          target = 'interface';
+          action = s0 || 'print';
+          return { action, target, payload: { raw: rawInput, ast, iface: ast.kwargs['interface'] || '' } };
+        }
+        target = `interface_${s0}`;
+        action = s1 || 'print';
+      }
     }
 
     if (action === 'add' && target === 'ip_address') {
@@ -126,6 +137,9 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
       return { action: 'ping', target, payload: { raw: rawInput, ast, host } };
     }
 
+    if (action === 'interface' && !ast.subCommands.length) {
+      return { action: 'interface_print', target, payload: { raw: rawInput, ast } };
+    }
     return { action: action || 'EXEC_COMMAND', target, payload: { raw: rawInput, ast } };
   }
 
@@ -182,10 +196,12 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'interface_print') {
       const ifaces = cmdResult.ifaces || [];
-      const header = 'Flags: D - dynamic, X - disabled, R - running, S - slave\n # NAME                TYPE       ACTUAL-MTU L2MTU MAX-L2MTU MAC-ADDRESS       TX-QUEUE SLAVE\n';
-      const rows = ifaces.map((p: any, i: number) =>
-        ` ${i} ${('R ' + p.name).padEnd(20)} ether      1500       1598  65535     ${p.macAddress || '00:00:00:00:00:00'}   ingress`
-      ).join('\n');
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
+      const header = 'Flags: D - dynamic, X - disabled, R - running, S - slave\n #    NAME                TYPE       ACTUAL-MTU L2MTU MAC-ADDRESS       IP-ADDRESS\n';
+      const rows = ifaces.map((p: any, i: number) => {
+        const disabled = shutdown.includes(p.name) ? 'X' : 'R';
+        return ` ${i} ${disabled} ${(p.name || '').padEnd(20)} ether      1500       1598   ${(p.macAddress || '00:00:00:00:00:00').padEnd(18)} ${p.ipAddress || '--'}`;
+      }).join('\n');
       return header + (rows || ' -- no entries --');
     }
     if (cmdResult.type === 'ping') {
@@ -325,6 +341,36 @@ export class CiscoVendorAdapter implements IVendorAdapter {
         `${p.name.padEnd(23)}${(p.ipAddress ? p.ipAddress.split('/')[0] : 'unassigned').padEnd(16)}YES unset  ${p.status === 'up' ? 'up                    up' : 'down                  down'}`
       ).join('\n');
       return header + rows;
+    }
+    if (cmdResult.type === 'int_status') {
+      const ports = cmdResult.ifaces || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
+      const header = 'Port          Name    Status       Vlan     Duplex  Speed Type\n';
+      const rows = ports.map((p: any) => {
+        const down = shutdown.includes(p.name);
+        const status = down ? 'down' : p.status === 'up' ? 'up' : 'down';
+        const speed = down || p.status !== 'up' ? '-' : p.speedMbps && p.speedMbps <= 100 ? `${p.speedMbps}Mb/s` : p.speedMbps >= 10000 ? '10G' : '1G';
+        return `${(p.name || '').padEnd(12)} ${' '.padEnd(7)} ${status.padEnd(12)} ${(p.vlan || (down ? '--' : '1')).toString().padEnd(8)} ${p.status === 'up' && !down ? 'full' : '  '}   ${speed}`;
+      });
+      return header + (rows.join('\n') || '-- no interfaces --');
+    }
+    if (cmdResult.type === 'show_interfaces') {
+      const ports = cmdResult.ports || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
+      const macOf = (p: any) => fmtMac(p.macAddress || '005079666800').toUpperCase();
+      const lines: string[] = [];
+      for (const p of ports) {
+        const down = shutdown.includes(p.name);
+        const up = p.status === 'up' && !down;
+        lines.push(
+          `${p.name} is ${down ? 'administratively down' : up ? 'up' : 'down'}, line protocol is ${up ? 'up' : 'down'}${up ? ' (connected)' : ''}`,
+          `  Hardware is GbE, address is ${macOf(p)} (bia ${macOf(p)})`,
+          `  Internet address is ${p.ipAddress ? p.ipAddress.split('/')[0] + '/' + (p.ipAddress.split('/')[1] || 24) : 'unassigned'}`,
+          `  MTU 1500 bytes, BW ${(p.speedMbps || 1000) * 1000} Kbit/sec, DLY 10 usec,`,
+          ''
+        );
+      }
+      return lines.join('\n') || '-- no interfaces --';
     }
     if (cmdResult.type === 'show_ip_route') {
       const routes = cmdResult.routes || [];
@@ -537,6 +583,34 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
     if (cmdResult.type === 'show_version') {
       return 'Cisco Nexus Operating System (NX-OS) Software\nTAC support: http://www.cisco.com/tac\nNX-OS version: 9.3(8)\n';
     }
+    if (cmdResult.type === 'int_status') {
+      const ports = cmdResult.ifaces || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
+      const header = 'Port          Status    Vlan      Duplex  Speed Type\n';
+      const rows = ports.map((p: any) => {
+        const down = shutdown.includes(p.name);
+        const status = down ? 'down' : p.status === 'up' ? 'connected' : 'notconnected';
+        const speed = down || p.status !== 'up' ? '-' : p.speedMbps && p.speedMbps <= 100 ? `${p.speedMbps}Mb/s` : p.speedMbps >= 10000 ? '10G' : '1G';
+        return `${(p.name || '').padEnd(13)} ${status.padEnd(10)} ${(p.vlan || (down ? '--' : '1')).toString().padEnd(9)} ${p.status === 'up' && !down ? 'full    ' : ''}${speed}`;
+      });
+      return header + (rows.join('\n') || '-- no interfaces --');
+    }
+    if (cmdResult.type === 'show_interfaces') {
+      const ports = cmdResult.ports || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
+      const lines: string[] = [];
+      for (const p of ports) {
+        const down = shutdown.includes(p.name);
+        lines.push(
+          `${p.name} is ${down ? 'administratively down' : p.status === 'up' ? 'up' : 'down'}, line protocol is ${down || p.status !== 'up' ? 'down' : 'up'}${p.status === 'up' && !down ? ' (connected)' : ''}`,
+          `  Hardware is GbE, address is ${fmtMac(p.macAddress || '005079666800').replace(/\./g, '').toUpperCase()} (bia ${fmtMac(p.macAddress || '005079666800').replace(/\./g, '').toUpperCase()})`,
+          `  Internet address is ${p.ipAddress ? p.ipAddress.split('/')[0] + '/' + (p.ipAddress.split('/')[1] || 24) : 'unassigned'}`,
+          `  MTU 1500 bytes, BW ${(p.speedMbps || 1000) * 1000} Kbit/sec, DLY 10 usec,`,
+          ''
+        );
+      }
+      return lines.join('\n') || '-- no interfaces --';
+    }
     if (cmdResult.type === 'ping') {
       return `PING ${cmdResult.host}: 56 data bytes\n64 bytes from ${cmdResult.host}: icmp_seq=0 time=0.931 ms\n64 bytes from ${cmdResult.host}: icmp_seq=1 time=0.712 ms\n--- ${cmdResult.host} ping statistics ---\n2 packets transmitted, 2 packets received, 0.00% packet loss`;
     }
@@ -586,11 +660,14 @@ export class JuniperVendorAdapter implements IVendorAdapter {
       return header + rows;
     }
     if (cmdResult.type === 'show_route') {
-      return ['inet.0: 5 destinations, 5 routes (4 active, 0 holddown, 1 hidden)',
-        '',
-        '0.0.0.0/0          *[Static/5] 1d 02:10:22',
-        '                    > to 10.0.0.1 via ge-0/0/0.0',
-      ].join('\n');
+      const routes = cmdResult.routes || [];
+      if (routes.length === 0) return 'inet.0: 0 destinations, 0 routes (0 active, 0 holddown, 0 hidden)';
+      const rows = routes.map((r: any, i: number) => {
+        const via = r.gateway ? `> to ${r.gateway} via ${r.iface || 'ge-0/0/0.0'}` : `> directly connected via ${r.iface || 'ge-0/0/0.0'}`;
+        const proto = r.kind === 'static' ? 'Static' : r.kind === 'dynamic' ? 'OSPF' : 'Direct';
+        return [r.dst, `          *[${proto}/5] 00:12:34, metric 0`, '            ' + via].join(' ');
+      });
+      return `inet.0: ${routes.length} destinations, ${routes.length} routes (${routes.length} active, 0 holddown, 0 hidden)\n\n` + rows.join('\n');
     }
     if (cmdResult.type === 'show_version') {
       const model = cmdResult.model || 'mx240';
@@ -607,6 +684,9 @@ export class JuniperVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'commit') {
       return 'commit complete';
+    }
+    if (cmdResult.type === 'commit_check') {
+      return 'configuration check succeeds';
     }
     if (cmdResult.type === 'rollback') {
       return 'load complete\n\n[edit]';
@@ -1025,6 +1105,30 @@ export class OpenwrtVendorAdapter implements IVendorAdapter {
         "network.wan.proto='dhcp'",
       ].join('\n');
     }
+    if (cmdResult.type === 'ip_addr') {
+      const ports = cmdResult.ports || [];
+      if (ports.length === 0) {
+        return '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN\n    inet 127.0.0.1/8 scope host lo\n2: br-lan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP\n    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan';
+      }
+      return ports.map((p: any, i: number) => {
+        const ip = p.ipAddress ? p.ipAddress.split('/')[0] : undefined;
+        const prefix = p.ipAddress ? (p.ipAddress.split('/')[1] || '24') : undefined;
+        const up = p.status === 'up' && !(cmdResult.shutdownIfaces || []).includes(p.name);
+        return [
+          `${i + 2}: ${p.name}: <BROADCAST,MULTICAST,${up ? 'UP,LOWER_UP' : 'DOWN'}> mtu 1500 qdisc noqueue state ${up ? 'UP' : 'DOWN'}`,
+          `    link/ether ${p.macAddress || '00:00:00:00:00:00'} brd ff:ff:ff:ff:ff:ff`,
+          ...(ip ? [`    inet ${ip}/${prefix} brd ${ip.replace(/\.\d+$/, '.255')} scope global ${p.name}`] : []),
+        ].join('\n');
+      }).join('\n\n');
+    }
+    if (cmdResult.type === 'ip_route') {
+      const routes = cmdResult.routes || [];
+      if (routes.length === 0) return 'default via 192.168.1.1 dev br-lan';
+      return routes.map((r: any) => {
+        const dst = r.dst === '0.0.0.0/0' || r.dst === 'default' ? 'default' : r.dst;
+        return `${dst}${r.gateway ? ` via ${r.gateway}` : ''} dev ${r.iface || 'br-lan'}`;
+      }).join('\n');
+    }
     if (cmdResult.type === 'ifconfig') {
       const ports = cmdResult.ports || [];
       return ports.map((p: any) =>
@@ -1414,6 +1518,10 @@ export class VendorDispatcher {
       uciRedirects: {} as Record<string, Record<string, string>>,
       juniperFilters: {} as Record<string, any>,
       fortiAddrName: '',
+      // Snapshot konfigurasi ter-commit (Junos commit/rollback) — null jika
+      // belum pernah commit. Restore memakai deep-copy penuh seperti
+      // saveStartupConfig, sehingga rollback benar-benar memulihkan state.
+      juniperCommitted: null as any,
     };
   }
 
@@ -1429,6 +1537,20 @@ export class VendorDispatcher {
     if (saved) this.nodeMemory.set(nodeId, JSON.parse(JSON.stringify(saved)));
     else this.nodeMemory.set(nodeId, this.blankNodeMemory());
     return !!saved;
+  }
+
+  /** Snapshot konfigurasi Junos (tanpa field snapshot itu sendiri). */
+  private juniperSnapshot(mem: any): any {
+    const copy = JSON.parse(JSON.stringify(mem));
+    delete copy.juniperCommitted;
+    return copy;
+  }
+
+  /** Restore konfigurasi Junos dari snapshot commit terakhir. */
+  private restoreJuniper(mem: any, snap: any): void {
+    const restored = JSON.parse(JSON.stringify(snap));
+    delete restored.juniperCommitted;
+    Object.assign(mem, restored);
   }
 
   /** Set the hardware model label for a node (used in show version output). */
@@ -1517,6 +1639,10 @@ export class VendorDispatcher {
       if (mem.uciRedirects && typeof mem.uciRedirects === 'object') target.uciRedirects = { ...mem.uciRedirects };
       if (mem.juniperFilters && typeof mem.juniperFilters === 'object') target.juniperFilters = { ...mem.juniperFilters };
       if (typeof mem.fortiAddrName === 'string') target.fortiAddrName = mem.fortiAddrName;
+      // Snapshot Junos commit — wajib dipulihkan agar "rollback" berfungsi setelah reload.
+      if (mem.juniperCommitted && typeof mem.juniperCommitted === 'object') {
+        target.juniperCommitted = JSON.parse(JSON.stringify(mem.juniperCommitted));
+      }
     }
   }
 
@@ -1549,6 +1675,19 @@ export class VendorDispatcher {
       return `${m[1]}/${bits}`;
     };
 
+    // ── Valid netmask? (contiguous 1-bits, e.g. 255.255.255.0, 0.0.0.0) ──
+    const isNetmask = (s: string): boolean => {
+      const m = s.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+      if (!m) return false;
+      const octets = m.slice(1).map(Number);
+      if (octets.some((o) => o < 0 || o > 255)) return false;
+      const bits = octets.reduce((acc, o) => acc + (o.toString(2).match(/1/g) || []).length, 0);
+      // netmask = bits pertama bernilai 1, sisanya 0
+      const expected = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+      const value = octets.reduce((acc, o) => (acc << 8) + o, 0) >>> 0;
+      return value === expected;
+    };
+
     // ── Cisco IOS / NX-OS / Aruba "no <config>" ─────────────────────────────
     if (isCisco && /^no\s+/i.test(input)) {
       // no ip address (interface view) — removes the IPv4 address from the interface
@@ -1579,10 +1718,10 @@ export class VendorDispatcher {
         if (!mem.currentIface) return err('% Error: no interface selected (enter interface config first)');
         const target = input.replace(/^no\s+ipv6\s+address\s*/i, '').trim() || null;
         if (target) {
-          const cur = mem.configuredIpv6?.[mem.currentIface];
+          const cur = mem.configuredIps6?.[mem.currentIface];
           if (!cur) return err(`% No IPv6 address configured on ${mem.currentIface}`);
           if (cur !== target) return err(`% IPv6 address ${target} not configured on ${mem.currentIface}`);
-          if (mem.configuredIpv6) delete mem.configuredIpv6[mem.currentIface];
+          if (mem.configuredIps6) delete mem.configuredIps6[mem.currentIface];
           return { raw: '' };
         }
         return err('% Incomplete command');
@@ -1595,11 +1734,16 @@ export class VendorDispatcher {
         let gw: string | null = null;
         if (parts.length >= 2) {
           dst = parts[0].toLowerCase() === 'default' ? '0.0.0.0/0' : toCidr(parts[0]);
-          if (/^\d+\.\d+\.\d+\.\d+$/.test(parts[1]) && parts[1] !== parts[0]) {
+          // parts[1] adalah netmask HANYA jika memang bentuk mask (mis. 255.255.255.0 / 0.0.0.0),
+          // bukan sebuah gateway — sehingga "no ip route 0.0.0.0 0.0.0.0 10.0.0.1" terhapus dengan benar.
+          if (parts.length >= 3 && isNetmask(parts[1])) {
             // secondary prefix form "no ip route 10.0.0.0 255.255.255.0 10.0.0.1"
             dst = toCidr(`${parts[0]} ${parts[1]}`);
             gw = parts[2] || null;
+          } else if (parts.length === 2 && isNetmask(parts[1])) {
+            dst = toCidr(`${parts[0]} ${parts[1]}`);
           } else {
+            // two-part form "no ip route 10.0.0.0 10.0.0.1" — argumen kedua adalah gateway
             gw = parts[1];
           }
         } else {
@@ -1691,13 +1835,15 @@ export class VendorDispatcher {
         if (mem.dnsServers.length === before) return err(`% Name-server ${nsMatch[1]} not configured`);
         return { raw: '' };
       }
-      // no access-list <id>
+      // no access-list <id> — hapus ACL firewall (extended) DAN natAcls (standard)
       const aclMatch = input.match(/^no\s+(?:ip\s+)?access-list\s+\d+\s*$/i);
       if (aclMatch) {
-        const id = input.match(/\d+/)?.[0];
-        const existed = mem.natAcls?.[id] !== undefined;
-        if (mem.natAcls) delete mem.natAcls[id];
-        if (!existed) return err(`% Access-list ${id} does not exist`);
+        const id = parseInt(input.match(/\d+/)?.[0] || '0', 10);
+        const beforeAcl = mem.acls.length;
+        mem.acls = mem.acls.filter((r: any) => r.aclId !== id);
+        const hadNat = mem.natAcls?.[String(id)] !== undefined;
+        if (mem.natAcls) delete mem.natAcls[String(id)];
+        if (beforeAcl === mem.acls.length && !hadNat) return err(`% Access-list ${id} does not exist`);
         return { raw: '' };
       }
       // no ip nat inside source static tcp <in-ip> <in-port> <pub-ip> <pub-port>
@@ -1742,7 +1888,12 @@ export class VendorDispatcher {
 
       // /ip address remove [find address=…] / [find interface=…] / numbers=N
       if (/^\/ip\s+address\s+remove\b/i.test(input)) {
-        const keys = Object.keys(mem.configuredIps);
+        // Urutan tampilan "/ip address print" mengikuti urutan port (mergeIps),
+        // jadi index numbers= harus merujuk urutan port — bukan insertion order.
+        const portOrder: string[] = [];
+        for (const p of context?.ports || []) if (mem.configuredIps[p.name]) portOrder.push(p.name);
+        for (const k of Object.keys(mem.configuredIps)) if (!portOrder.includes(k)) portOrder.push(k);
+        const keys = portOrder;
         let removed = false;
         if (nums.length > 0) {
           const k = idx(keys, nums[0]);
@@ -2128,17 +2279,33 @@ export class VendorDispatcher {
       return { raw: '' };
     }
 
-    // ── Juniper "rollback 0" — restore last committed config (simplified: config is volatile here) ──
-    if (vendorId === 'juniper' && /^rollback\s*$/i.test(input)) {
-      const count =
-        (mem.configuredIps && Object.keys(mem.configuredIps).length) +
-        (mem.routes?.length || 0) +
-        (mem.vlans?.length || 0);
-      if (count === 0) return err('error: no configuration to roll back');
+    // ── Juniper / VyOS "rollback" — kembalikan konfigurasi ke snapshot commit terakhir ──
+    if ((vendorId === 'juniper' || isVyosLike) && /^rollback(?:\s+0)?\s*$/i.test(input)) {
+      const snap = mem.juniperCommitted;
+      if (!snap) return err('error: no configuration to roll back');
+      this.restoreJuniper(mem, snap);
       return { raw: 'configuration rolled back' };
     }
 
     return undefined;
+  }
+
+  /** Pesan error jujur untuk perintah yang tidak dikenali (no fake success). */
+  private unknownCommand(vendorId: string, rawInput: string): string {
+    const first = (rawInput.trim().split(/\s+/)[0] || '').replace(/^\//, '');
+    switch (vendorId) {
+      case 'mikrotik':
+        return `bad command name ${first || '""'} (line 1 column 1)`;
+      case 'juniper':
+        return 'syntax error, expecting <command>';
+      case 'huawei':
+        return `% Unrecognized command found at '^' position.`;
+      case 'linux':
+      case 'openwrt':
+        return `bash: ${first || '""'}: command not found`;
+      default:
+        return `% Invalid input detected at '^' marker.`;
+    }
   }
 
   dispatch(vendorId: string, rawInput: string, context: any): string {
@@ -2148,10 +2315,14 @@ export class VendorDispatcher {
     const nodeId = context.nodeId;
     const mem = this.getNodeMemory(nodeId);
 
+    // Baris kosong: perangkat sungguhan hanya mengulang prompt, tidak ada output.
+    if (!rawInput || !rawInput.trim()) return '';
+
     const normalized = adapter.parseSyntax(rawInput);
 
-    // Execution environment — resolve command to result object
-    let cmdResult: any = { raw: `% Command executed: '${rawInput}' [ok]` };
+    // Execution environment — resolve command to result object.
+    // undefined = tidak ada handler yang menangani → error "unknown command" di bawah.
+    let cmdResult: any = undefined;
 
     if (normalized.action === '?' || normalized.action === 'help' || rawInput.trim() === '?') {
       cmdResult = { type: 'help' };
@@ -2305,8 +2476,6 @@ export class VendorDispatcher {
       const mode = rawInput.trim().match(/^switchport\s+port-security\s+violation\s+(\S+)/i)?.[1]?.toLowerCase() || 'restrict';
       const cur = mem.portSecurity[mem.currentIface] || {};
       mem.portSecurity[mem.currentIface] = { ...cur, violation: mode, limit: cur.limit || 1, sticky: !!cur.sticky };
-      cmdResult = { raw: '' };
-    } else if (/^switchport\s+mode\s+access/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       cmdResult = { raw: '' };
     } else if (/^\/interface\s+(disable|enable)\s+(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       // MikroTik: "/interface disable ether1" / "/interface enable ether1"
@@ -2800,25 +2969,75 @@ export class VendorDispatcher {
     } else if (/^show\s+access-lists/i.test(rawInput.trim())) {
       cmdResult = { type: 'acl_print', rules: mem.acls };
     } else if (/^access-list\s+\d+\s+(permit|deny)\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
-      // Cisco: "access-list <id> permit|deny <proto> <src> <dst>"
+      // Cisco: "access-list <id> permit|deny <proto> <src> [src-wildcard] [src-port] <dst> [dst-wildcard] [dst-port]"
+      // Wildcard 0.0.0.255 dst → CIDR (192.168.1.0/24) agar engine bisa mencocokkan subnet.
       const m = rawInput.trim().match(/^access-list\s+(\d+)\s+(permit|deny)\s+(.*)$/i);
       if (m) {
         const id = parseInt(m[1], 10);
         const tokens = m[3].trim().split(/\s+/).filter(Boolean);
         let proto = 'ip';
-        let src = 'any';
-        let dst = 'any';
         if (tokens.length > 0 && /^(ip|icmp|tcp|udp|any)$/i.test(tokens[0])) proto = tokens.shift()!.toLowerCase();
-        if (tokens.length > 0 && tokens[0].toLowerCase() === 'host') tokens.shift();
-        if (tokens.length > 0) src = tokens.shift()!;
-        if (tokens.length > 0 && tokens[0].toLowerCase() === 'host') tokens.shift();
-        if (tokens.length > 0) dst = tokens.shift()!;
-        // ACL standar (1–99) dipakai untuk pencocokan NAT — bukan rule firewall.
+
+        // Wildcard valid: 0.0.0.0 (host), 0.0.0.x, 0.0.x.255, 0.x.255.255, x.255.255.255
+        const isWildcard = (s: string): boolean => {
+          if (!/^\d+\.\d+\.\d+\.\d+$/.test(s)) return false;
+          const os = s.split('.').map(Number);
+          if (os.some((o) => o < 0 || o > 255)) return false;
+          if (s === '0.0.0.0' || s === '255.255.255.255') return true;
+          if (os[0] === 0 && os[1] === 0 && os[2] === 0 && os[3] !== 0 && os[3] !== 255) return true;
+          if (os[0] === 0 && os[1] === 0 && os[2] !== 0 && os[3] === 255) return true;
+          if (os[0] === 0 && os[1] !== 0 && os[2] === 255 && os[3] === 255) return true;
+          if (os[0] !== 0 && os[0] !== 255 && os[1] === 255 && os[2] === 255 && os[3] === 255) return true;
+          return false;
+        };
+        const wildcardToCidr = (ip: string, wc: string): string => {
+          if (!wc || wc === '0.0.0.0' || wc === '255.255.255.255' || ip === 'any') return ip;
+          const bits = wc.split('.').map(Number).reduce((acc, o) => acc + (o.toString(2).match(/1/g) || []).length, 0);
+          return `${ip}/${32 - bits}`;
+        };
+        const readEndpoint = (): { ip: string; port: string } => {
+          let ip = 'any';
+          if (tokens[0]?.toLowerCase() === 'any') {
+            tokens.shift();
+          } else if (tokens[0]?.toLowerCase() === 'host') {
+            tokens.shift();
+            ip = tokens.shift() || 'any';
+          } else if (tokens.length > 0) {
+            ip = tokens.shift()!;
+          }
+          if (tokens[0] && isWildcard(tokens[0])) ip = wildcardToCidr(ip, tokens.shift()!);
+          let port = '';
+          if (tokens[0] && /^(eq|gt|lt|ne)\s*$/i.test(tokens[0])) {
+            tokens.shift();
+            port = tokens.shift() || '';
+          } else if (tokens[0] && /^\d+$/.test(tokens[0])) {
+            port = tokens.shift()!;
+          } else if (tokens[0]?.toLowerCase() === 'range') {
+            tokens.shift();
+            const a = tokens.shift() || '';
+            const b = tokens.shift() || '';
+            port = `${a}-${b}`;
+          }
+          return { ip, port };
+        };
+
+        const srcEp = readEndpoint();
+        const dstEp = readEndpoint();
+        // sisa token (mis. "log") diabaikan.
         if (id < 100 && proto === 'ip') {
           if (!mem.natAcls) mem.natAcls = {};
-          mem.natAcls[String(id)] = { action: m[2].toLowerCase(), src, wildcard: tokens[0] || (src === 'any' ? '0.0.0.0' : '') };
+          mem.natAcls[String(id)] = { action: m[2].toLowerCase(), src: srcEp.ip, dst: dstEp.ip, wildcard: '0.0.0.0' };
         } else {
-          mem.acls.push({ action: m[2].toLowerCase() as 'permit' | 'deny', proto, src, dst });
+          const rule: any = {
+            aclId: id,
+            action: m[2].toLowerCase() as 'permit' | 'deny',
+            proto,
+            src: srcEp.ip,
+            dst: dstEp.ip,
+          };
+          if (srcEp.port) rule.srcPort = srcEp.port;
+          if (dstEp.port) rule.dstPort = dstEp.port;
+          mem.acls.push(rule);
         }
         cmdResult = { raw: '' };
       } else {
@@ -3245,10 +3464,25 @@ export class VendorDispatcher {
     ) {
       const ports = mergeIps(context?.ports, mem.configuredIps);
       cmdResult = { type: 'ip_address_print', ports };
+    } else if (
+      normalized.action === 'interface_print' ||
+      (normalized.action === 'print' && normalized.target === 'interface')
+    ) {
+      // MikroTik "/interface print" — daftar interface dengan status & IP.
+      const ports = mergeIps(context?.ports, mem.configuredIps);
+      cmdResult = { type: 'interface_print', ifaces: ports, shutdownIfaces: mem.shutdownIfaces || [] };
+    } else if (normalized.action === 'show_int_status') {
+      // NX-OS "show interface status" — kolom status per port.
+      const ports = mergeIps(context?.ports, mem.configuredIps);
+      cmdResult = {
+        type: 'int_status',
+        ifaces: ports,
+        shutdownIfaces: mem.shutdownIfaces || [],
+      };
     } else if (normalized.action === 'show_ip_int_brief' || normalized.action === 'show_int_brief' || normalized.action === 'show_ip_int' || normalized.action === 'display_ip_int' || normalized.action === 'get_system_interface' || normalized.action === 'show_interfaces_terse' || normalized.action === 'show_interfaces' || normalized.action === 'ifconfig' || normalized.action === 'ip_addr') {
       const ports = mergeIps(context?.ports, mem.configuredIps);
-      cmdResult = { type: normalized.action, ports };
-    } else if (normalized.action === 'show_ip_route' || normalized.action === 'show_route' || normalized.action === 'display_routing' || normalized.action === 'ip_route') {
+      cmdResult = { type: normalized.action, ports, shutdownIfaces: mem.shutdownIfaces || [] };
+    } else if (normalized.action === 'show_ip_route' || normalized.action === 'show_route' || normalized.action === 'display_routing' || normalized.action === 'ip_route' || (normalized.target === 'ip_route' && normalized.action === 'print')) {
       const dynamicRoutes = typeof context.routeProvider === 'function' ? context.routeProvider() : [];
       const connectedRoutes = (mergeIps(context?.ports, mem.configuredIps) || [])
         .filter((p: any) => p.ipAddress)
@@ -3257,7 +3491,7 @@ export class VendorDispatcher {
       const dynamic = dynamicRoutes
         .filter((r: any) => r.kind === 'dynamic')
         .map((r: any) => ({ dst: r.dst, iface: r.iface || '', gateway: r.gateway || '', prefSrc: '', kind: 'dynamic' }));
-      cmdResult = { type: normalized.action, routes: [...connectedRoutes, ...staticRoutes, ...dynamic] };
+      cmdResult = { type: normalized.target === 'ip_route' && normalized.action === 'print' ? 'ip_route_print' : normalized.action, routes: [...connectedRoutes, ...staticRoutes, ...dynamic] };
     } else if (normalized.action === 'ping' || (normalized.target === 'tool' && (normalized.payload as any)?.ast?.subCommands?.[0]?.toLowerCase() === 'ping')) {
       const ast = (normalized.payload as any)?.ast;
       const host = (normalized.payload as any).host || ast?.subCommands?.[1] || ast?.subCommands?.[0] || '';
@@ -3295,10 +3529,39 @@ export class VendorDispatcher {
       cmdResult = { type: normalized.action };
     } else if (normalized.action === 'enable') {
       cmdResult = { type: 'enable' };
+    } else if (vendorId === 'juniper' && normalized.action === 'commit') {
+      // Junos "commit suggest"/"commit check" hanya validasi — tidak menyimpan snapshot.
+      const checkOnly = /^commit\s+(?:check|suggest)/i.test(rawInput.trim());
+      const current = this.juniperSnapshot(mem);
+      const prev = mem.juniperCommitted;
+      if (checkOnly) {
+        cmdResult = { type: 'commit_check' };
+      } else if (prev && JSON.stringify(prev) === JSON.stringify(current)) {
+        cmdResult = { raw: 'warning: no configuration change, commit aborted' };
+      } else {
+        mem.juniperCommitted = current;
+        cmdResult = { type: 'commit' };
+      }
+    } else if (vendorId === 'vyos' || vendorId === 'ubiquiti') {
+      if (normalized.action === 'commit') {
+        // VyOS/EdgeOS "commit" — aktifkan kandidat (snapshot untuk rollback).
+        const current = this.juniperSnapshot(mem);
+        mem.juniperCommitted = current;
+        cmdResult = { type: 'commit' };
+      } else if (normalized.action === 'rollback') {
+        const snap = mem.juniperCommitted;
+        cmdResult = snap
+          ? { raw: 'configuration rolled back' }
+          : { raw: 'error: no configuration to roll back' };
+        if (snap) this.restoreJuniper(mem, snap);
+      } else {
+        cmdResult = { type: 'commit' };
+      }
     } else if (normalized.action === 'commit') {
       cmdResult = { type: 'commit' };
     } else if (normalized.action === 'rollback') {
-      cmdResult = { type: 'rollback' };
+      // Vendor lain tidak punya snapshot — jangan pernah pura-pura sukses.
+      cmdResult = { raw: 'error: no configuration to roll back' };
     } else if (normalized.action === 'write_mem' || normalized.action === 'save') {
       this.saveStartupConfig(nodeId);
       cmdResult = { type: normalized.action };
@@ -3359,7 +3622,7 @@ export class VendorDispatcher {
     }
 
     if (cmdResult === undefined) {
-      cmdResult = { raw: `% Command executed: '${rawInput}' [ok]` };
+      cmdResult = { raw: this.unknownCommand(vendorId, rawInput) };
     }
 
     let response = adapter.formatResponse(cmdResult);
@@ -4696,7 +4959,10 @@ function commitUci(mem: any, context: any): void {
       continue;
     }
   }
-  // flush redirect → dstnat (port-forward)
+  // flush redirect → dstnat (port-forward).
+  // Catatan: dest_ip adalah IP INTERNAL tujuan; paket datang ke IP publik
+  // router (mana saja), jadi dstAddress dibiarkan kosong agar cocok dengan
+  // port yang diminta — bukan di-translate ke dirinya sendiri.
   const redirects = mem.uciRedirects || {};
   for (const idx of Object.keys(redirects)) {
     const r = redirects[idx];
@@ -4706,11 +4972,36 @@ function commitUci(mem: any, context: any): void {
         action: 'dst-nat',
         protocol: (r.proto || 'tcp').toLowerCase(),
         dstPort: r.src_dport,
-        dstAddress: r.dest_ip,
+        dstAddress: '',
         toAddresses: r.dest_ip,
         toPorts: r.dest_port || r.src_dport,
       });
       delete mem.uciRedirects[idx];
+    }
+  }
+  // network.<iface>.ipaddr/netmask/gateway/proto → IP interface + DHCP client
+  for (const key of keys) {
+    const value = pending[key];
+    const lanMatch = key.match(/^network\.(\S+?)\.(ipaddr|netmask|gateway|proto)$/i);
+    if (lanMatch) {
+      const ifaceRaw = lanMatch[1];
+      const opt = lanMatch[2].toLowerCase();
+      // "lan" = interface ether1 (sesuai uci delete network.lan → ether1)
+      const iface = resolveIfaceName(context?.ports, ifaceRaw === 'loopback' ? 'lo' : ifaceRaw) || ifaceRaw;
+      if (opt === 'ipaddr') {
+        const mask = pending[`network.${ifaceRaw}.netmask`] || '255.255.255.0';
+        mem.configuredIps[iface] = `${value}/${maskToBits(mask)}`;
+        if (!mem.ifaceSettings) mem.ifaceSettings = {};
+      } else if (opt === 'proto' && value.toLowerCase() === 'dhcp') {
+        if (!mem.dhcpClients) mem.dhcpClients = [];
+        if (!mem.dhcpClients.some((c: any) => c.iface === iface)) {
+          mem.dhcpClients.push({ iface, addDefaultRoute: true, status: 'searching' });
+        }
+      } else if (opt === 'gateway') {
+        if (!mem.routes.some((r2: any) => r2.gateway === value)) {
+          mem.routes.push({ dst: '0.0.0.0/0', gateway: value, distance: 1 });
+        }
+      }
     }
   }
   // selesaikan pool DHCP yang punya start/limit tapi belum range absolut
@@ -5116,23 +5407,27 @@ function cidrOf(entry: string): string {
   if (s.includes('/')) return s;
   const parts = s.split(/\s+/);
   if (parts.length >= 2) {
-    const mask = parts[1];
-    const octets = mask.split('.').map(Number);
-    let bits = 0;
-    for (const o of octets) {
-      if (o === 255) bits += 8;
-      else if (o === 254) bits += 7;
-      else if (o === 252) bits += 6;
-      else if (o === 248) bits += 5;
-      else if (o === 240) bits += 4;
-      else if (o === 224) bits += 3;
-      else if (o === 192) bits += 2;
-      else if (o === 128) bits += 1;
-      else break;
-    }
-    return `${parts[0]}/${bits}`;
+    return `${parts[0]}/${maskToBits(parts[1])}`;
   }
   return s;
+}
+
+/** Netmask 255.255.255.0 → prefix 24. */
+function maskToBits(mask: string): number {
+  const octets = mask.split('.').map(Number);
+  let bits = 0;
+  for (const o of octets) {
+    if (o === 255) bits += 8;
+    else if (o === 254) bits += 7;
+    else if (o === 252) bits += 6;
+    else if (o === 248) bits += 5;
+    else if (o === 240) bits += 4;
+    else if (o === 224) bits += 3;
+    else if (o === 192) bits += 2;
+    else if (o === 128) bits += 1;
+    else break;
+  }
+  return bits;
 }
 
 /** Ubah entry IP apa pun → "ip mask" (bentuk IOS/Huawei/Fortinet). */
