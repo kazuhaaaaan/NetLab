@@ -389,3 +389,5 @@ for (const vendor of VENDORS) {
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed, ${skip} skipped (vendor matrix)`);
 if (failures.length) console.log('FAILURES:\n  ' + failures.join('\n  '));
+// Gagal = exit code 1 — CI wajib gagal bila ada regresi vendor.
+if (fail > 0) process.exit(1);

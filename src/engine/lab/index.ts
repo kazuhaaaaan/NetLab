@@ -258,13 +258,13 @@ function evalAssertion(sim: NetworkSimulator, a: Assertion): LabAssertionResult 
     }
     case 'assertOspfNeighbor': {
       const peers = sim.getOspfNeighbors(a.node);
-      const full = peers && peers.length > 0;
+      const full = peers?.some((p) => p.state === 'Full');
       return {
         ...base,
         pass: !!full,
         expected: `OSPF neighbor FULL di ${nodeName(sim, a.node)}`,
         actual: peers && peers.length > 0 ? peers.map((p) => p.state).join(',') : 'tanpa neighbor',
-        likelyCause: !full ? 'OSPF network tidak mencakup interface / area salah / link down' : undefined,
+        likelyCause: !full ? 'OSPF network tidak mencakup interface / area salah / link down / interface down' : undefined,
       };
     }
     case 'assertBlocked':

@@ -56,6 +56,8 @@ export class InteractionEngine {
   // Touch device detection for single-finger pan
   private isTouchPointer = false;
   private initialTargetInfo: ReturnType<InteractionEngine["getTargetInfo"]> | null = null;
+  /** true selama gesture dua jari aktif — menekan TAP palsu saat jari terangkat. */
+  private multiTouchActive = false;
 
   constructor(
     element: HTMLElement,
@@ -85,7 +87,7 @@ export class InteractionEngine {
     this.element.removeEventListener("wheel", this.handleWheel);
   }
 
-  private getCanvasPoint(e: PointerEvent): Point {
+  private getCanvasPoint(e: { clientX: number; clientY: number }): Point {
     const rect = this.element.getBoundingClientRect();
     return {
       x: e.clientX - rect.left,
@@ -172,6 +174,7 @@ export class InteractionEngine {
     // Multi-touch gestures (Pinch / Two-finger Pan)
     if (this.activePointers.size === 2) {
       this.clearLongPressTimer();
+      this.multiTouchActive = true;
       this.draggedNodeId = null;
       this.isDraggingNode = false;
       if (this.cableDrag) {
@@ -432,7 +435,7 @@ export class InteractionEngine {
       return;
     }
 
-    if (!this.isLongPressTriggered && this.activePointers.size === 1) {
+    if (!this.isLongPressTriggered && !this.multiTouchActive && this.activePointers.size === 1) {
       if (!wasDragging) {
         // Double Tap detection (<300ms between taps within 20px)
         if (
@@ -469,6 +472,7 @@ export class InteractionEngine {
     if (this.activePointers.size === 0) {
       this.initialPinchDistance = null;
       this.lastPanPoint = null;
+      this.multiTouchActive = false;
     }
   };
 
@@ -494,6 +498,9 @@ export class InteractionEngine {
     this.selectionStart = null;
     this.initialTargetInfo = null;
     this.activePointers.delete(e.pointerId);
+    if (this.activePointers.size === 0) {
+      this.multiTouchActive = false;
+    }
   };
 
   /**
@@ -524,7 +531,7 @@ export class InteractionEngine {
 
   private handleWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    const pt = { x: e.clientX, y: e.clientY };
+    const pt = this.getCanvasPoint(e);
     if (e.ctrlKey) {
       // Trackpad pinch (browser mengirim wheel + ctrlKey): zoom proporsional
       // dengan besaran cubitan — deltaY negatif (jari menjauh) = zoom in.

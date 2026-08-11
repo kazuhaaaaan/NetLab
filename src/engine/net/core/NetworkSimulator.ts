@@ -952,6 +952,9 @@ export class NetworkSimulator implements SimulatorCore {
         if (!next.has(n)) dev.setIfaceUp(n, true);
       }
     }
+    // Interface naik/turun mengubah adjacency OSPF/RIP/BGP → rute dinamis
+    // harus dihitung ulang, kalau tidak tabel routing menyimpan gateway mati.
+    this.computeDynamicRoutes();
   }
 
   setSubinterfaces(nodeId: string, subs: { name: string; parentPort: string; vlanId: number }[] | undefined): void {
@@ -1594,7 +1597,7 @@ export class NetworkSimulator implements SimulatorCore {
       seen.add(peerIp);
       // Router-ID OSPF: nilai router-id CLI bila diatur (bukan IP interface sembarang).
       const rid = peer.routingCfg.ospf?.routerId || peerIp;
-      out.push({ routerId: rid, ip: peerIp, iface: myIface?.name || myPort, state: full ? 'Full/ -' : 'Down' });
+      out.push({ routerId: rid, ip: peerIp, iface: myIface?.name || myPort, state: full ? 'Full' : 'Down' });
     }
     return out;
   }

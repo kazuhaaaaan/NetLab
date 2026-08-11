@@ -1,11 +1,14 @@
 import { LabProject } from '../types';
-import { validateProject, unwrapProjectFile, ValidationError } from '../utils/projectValidation';
+import { validateProject, unwrapProjectFile, ValidationError, ENGINE_VERSION, SCHEMA_VERSION } from '../utils/projectValidation';
 
 const DB_NAME = 'MikroLabDB';
 const DB_VERSION = 2;
 const STORE_PROJECTS = 'projects';
 const STORE_DEVICE_CONFIGS = 'device_configs';
 const TUTORIAL_KEY = 'mikrolab_seen_tutorial';
+
+/** Schema version .mlab terbaru yang didukung file ini. */
+const MLAB_SCHEMA = 1;
 
 export type ImportResult =
   | { success: true; project: LabProject; deviceConfigs?: Record<string, any> }
@@ -67,12 +70,20 @@ export class StorageEngine {
     }
   }
 
-  /** Export proyek + konfigurasi CLI perangkat sebagai satu file .mlab. */
+  /** Export proyek + konfigurasi CLI perangkat sebagai satu file .mlab.
+   *  Format ter-versioning: schemaVersion + engineVersion + timestamps. */
   public static exportProjectAsFile(project: LabProject, deviceConfigs?: Record<string, any>): void {
-    const payload =
-      deviceConfigs && Object.keys(deviceConfigs).length > 0
-        ? { format: 'netlab-mlab', version: '1.0', project, deviceConfigs }
-        : project;
+    const now = new Date().toISOString();
+    const payload = {
+      format: 'netlab-mlab',
+      schemaVersion: 1,
+      engineVersion: ENGINE_VERSION,
+      createdAt: project.metadata.createdAt || now,
+      updatedAt: now,
+      metadata: project.metadata,
+      project,
+      ...(deviceConfigs && Object.keys(deviceConfigs).length > 0 ? { deviceConfigs } : {}),
+    };
     const jsonStr = JSON.stringify(payload, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -89,7 +100,8 @@ export class StorageEngine {
    * Import file .mlab dengan validasi penuh.
    * - JSON tidak valid → error INVALID_JSON
    * - struktur/schema salah → error terstruktur { code, message, path }
-   * - wrapper { project, deviceConfigs } → CLI state ikut di-restore
+   * - wrapper { schemaVersion, project, deviceConfigs } → CLI state ikut di-restore
+   * - Migrasi: file lama (tanpa schemaVersion / raw LabProject) tetap terbaca.
    */
   public static parseProjectFile(file: File): Promise<ImportResult> {
     return new Promise((resolve) => {
@@ -102,7 +114,20 @@ export class StorageEngine {
           resolve({ success: false, error: { code: 'INVALID_JSON', message: 'File bukan JSON yang valid', path: '$' } });
           return;
         }
-        const { project, deviceConfigs } = unwrapProjectFile(parsed);
+        const { project, deviceConfigs, schemaVersion } = unwrapProjectFile(parsed);
+        // Versi schema envelope: tolak versi yang lebih baru dari yang didukung
+        // (migrasi v1→v2 dilakukan di sini bila dikenalkan nanti).
+        if (typeof schemaVersion === 'number' && schemaVersion > MLAB_SCHEMA) {
+          resolve({
+            success: false,
+            error: {
+              code: 'UNSUPPORTED_SCHEMA_VERSION',
+              message: `File .mlab dibuat dengan schema v${schemaVersion}, aplikasi ini mendukung hingga v${MLAB_SCHEMA}.`,
+              path: 'schemaVersion',
+            },
+          });
+          return;
+        }
         const res = validateProject(project);
         if ('error' in res) {
           resolve({ success: false, error: res.error });

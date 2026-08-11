@@ -20,6 +20,7 @@ import type { AclRule, NatRule } from './src/engine/net/core/types';
 import { runLab, findScenarios, formatLabResult } from './src/engine/lab';
 import { LAB_SCENARIOS } from './src/engine/lab/scenarios';
 import { buildNodeExports, validateConfigExport, portLinksOfNode } from './src/utils/configExport';
+import { runVendorInteropTests } from './tests/unit/vendorInterop.test';
 
 let passed = 0;
 let failed = 0;
@@ -2651,6 +2652,13 @@ console.log('\n== 21. Export config & link status ==');
     check('21d r3 (kosong) tetap ada file', !!eR3 && eR3.lineCount > 0, JSON.stringify(eR3?.content.slice(0, 120)));
   }
 }
+
+// ── 22. Interop & validasi vendor (registry konsistensi, round-trip,
+//     lintas-vendor statis/DHCP, fitur tak didukung gagal jujur) ──
+const vrep = runVendorInteropTests();
+passed += vrep.passed;
+failed += vrep.failed;
+fails.push(...vrep.fails);
 
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

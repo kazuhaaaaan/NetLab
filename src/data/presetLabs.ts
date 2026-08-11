@@ -7,7 +7,7 @@
 import { LabProject, LabNode, VendorType } from '../types';
 import { getPortsForModel } from './deviceModels';
 
-function mkNode(
+export function mkNode(
   id: string,
   name: string,
   vendor: VendorType,

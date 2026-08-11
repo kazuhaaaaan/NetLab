@@ -159,3 +159,73 @@ export function ipv4Broadcast(ip: string, prefix: number): string | null {
   const broadcast = (acc | ~mask) >>> 0;
   return [24, 16, 8, 0].map((s, i) => ((broadcast >>> s) & 255).toString()).join('.');
 }
+
+/** Apakah `ip/prefix` adalah alamat network atau broadcast dari subnet-nya
+ *  (tidak sah dipakai sebagai host — /31 dan /32 dikecualikan: p2p/host route). */
+export function isReservedAddress(ip: string, prefix: number): boolean {
+  if (!IPV4_RE.test(ip)) return false;
+  if (prefix >= 31) return false;
+  const net = ipv4Network(ip, prefix);
+  const bcast = ipv4Broadcast(ip, prefix);
+  return ip === net || ip === bcast;
+}
+
+/** Cek apakah alamat host `ip/prefix` sah sebagai host (bukan network/broadcast). */
+export function validateHostIp(ip: string, prefix: number): string | null {
+  if (!IPV4_RE.test(ip)) return `Alamat IPv4 tidak valid — contoh: 192.168.1.1`;
+  if (isReservedAddress(ip, prefix)) {
+    return prefix <= 30
+      ? `Alamat ${ip} adalah alamat network/broadcast dari /${prefix} — tidak bisa dipakai host.`
+      : `Alamat ${ip}/${prefix} tidak punya ruang host.`;
+  }
+  return null;
+}
+
+/** Gateway harus berada di subnet yang sama dengan IP interface (CIDR). */
+export function validateGatewayInSubnet(gateway: string, hostCidr: string): string | null {
+  const g = gateway.trim();
+  if (!g) return null;
+  if (!IPV4_RE.test(g)) return null;
+  const parts = hostCidr.trim().split('/');
+  if (parts.length !== 2) return null;
+  const prefix = parseInt(parts[1], 10);
+  if (isNaN(prefix) || prefix < 0 || prefix > 32) return null;
+  const gwNet = ipv4Network(g, prefix);
+  const hostNet = ipv4Network(parts[0], prefix);
+  if (gwNet === null || hostNet === null || gwNet !== hostNet) {
+    return `Gateway ${g} berada di luar subnet ${hostCidr} — gateway harus satu subnet dengan IP interface.`;
+  }
+  return null;
+}
+
+/** Deteksi tumpang-tindih subnet antara `cidr` dan daftar subnet lain (CIDR).
+ *  Mengembalikan pesan error bila salah satu subnet memuat alamat subnet lain. */
+export function findSubnetOverlap(cidr: string, existing: string[]): string | null {
+  const c = cidr.trim();
+  const parse = (v: string): { ip: string; prefix: number } | null => {
+    const p = v.split('/');
+    if (p.length !== 2) return null;
+    const prefix = parseInt(p[1], 10);
+    if (isNaN(prefix) || prefix < 0 || prefix > 32 || !IPV4_RE.test(p[0])) return null;
+    return { ip: p[0], prefix };
+  };
+  const a = parse(c);
+  if (!a) return null;
+  for (const other of existing) {
+    const o = parse(other);
+    if (!o) continue;
+    const aNet = ipv4Network(a.ip, a.prefix);
+    const oNet = ipv4Network(o.ip, o.prefix);
+    if (aNet === null || oNet === null) continue;
+    // Subnet sama persis, atau salah satu memuat yang lain.
+    if (aNet === oNet && a.prefix === o.prefix) return `Subnet ${c} duplikat dengan ${other}.`;
+    const narrower = a.prefix > o.prefix ? a : o; // prefix besar = subnet lebih kecil
+    const wider = narrower === a ? o : a;
+    const widerNet = ipv4Network(wider.ip, wider.prefix);
+    // Subnet kecil ada DI DALAM subnet besar bila alamat network-nya, setelah
+    // dimask dengan prefix subnet besar, jatuh pada network subnet besar itu.
+    const maskedNarrower = ipv4Network(narrower.ip, wider.prefix);
+    if (widerNet !== null && maskedNarrower === widerNet) return `Subnet ${c} tumpang tindih dengan ${other}.`;
+  }
+  return null;
+}

@@ -63,6 +63,9 @@ export class RoutingProtocolEngine {
 
     const isSwitchNode = (id: string) => devices.find((d) => d.id === id)?.isSwitch ?? false;
     for (const link of links.all) {
+      // Link yang sengaja dimatikan (failure injection) TIDAK menyatukan segmen:
+      // switch-switch yang hanya terhubung lewat link down berada di segmen berbeda.
+      if (link.down) continue;
       if (isSwitchNode(link.a.nodeId) && isSwitchNode(link.b.nodeId)) {
         union(link.a.nodeId, link.b.nodeId);
       }
@@ -71,6 +74,8 @@ export class RoutingProtocolEngine {
     const keyOfPort = (devId: string, portName: string): string => {
       const link = links.linkOn(devId, portName);
       if (!link) return `unplugged:${devId}:${portName}`;
+      // Link down (failure injection) = tidak ada adjacency lintas link ini.
+      if (link.down) return `unplugged:${devId}:${portName}`;
       const aSw = isSwitchNode(link.a.nodeId);
       const bSw = isSwitchNode(link.b.nodeId);
       if (aSw || bSw) return `cloud:${find(aSw ? link.a.nodeId : link.b.nodeId)}`;
@@ -91,6 +96,7 @@ export class RoutingProtocolEngine {
 
   private ipOnSegment(dev: NetworkDevice, key: string, segments: Map<string, string>, links: LinkTable): string | null {
     for (const link of links.linksOf(dev.id)) {
+      if (link.down) continue;
       const myPort = link.a.nodeId === dev.id ? link.a.port : link.b.port;
       const segKey = segments.get(`${dev.id}:${myPort}`);
       if (segKey !== key) continue;
@@ -367,6 +373,7 @@ export class RoutingProtocolEngine {
     while (queue.length > 0) {
       const id = queue.shift()!;
       for (const link of links.linksOf(id)) {
+        if (link.down) continue;
         const nb = link.a.nodeId === id ? link.b.nodeId : link.a.nodeId;
         if (visited.has(nb)) continue;
         visited.add(nb);

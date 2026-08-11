@@ -32,17 +32,44 @@ const KNOWN_VENDORS = [
 
 export const SCHEMA_VERSION = '1.0';
 
+/** Versi engine sim (state versioning .mlab). */
+export const ENGINE_VERSION = '1.0.0';
+
 /** true bila `obj` berupa string non-kosong. */
 function isStr(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0;
 }
 
 /** Ambil proyek dari file .mlab (raw LabProject ATAU wrapper { project, deviceConfigs }). */
-export function unwrapProjectFile(parsed: any): { project: any; deviceConfigs?: Record<string, any> } {
-  if (parsed && parsed.project && (parsed.nodes || parsed.project.nodes)) {
-    return { project: parsed.project, deviceConfigs: parsed.deviceConfigs };
+export function unwrapProjectFile(parsed: any): { project: any; deviceConfigs?: Record<string, any>; schemaVersion?: number } {
+  // Envelope baru: { schemaVersion, project, deviceConfigs } — ditulis exportProjectAsFile.
+  if (parsed && parsed.project && typeof parsed.project === 'object') {
+    const schemaVersion =
+      typeof parsed.schemaVersion === 'number'
+        ? parsed.schemaVersion
+        : typeof parsed.version === 'string' && parsed.version !== ''
+          ? 1
+          : undefined;
+    return { project: parsed.project, deviceConfigs: parsed.deviceConfigs, schemaVersion };
   }
-  return { project: parsed };
+  // Envelope alternatif { devices, links, configuration } → migrasi ke nodes/edges.
+  if (parsed && Array.isArray(parsed.devices) && Array.isArray(parsed.links)) {
+    const migrated = {
+      ...parsed,
+      nodes: parsed.devices,
+      edges: parsed.links,
+      version: SCHEMA_VERSION,
+    };
+    delete migrated.devices;
+    delete migrated.links;
+    delete migrated.configuration;
+    return {
+      project: migrated,
+      deviceConfigs: parsed.configuration,
+      schemaVersion: typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 1,
+    };
+  }
+  return { project: parsed, schemaVersion: undefined };
 }
 
 export function validateProject(input: any): ValidationResult {
@@ -63,7 +90,6 @@ export function validateProject(input: any): ValidationResult {
       'version'
     );
   }
-
   if (!Array.isArray(input.nodes)) {
     return fail('MISSING_NODES', 'Project tidak memiliki array "nodes"', 'nodes');
   }

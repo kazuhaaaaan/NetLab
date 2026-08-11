@@ -6,6 +6,8 @@ import {
   validateIpv4,
   validateIpv4Cidr,
   validateVlanId,
+  validateGatewayInSubnet,
+  findSubnetOverlap,
   type ValidationResult,
 } from '../utils/validation';
 
@@ -150,6 +152,13 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
     setErrors((prev) => ({ ...prev, [key]: validator(value) }));
   };
 
+  // Cross-field: gateway harus satu subnet dengan IP WAN, dan LAN tidak boleh
+  // tumpang tindih dengan subnet WAN (validasi jaringan, bukan hanya format).
+  const gatewayErr =
+    wanIp && wanGateway ? validateGatewayInSubnet(wanGateway, wanIp) : null;
+  const overlapErr =
+    wanIp && lanSubnet ? findSubnetOverlap(wanIp, [lanSubnet]) : null;
+
   const params: ConfigGeneratorParams = {
     vendor,
     hostname: hostname.trim() || 'Router-Utama',
@@ -177,6 +186,8 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
     errors.lanSubnet ||
     errors.lanGatewayIp ||
     errors.dhcpPoolRange ||
+    gatewayErr ||
+    overlapErr ||
     vlans.some((v) => errors.vlanErrors[v.id]);
 
   const copyCode = async () => {
@@ -311,7 +322,7 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
                 setWanGateway(v);
                 updateField('wanGateway', v, validateIpv4);
               }}
-              error={errors.wanGateway}
+              error={errors.wanGateway ?? gatewayErr}
               mono
             />
 
@@ -323,7 +334,7 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
                   setLanSubnet(v);
                   updateField('lanSubnet', v, validateIpv4Cidr);
                 }}
-                error={errors.lanSubnet}
+                error={errors.lanSubnet ?? overlapErr}
                 mono
               />
               <FieldInput

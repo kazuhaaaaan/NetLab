@@ -33,11 +33,13 @@ import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
 import { ConfigExportModal } from './components/ConfigExportModal';
+import { VendorCapabilitiesModal } from './components/VendorCapabilitiesModal';
 import { portLinksOfNode } from './utils/configExport';
 
 const vendorDispatcher = new VendorDispatcher();
 
 import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE } from './data/templates';
+import { getTutorialLab } from './data/tutorialLabs';
 import { CABLE_TYPE_LABEL, inferCableType } from './connection';
 
 /** Opsi kabel untuk dropdown penghapusan di toolbar — label identik berbasis port. */
@@ -119,7 +121,7 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  const goToCanvas = useCallback(() => {
+  const goToCanvas = useCallback((labId?: string) => {
     try {
       localStorage.setItem('netlab_view', 'canvas');
     } catch {
@@ -127,6 +129,13 @@ export default function App() {
     }
     if (window.location.pathname.replace(/\/+$/, '') !== '/canvas') {
       window.history.pushState(null, '', '/canvas');
+    }
+    // "Try It Yourself" dari section Tutorial landing: muat starter lab.
+    if (labId) {
+      const lab = getTutorialLab(labId);
+      if (lab) {
+        setProjectWithHistory(lab.build());
+      }
     }
     setView('canvas');
     // Popup donasi sebelum konfigurasi: tampil tiap masuk canvas, kecuali
@@ -138,6 +147,7 @@ export default function App() {
     } catch {
       setIsDonateOpen(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const goToHome = useCallback(() => {
@@ -262,6 +272,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => loadUiState()?.isSidebarOpen ?? true);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [isGradingOpen, setIsGradingOpen] = useState(false);
+  const [isVendorCapsOpen, setIsVendorCapsOpen] = useState(false);
   const [isDonateOpen, setIsDonateOpen] = useState(false);
   const [isMonorepoOpen, setIsMonorepoOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
@@ -1360,6 +1371,7 @@ export default function App() {
           onOpenMonorepo={() => setIsMonorepoOpen(true)}
           onOpenTutorial={() => setIsTutorialOpen(true)}
           onOpenGrading={() => setIsGradingOpen(true)}
+          onOpenVendorCaps={() => setIsVendorCapsOpen(true)}
           onOpenAiChat={() => setIsAiChatOpen(true)}
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -1655,6 +1667,9 @@ onOpenTerminal={handleOpenTerminal}
 
       {/* Mobile desktop-optimization warning */}
       <MobileWarning />
+
+      {/* Vendor capability matrix (Supported / Partial / Parser-only / Not Supported) */}
+      <VendorCapabilitiesModal isOpen={isVendorCapsOpen} onClose={() => setIsVendorCapsOpen(false)} />
 
       {/* Mobile bottom sheets */}
       {isMobile && (

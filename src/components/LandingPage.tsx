@@ -4,6 +4,7 @@ import { Hero } from './landing/Hero';
 import { Features } from './landing/Features';
 import { Vendors } from './landing/Vendors';
 import { Workflow } from './landing/Workflow';
+import { Tutorials } from './landing/Tutorials';
 import { LabsPreview } from './landing/LabsPreview';
 import { CliPreview } from './landing/CliPreview';
 import { OpenSource } from './landing/OpenSource';
@@ -11,7 +12,7 @@ import { FinalCta } from './landing/FinalCta';
 import { Footer } from './landing/Footer';
 
 interface LandingPageProps {
-  onLaunch: () => void;
+  onLaunch: (labId?: string) => void;
   onOpenDonate: () => void;
 }
 
@@ -21,9 +22,9 @@ interface LandingPageProps {
  * renders the components under ./landing and never imports engine code.
  */
 export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate }) => {
-  const launch = () => {
+  const launch = (labId?: string) => {
     window.scrollTo({ top: 0 });
-    onLaunch();
+    onLaunch(labId);
   };
 
   return (
@@ -34,6 +35,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
         <Features />
         <Vendors />
         <Workflow />
+        <Tutorials onLaunch={launch} />
         <LabsPreview onLaunch={launch} />
         <CliPreview />
         <OpenSource />

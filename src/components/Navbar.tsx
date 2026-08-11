@@ -21,7 +21,8 @@ import {
   Menu,
   X,
   ChevronDown,
-  Bot
+  Bot,
+  Table2
 } from 'lucide-react';
 import { LabProject } from '../types';
 
@@ -33,6 +34,7 @@ interface NavbarProps {
   onOpenMonorepo: () => void;
   onOpenTutorial: () => void;
   onOpenGrading: () => void;
+  onOpenVendorCaps: () => void;
   onOpenAiChat: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
@@ -99,6 +101,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenMonorepo,
   onOpenTutorial,
   onOpenGrading,
+  onOpenVendorCaps,
   onOpenAiChat,
   theme,
   onToggleTheme,
@@ -243,6 +246,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <div className="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-widest text-slate-600">Learning</div>
                   <MobileItem icon={<Bot className="w-4 h-4 text-violet-400" />} label="AI Mentor" onClick={() => { onOpenAiChat(); closeMobile(); }} />
                   <MobileItem icon={<ClipboardCheck className="w-4 h-4 text-violet-400" />} label="Auto-Grading" onClick={() => { onOpenGrading(); closeMobile(); }} />
+                  <MobileItem icon={<Table2 className="w-4 h-4 text-emerald-400" />} label="Kemampuan Vendor" sub="Matriks dukungan fitur per vendor" onClick={() => { onOpenVendorCaps(); closeMobile(); }} />
                   <MobileItem icon={<PackageCheck className="w-4 h-4 text-blue-400" />} label="Monorepo Docs" onClick={() => { onOpenMonorepo(); closeMobile(); }} />
                 </div>
 
@@ -449,6 +453,16 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <PackageCheck className="w-3.5 h-3.5 text-blue-400" />
           <span className="hidden xl:inline">Monorepo Docs</span>
+        </button>
+
+        {/* Vendor Capabilities Matrix */}
+        <button
+          onClick={onOpenVendorCaps}
+          title="Kemampuan Vendor — matriks dukungan fitur (Supported/Partial/Parser-only/Not Supported)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-emerald-950 hover:bg-emerald-900 text-emerald-200 border border-emerald-800 transition"
+        >
+          <Table2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden xl:inline">Vendor Caps</span>
         </button>
 
         {/* Download Foundation ZIP */}

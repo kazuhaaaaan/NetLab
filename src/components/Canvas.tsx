@@ -268,6 +268,12 @@ export const Canvas: React.FC<CanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const handleGestureRef = useRef<(gesture: GestureDetail) => void>(() => {});
+  /** Mirror viewport untuk gesture math — ter-update sinkron agar PAN/PINCH
+   *  berantai lancar tanpa menunggu re-render antar event pointer. */
+  const viewportRef = useRef(viewport);
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [selectionRect, setSelectionRect] = useState<{
@@ -423,27 +429,36 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
     if (gesture.type === "PAN" && gesture.panDelta) {
-      onViewportChange({
-        ...viewport,
-        x: viewport.x + gesture.panDelta.x,
-        y: viewport.y + gesture.panDelta.y,
-      });
+      viewportRef.current = {
+        ...viewportRef.current,
+        x: viewportRef.current.x + gesture.panDelta.x,
+        y: viewportRef.current.y + gesture.panDelta.y,
+      };
+      onViewportChange(viewportRef.current);
     } else if (gesture.type === "PINCH" && gesture.scaleDelta) {
+      // Zoom mengikuti TITIK cubitan (tengah dua jari) — dunia di bawah jari
+      // tetap diam, bukan melompat ke sudut kiri-atas (transformOrigin 0,0).
+      const prev = viewportRef.current;
+      const focal = gesture.point;
       const newZoom = Math.min(
-        Math.max(viewport.zoom * gesture.scaleDelta, 0.25),
+        Math.max(prev.zoom * gesture.scaleDelta, 0.25),
         3.0,
       );
-      onViewportChange({
-        ...viewport,
+      const worldX = (focal.x - prev.x) / prev.zoom;
+      const worldY = (focal.y - prev.y) / prev.zoom;
+      viewportRef.current = {
+        x: focal.x - worldX * newZoom,
+        y: focal.y - worldY * newZoom,
         zoom: newZoom,
-      });
+      };
+      onViewportChange(viewportRef.current);
     } else if (
       gesture.type === "NODE_DRAG" &&
       gesture.dragDelta &&
       gesture.nodeId
     ) {
-      const dx = gesture.dragDelta.x / viewport.zoom;
-      const dy = gesture.dragDelta.y / viewport.zoom;
+      const dx = gesture.dragDelta.x / viewportRef.current.zoom;
+      const dy = gesture.dragDelta.y / viewportRef.current.zoom;
 
       const targetNode = nodes.find((n) => n.id === gesture.nodeId);
       const selectedNodes = nodes.filter(
@@ -543,8 +558,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           setCableDrag({
             x1: from.x,
             y1: from.y,
-            x2: (gesture.point.x - viewport.x) / viewport.zoom,
-            y2: (gesture.point.y - viewport.y) / viewport.zoom,
+            x2: (gesture.point.x - viewportRef.current.x) / viewportRef.current.zoom,
+            y2: (gesture.point.y - viewportRef.current.y) / viewportRef.current.zoom,
           });
         }
       }
