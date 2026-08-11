@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Hand, Cable, Plus, Terminal, Expand, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { Hand, Cable, Plus, Terminal, Trash2, Expand, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { ActiveTool } from '../types';
 
 interface DesktopToolbarProps {
@@ -10,6 +10,9 @@ interface DesktopToolbarProps {
   onZoomOut: () => void;
   onResetView: () => void;
   onToggleTerminal: () => void;
+  /** Semua kabel terpasang (label: port sumber ↔ port tujuan) untuk penghapusan via dropdown. */
+  cables: { id: string; label: string }[];
+  onDeleteCable: (id: string) => void;
 }
 
 interface ToolButtonProps {
@@ -50,8 +53,11 @@ export const DesktopToolbar: React.FC<DesktopToolbarProps> = ({
   onZoomOut,
   onResetView,
   onToggleTerminal,
+  cables,
+  onDeleteCable,
 }) => {
   const [viewOpen, setViewOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
@@ -76,9 +82,56 @@ export const DesktopToolbar: React.FC<DesktopToolbarProps> = ({
         />
         <div className="relative flex items-center">
           <ToolButton
+            label="Hapus"
+            icon={<Trash2 className="w-4 h-4" />}
+            onClick={() => {
+              setViewOpen(false);
+              setDeleteOpen((v) => !v);
+            }}
+          />
+          {deleteOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setDeleteOpen(false)} />
+              <div
+                className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-20 w-80 max-w-[88vw] rounded-2xl bg-[#141519] border border-[#2B2D31] shadow-2xl p-2 animate-in fade-in slide-in-from-bottom-2 duration-150"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-0.5 pb-1.5 text-[10px] font-semibold text-slate-300 flex items-center justify-between">
+                  <span>Hapus Kabel</span>
+                  <span className="text-[9px] font-mono text-slate-500">{cables.length} kabel</span>
+                </div>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      onDeleteCable(e.target.value);
+                      setDeleteOpen(false);
+                    }
+                  }}
+                  className="w-full bg-[#1A1D24] border border-[#2B2D31] rounded-md text-[11px] font-mono px-2 py-2 text-slate-200 outline-none focus:border-rose-500/60"
+                  title="Pilih kabel yang ingin dihapus"
+                >
+                  <option value="">— pilih kabel (port) —</option>
+                  <option value="" disabled hidden>{cables.length === 0 ? 'tidak ada kabel terpasang' : ''}</option>
+                  {cables.map((c) => (
+                    <option key={c.id} value={c.id}>{c.label}</option>
+                  ))}
+                </select>
+                <div className="px-0.5 pt-1.5 text-[9px] font-mono text-slate-600">
+                  Konfigurasi port tidak dihapus — status port menjadi "No cable connected".
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="relative flex items-center">
+          <ToolButton
             label="View"
             icon={<Expand className="w-4 h-4" />}
-            onClick={() => setViewOpen((v) => !v)}
+            onClick={() => {
+              setDeleteOpen(false);
+              setViewOpen((v) => !v);
+            }}
           />
           {viewOpen && (
             <>
@@ -115,6 +168,7 @@ export const DesktopToolbar: React.FC<DesktopToolbarProps> = ({
           accent="emerald"
           onClick={() => {
             setViewOpen(false);
+            setDeleteOpen(false);
             onToggleTerminal();
           }}
         />

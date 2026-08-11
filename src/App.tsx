@@ -40,6 +40,18 @@ const vendorDispatcher = new VendorDispatcher();
 import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE } from './data/templates';
 import { CABLE_TYPE_LABEL, inferCableType } from './connection';
 
+/** Opsi kabel untuk dropdown penghapusan di toolbar — label identik berbasis port. */
+function buildCableOptions(edges: LabEdge[], nodes: LabNode[]): { id: string; label: string }[] {
+  return edges.map((e) => {
+    const sN = nodes.find((n) => n.id === e.sourceNodeId);
+    const tN = nodes.find((n) => n.id === e.targetNodeId);
+    return {
+      id: e.id,
+      label: `${sN?.name ?? '?'}:${e.sourcePortId} ↔ ${tN?.name ?? '?'}:${e.targetPortId}`,
+    };
+  });
+}
+
 // UI state (theme, sidebar, tools) — dipersist agar reload tidak mengulang pengaturan
 const UI_STATE_KEY = 'netlab_ui_state';
 
@@ -1515,6 +1527,8 @@ onOpenTerminal={handleOpenTerminal}
               activeTool={activeTool}
               onSelectTool={setActiveTool}
               onOpenAddDevice={() => setMobileSheet('add')}
+              cables={buildCableOptions(project.edges, project.nodes)}
+              onDeleteCable={handleDeleteEdge}
               onZoomIn={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.min(prev.viewport.zoom + 0.15, 3.0) } }))}
               onZoomOut={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.max(prev.viewport.zoom - 0.15, 0.25) } }))}
               onResetView={() => setProject((prev) => ({ ...prev, viewport: { x: 0, y: 0, zoom: 1.0 } }))}
@@ -1528,6 +1542,8 @@ onOpenTerminal={handleOpenTerminal}
               activeTool={activeTool}
               onSelectTool={setActiveTool}
               onOpenAddDevice={() => setIsSidebarOpen(true)}
+              cables={buildCableOptions(project.edges, project.nodes)}
+              onDeleteCable={handleDeleteEdge}
               onZoomIn={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.min(prev.viewport.zoom + 0.15, 3.0) } }))}
               onZoomOut={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.max(prev.viewport.zoom - 0.15, 0.25) } }))}
               onResetView={() => setProject((prev) => ({ ...prev, viewport: { x: 0, y: 0, zoom: 1.0 } }))}
