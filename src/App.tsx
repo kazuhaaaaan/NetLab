@@ -88,15 +88,51 @@ export default function App() {
     setShowSplash(false);
   }, []);
 
-  // Landing page vs Canvas simulator view — persist agar reload tidak kembali ke homepage
-  const [view, setView] = useState<'landing' | 'canvas'>(() =>
-    typeof localStorage !== 'undefined' && localStorage.getItem('netlab_view') === 'canvas'
-      ? 'canvas'
-      : 'landing'
-  );
+  // ── Public routes: /home → landing page, /canvas → simulator ──────
+  // The simulator itself is untouched; only the view↔URL mapping below
+  // decides which UI the app renders. "/" stays landing for new visitors,
+  // but keeps loading the simulator for sessions that already chose canvas.
+  function routeFromPathname(): 'landing' | 'canvas' {
+    const path = window.location.pathname.replace(/\/+$/, '');
+    if (path === '/canvas') return 'canvas';
+    if (path === '/') {
+      try {
+        return localStorage.getItem('netlab_view') === 'canvas' ? 'canvas' : 'landing';
+      } catch {
+        return 'landing';
+      }
+    }
+    return 'landing';
+  }
+
+  // Landing page vs Canvas simulator view — URL-driven, dengan fallback
+  // localStorage agar reload tetap berada di view yang sama.
+  const [view, setView] = useState<'landing' | 'canvas'>(routeFromPathname);
+
+  // Keep document title in sync with the public route (/home vs /canvas).
+  useEffect(() => {
+    document.title =
+      view === 'canvas'
+        ? 'NetLab | Networking Lab Simulator'
+        : 'NetLab — Multi-Vendor Network Simulator';
+  }, [view]);
+
+  // Back/forward navigation across /home ↔ /canvas
+  useEffect(() => {
+    const onPopState = () => setView(routeFromPathname());
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   const goToCanvas = useCallback(() => {
-    localStorage.setItem('netlab_view', 'canvas');
+    try {
+      localStorage.setItem('netlab_view', 'canvas');
+    } catch {
+      /* storage tidak tersedia — abaikan */
+    }
+    if (window.location.pathname.replace(/\/+$/, '') !== '/canvas') {
+      window.history.pushState(null, '', '/canvas');
+    }
     setView('canvas');
     // Popup donasi sebelum konfigurasi: tampil tiap masuk canvas, kecuali
     // user mencentang "jangan tampilkan lagi" untuk sesi ini (sessionStorage).
@@ -110,7 +146,15 @@ export default function App() {
   }, []);
 
   const goToHome = useCallback(() => {
-    localStorage.setItem('netlab_view', 'landing');
+    try {
+      localStorage.setItem('netlab_view', 'landing');
+    } catch {
+      /* storage tidak tersedia — abaikan */
+    }
+    const path = window.location.pathname.replace(/\/+$/, '');
+    if (path !== '/home' && path !== '/') {
+      window.history.pushState(null, '', '/home');
+    }
     setView('landing');
   }, []);
 
