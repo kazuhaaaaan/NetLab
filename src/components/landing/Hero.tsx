@@ -23,8 +23,8 @@ export function Hero({ onLaunch }: HeroProps) {
       />
 
       <div className="relative mx-auto max-w-6xl px-5 sm:px-8 pt-32 lg:pt-40">
-        <div className="grid lg:grid-cols-[1.02fr_1fr] items-center gap-10 lg:gap-14">
-          <div>
+        <div className="grid w-full min-w-0 grid-cols-1 lg:grid-cols-[minmax(0,1.02fr)_minmax(0,1fr)] items-center gap-10 lg:gap-14">
+          <div className="w-full min-w-0">
             <Reveal>
               <span className="inline-flex items-center gap-2 rounded-full border border-[#1F2128] bg-[#0F1015] px-3.5 py-1.5 text-[12px] font-medium text-slate-300">
                 <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
@@ -36,13 +36,13 @@ export function Hero({ onLaunch }: HeroProps) {
             </Reveal>
 
             <Reveal delay={80}>
-              <h1 className="mt-6 text-4xl sm:text-5xl lg:text-[54px] font-extrabold tracking-[-0.04em] leading-[1.06] text-slate-50">
+              <h1 className="mt-6 max-w-full break-words text-4xl sm:text-5xl lg:text-[54px] font-extrabold tracking-[-0.04em] leading-[1.06] text-slate-50">
                 Your network lab, inside the browser.
               </h1>
             </Reveal>
 
             <Reveal delay={160}>
-              <p className="mt-5 max-w-xl text-[15px] sm:text-base text-slate-400 leading-relaxed">
+              <p className="mt-5 w-full max-w-xl min-w-0 break-words text-[15px] sm:text-base text-slate-400 leading-relaxed">
                 Design network topologies, configure multi-vendor devices through real
                 vendor CLI, and trace packets hop by hop — no GNS3, no EVE-NG, no
                 physical hardware.
@@ -69,13 +69,13 @@ export function Hero({ onLaunch }: HeroProps) {
             </Reveal>
 
             <Reveal delay={320}>
-              <p className="mt-5 text-[11px] font-mono text-slate-600">
+              <p className="mt-5 max-w-full break-words whitespace-normal text-[11px] font-mono text-slate-600">
                 kazuhaaaaan/NetLab · Apache-2.0 · topology, configs &amp; CLI sessions auto-save
               </p>
             </Reveal>
           </div>
 
-          <Reveal delay={200} className="lg:justify-self-end w-full max-w-[560px]">
+          <Reveal delay={200} className="lg:justify-self-end w-full min-w-0 max-w-[560px]">
             <ProductPreview />
           </Reveal>
         </div>

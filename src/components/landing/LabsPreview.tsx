@@ -33,7 +33,7 @@ export function LabsPreview({ onLaunch }: LabsPreviewProps) {
           </div>
         </Reveal>
 
-        <div className="mt-10 grid sm:grid-cols-2 gap-4">
+        <div className="mt-10 grid w-full min-w-0 grid-cols-1 sm:grid-cols-2 gap-4">
           {PRESET_LABS.map((lab, i) => (
             <Reveal key={lab.id} delay={(i % 2) * 80}>
               <div className="h-full rounded-xl border border-[#1F2128] bg-[#0F1015] p-6 transition-all duration-200 hover:border-slate-600/60">

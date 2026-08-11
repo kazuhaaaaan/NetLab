@@ -62,7 +62,7 @@ export function ProductPreview() {
   const nodeById = (id: string) => NODES.find((n) => n.id === id)!;
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-[#1F2128] bg-[#0F1015]">
+    <div className="relative w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-[#1F2128] bg-[#0F1015]">
       {/* window chrome */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[#1F2128]">
         <span className="w-2.5 h-2.5 rounded-full bg-[#3d3f45]" aria-hidden="true" />
@@ -77,7 +77,7 @@ export function ProductPreview() {
         </span>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-[1fr_200px]">
+      <div className="grid w-full min-w-0 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_200px]">
         {/* topology (static SVG) */}
         <div className="relative min-h-[300px] overflow-hidden">
           <div
@@ -89,7 +89,7 @@ export function ProductPreview() {
               backgroundSize: '28px 28px',
             }}
           />
-          <svg viewBox="0 0 520 310" className="relative w-full h-full" preserveAspectRatio="xMidYMid meet" aria-label="Decorative network topology preview" role="img">
+          <svg viewBox="0 0 520 310" className="relative block w-full h-full max-w-full" preserveAspectRatio="xMidYMid meet" aria-label="Decorative network topology preview" role="img">
             {EDGES.map((e, i) => {
               const a = nodeById(e.from);
               const b = nodeById(e.to);

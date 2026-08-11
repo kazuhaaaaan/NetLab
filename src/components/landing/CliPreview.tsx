@@ -55,7 +55,7 @@ export function CliPreview() {
           />
         </Reveal>
 
-        <div className="mt-12 grid lg:grid-cols-3 gap-4">
+        <div className="mt-12 grid w-full min-w-0 grid-cols-1 lg:grid-cols-3 gap-4">
           {BLOCKS.map((block, i) => (
             <Reveal key={block.vendor} delay={i * 90}>
               <div className="h-full overflow-hidden rounded-xl border border-[#1F2128] bg-[#0B0C0E]">

@@ -13,7 +13,7 @@ export function OpenSource() {
   return (
     <section id="opensource" className="relative scroll-mt-20 py-20 sm:py-28 border-t border-[#14161c]">
       <div className="mx-auto max-w-6xl px-5 sm:px-8">
-        <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-start">
+        <div className="grid w-full min-w-0 grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-start">
           <Reveal>
             <SectionHeading
               eyebrow="open source"

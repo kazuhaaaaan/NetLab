@@ -16,7 +16,7 @@ export function Vendors() {
         </Reveal>
 
         <Reveal delay={120}>
-          <ul className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-px overflow-hidden rounded-xl border border-[#1F2128] bg-[#1F2128]">
+          <ul className="mt-12 grid w-full min-w-0 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px overflow-hidden rounded-xl border border-[#1F2128] bg-[#1F2128]">
             {vendors.map((v) => (
               <li key={v.id} className="bg-[#0F1015] p-5 transition-colors duration-200 hover:bg-[#12141a]">
                 <div className="flex items-center gap-2.5">

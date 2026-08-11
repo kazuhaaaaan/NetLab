@@ -27,7 +27,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunch, onOpenDonate
   };
 
   return (
-    <div className="landing-page relative min-h-screen w-full overflow-x-hidden bg-[#0B0C0E] text-slate-100 font-sans scroll-smooth">
+    <div className="landing-page relative min-h-screen w-full max-w-full overflow-x-clip bg-[#0B0C0E] text-slate-100 font-sans scroll-smooth">
       <Navbar onLaunch={launch} onOpenDonate={onOpenDonate} />
       <main>
         <Hero onLaunch={launch} />

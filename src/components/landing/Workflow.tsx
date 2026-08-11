@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { ArrowDown, ArrowRight } from 'lucide-react';
 import { Reveal, SectionHeading } from './shared';
 
@@ -36,26 +37,25 @@ export function Workflow() {
           />
         </Reveal>
 
-        <div className="mt-12 grid md:grid-cols-4 gap-8 md:gap-4">
+        <div className="mt-12 grid w-full min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-2 gap-y-10">
           {STEPS.map((s, i) => (
-            <Reveal key={s.num} delay={i * 90}>
-              <div className="relative h-full">
+            <Fragment key={s.num}>
+              <Reveal delay={i * 90} className="min-w-0">
                 <div className="font-mono text-[11px] tracking-[0.2em] text-sky-400/80">{s.num}</div>
                 <h3 className="mt-2 text-[16px] font-semibold tracking-tight text-slate-100">{s.title}</h3>
-                <p className="mt-2 text-[13px] text-slate-400 leading-relaxed">{s.desc}</p>
-
-                {i < STEPS.length - 1 && (
-                  <span className="hidden md:flex absolute -right-5 top-3 text-slate-600" aria-hidden="true">
-                    <ArrowRight className="w-4 h-4" />
-                  </span>
-                )}
+                <p className="mt-2 text-[13px] text-slate-400 leading-relaxed break-words">{s.desc}</p>
                 {i < STEPS.length - 1 && (
                   <span className="md:hidden flex justify-start mt-4 text-slate-600" aria-hidden="true">
                     <ArrowDown className="w-4 h-4" />
                   </span>
                 )}
-              </div>
-            </Reveal>
+              </Reveal>
+              {i < STEPS.length - 1 && (
+                <div aria-hidden="true" className="hidden md:flex self-center justify-center pt-6">
+                  <ArrowRight className="w-4 h-4 text-slate-600" />
+                </div>
+              )}
+            </Fragment>
           ))}
         </div>
       </div>

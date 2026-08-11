@@ -24,7 +24,7 @@ export function Footer({ onLaunch, onOpenDonate }: FooterProps) {
   return (
     <footer className="border-t border-[#14161c]">
       <div className="mx-auto max-w-6xl px-5 sm:px-8 py-12">
-        <div className="grid md:grid-cols-[1.5fr_1fr_1fr] gap-10">
+        <div className="grid w-full min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)] gap-10">
           <div>
             <div className="flex items-center gap-3">
               <LogoMark size={32} />
