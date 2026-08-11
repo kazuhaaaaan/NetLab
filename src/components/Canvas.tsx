@@ -18,6 +18,7 @@ import {
   Lock,
   Unlock,
 } from "lucide-react";
+import { cableMatchesPort, portSide, portSlot } from "../connection";
 
 const LockFilled = () => <Lock className="w-4 h-4" />;
 const LockOpen = () => <Unlock className="w-4 h-4" />;
@@ -33,6 +34,10 @@ export interface Port {
   type?: string;
   status: "up" | "down";
   ipAddress?: string;
+  /** Metadata geometri port (opsional) — posisi visual menjadi stabil meski
+   *  urutan array port berubah (audit arsitektur: anchor tidak lagi index-only). */
+  side?: "left" | "right";
+  slot?: number;
 }
 
 export interface LabNode {
@@ -85,8 +90,9 @@ function getPortAnchor(node: LabNode, portId: string): { x: number; y: number } 
       y: node.position.y + NODE_H / 2,
     };
   }
-  const side = idx % 2 === 0 ? "left" : "right";
-  const slot = Math.floor(idx / 2);
+  const port = node.ports[idx];
+  const side = portSide(port, idx);
+  const slot = portSlot(port, idx);
   return {
     x: node.position.x + (side === "left" ? 0 : NODE_W),
     y: node.position.y + PORT_TOP + slot * PORT_GAP,
@@ -603,15 +609,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (isTrunkEdge(edge)) return "8,6"; // trunk: dashed (markah VLAN)
     if (edge.cableType === "serial") return "2,4";
     return "none";
-  };
-
-  /** Kecocokan tipe kabel dengan tipe port: copper → port copper, fiber → port fiber, dst. */
-  const cableMatchesPort = (cableType: string | null, portType: string | undefined): boolean => {
-    if (!cableType) return false;
-    if (cableType === "fiber") return portType === "fiber";
-    if (cableType === "serial") return portType === "serial";
-    // kabel copper bisa ke port copper maupun radio (link wireless)
-    return portType === "copper" || portType === "radio";
   };
 
   const getNodeIcon = (deviceType: string) => {    switch (deviceType) {
@@ -1208,8 +1205,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Port dots - hanya terlihat saat mode kabel aktif atau sedang menyambung */}
               {node.ports.map((port, idx) => {
-                const side = idx % 2 === 0 ? "left" : "right";
-                const slot = Math.floor(idx / 2);
+                const side = portSide(port, idx);
+                const slot = portSlot(port, idx);
                 const isCableStart = cableStart?.nodeId === node.id && cableStart?.portId === port.id;
                 const isHover = cableHover?.nodeId === node.id && cableHover?.portId === port.id;
                 const portConn = getPortConnection(node.id, port.id);
@@ -1234,7 +1231,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                         isHover ? "ring-2 ring-cyan-300 scale-125" : ""
                       } ${isWizardPort ? "ring-2 ring-blue-400 scale-125" : ""} ${
                         nodeInCableFlow ? "hover:ring-2 hover:ring-cyan-300 hover:scale-125" : ""
-                      }`}
+                      } ${portConn && nodeInCableFlow ? "ring-2 ring-rose-500/70" : ""}`}
                     />
                   </div>
                 );

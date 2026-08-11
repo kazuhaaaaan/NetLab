@@ -33,6 +33,10 @@ export interface PortSpec {
   ipAddress?: string;
   macAddress: string;
   type?: 'copper' | 'fiber' | 'serial' | 'radio';
+  /** Metadata geometri port (opsional) — posisi visual stabil meski urutan
+   *  array port berubah (anchor tidak lagi index-only). */
+  side?: 'left' | 'right';
+  slot?: number;
 }
 
 export interface LabNode {

@@ -11,6 +11,7 @@ import { GradingModal } from './components/GradingModal';
 import { MonorepoExplorerModal } from './components/MonorepoExplorerModal';
 import { ContextMenu } from './components/ContextMenu';
 import { MobileToolbar } from './components/MobileToolbar';
+import { DesktopToolbar } from './components/DesktopToolbar';
 import { MobileHeader } from './components/mobile/MobileHeader';
 import { MobileAddDeviceSheet } from './components/mobile/MobileAddDeviceSheet';
 import { MobileDeviceActions } from './components/mobile/MobileDeviceActions';
@@ -37,29 +38,7 @@ import { portLinksOfNode } from './utils/configExport';
 const vendorDispatcher = new VendorDispatcher();
 
 import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE } from './data/templates';
-
-/** Infer the right cable type from port & device types (auto-detection). */
-function inferCableType(
-  srcDeviceType: string,
-  tgtDeviceType: string,
-  portType: string
-): LabEdge['cableType'] {
-  if (portType === 'fiber') return 'fiber';
-  if (portType === 'serial') return 'serial';
-  // copper: same device class → crossover, host ↔ network device → straight
-  const srcHost = srcDeviceType === 'pc' || srcDeviceType === 'server';
-  const tgtHost = tgtDeviceType === 'pc' || tgtDeviceType === 'server';
-  if (srcHost !== tgtHost) return 'copper_straight';
-  if (srcDeviceType === tgtDeviceType) return 'copper_cross';
-  return 'copper_straight';
-}
-
-const CABLE_TYPE_LABEL: Record<LabEdge['cableType'], string> = {
-  copper_straight: 'Copper Straight',
-  copper_cross: 'Copper Crossover',
-  fiber: 'Fiber Optic',
-  serial: 'Serial',
-};
+import { CABLE_TYPE_LABEL, inferCableType } from './connection';
 
 // UI state (theme, sidebar, tools) — dipersist agar reload tidak mengulang pengaturan
 const UI_STATE_KEY = 'netlab_ui_state';
@@ -847,7 +826,7 @@ export default function App() {
         return;
       }
 
-      const cableType = explicitCableType ?? inferCableType(srcNode.deviceType, tgtNode.deviceType, srcPort.type);
+      const cableType = explicitCableType ?? inferCableType(srcNode.deviceType, tgtNode.deviceType, srcPort.type, tgtPort.type);
       const newEdge: LabEdge = {
         id: `edge-${Date.now()}`,
         sourceNodeId: srcNode.id,
@@ -1530,8 +1509,8 @@ onOpenTerminal={handleOpenTerminal}
             />
           )}
 
-          {/* Floating Mobile Bottom Toolbar — hanya viewport mobile */}
-          {isMobile && (
+          {/* Floating Toolbar — tool SAMA di semua ukuran (Mobile/Desktop), satu state machine */}
+          {isMobile ? (
             <MobileToolbar
               activeTool={activeTool}
               onSelectTool={setActiveTool}
@@ -1543,6 +1522,16 @@ onOpenTerminal={handleOpenTerminal}
                 setMobileSheet(null);
                 setIsTerminalOpen(!isTerminalOpen);
               }}
+            />
+          ) : (
+            <DesktopToolbar
+              activeTool={activeTool}
+              onSelectTool={setActiveTool}
+              onOpenAddDevice={() => setIsSidebarOpen(true)}
+              onZoomIn={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.min(prev.viewport.zoom + 0.15, 3.0) } }))}
+              onZoomOut={() => setProject((prev) => ({ ...prev, viewport: { ...prev.viewport, zoom: Math.max(prev.viewport.zoom - 0.15, 0.25) } }))}
+              onResetView={() => setProject((prev) => ({ ...prev, viewport: { x: 0, y: 0, zoom: 1.0 } }))}
+              onToggleTerminal={() => setIsTerminalOpen(!isTerminalOpen)}
             />
           )}
         </main>

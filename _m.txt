@@ -1,0 +1,1 @@
+feat: konsolidasi logika kabel ke src/connection.ts (single source of truth), anchor port dari metadata side/slot, tool controller desktop setara mobile (Select/Kabel/Tambah/View/Terminal)  
