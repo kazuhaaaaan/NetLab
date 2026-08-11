@@ -39,7 +39,7 @@ export function Navbar({ onLaunch, onOpenDonate }: NavbarProps) {
           <LogoMark size={34} />
           <span className="flex flex-col leading-none">
             <span className="text-[15px] font-bold tracking-tight text-slate-100">NetLab</span>
-            <span className="text-[10px] font-mono text-slate-500 tracking-[0.18em] uppercase">by KazuDev</span>
+            <span className="text-[10px] font-mono text-slate-500 tracking-[0.18em] uppercase">Networking Laboratory · by KazuDev</span>
           </span>
         </a>
 

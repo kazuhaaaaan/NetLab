@@ -117,8 +117,8 @@ export default function App() {
   useEffect(() => {
     document.title =
       view === 'canvas'
-        ? 'NetLab | Networking Lab Simulator'
-        : 'NetLab — Multi-Vendor Network Simulator';
+        ? 'NetLab (Networking Laboratory) | Network Simulator'
+        : 'NetLab (Networking Laboratory) — Multi-Vendor Network Simulator';
   }, [view]);
 
   // Back/forward navigation across /home ↔ /canvas
@@ -670,6 +670,14 @@ export default function App() {
       edges: prev.edges.filter((e) => e.id !== edgeId)
     }));
     if (selectedEdgeId === edgeId) setSelectedEdgeId(null);
+  };
+
+  /** Hapus semua kabel yang terhubung ke node tertentu. */
+  const handleDeleteNodeCables = (nodeId: string) => {
+    setProjectWithHistory((prev) => ({
+      ...prev,
+      edges: prev.edges.filter((e) => e.sourceNodeId !== nodeId && e.targetNodeId !== nodeId)
+    }));
   };
 
   // Keyboard shortcut: Delete / Backspace to remove selected edge or node
@@ -1460,6 +1468,7 @@ export default function App() {
               setContextMenu(null);
             }}
             onDeleteEdge={handleDeleteEdge}
+            onDeleteNodeCables={handleDeleteNodeCables}
             onNodePositionChange={(id, pos) => {
               setProject((prev) => ({
                 ...prev,
@@ -1502,7 +1511,7 @@ export default function App() {
               y={contextMenu.y}
               targetId={contextMenu.targetId}
               targetType={contextMenu.targetType}
-              onOpenTerminal={handleOpenTerminal}
+onOpenTerminal={handleOpenTerminal}
               onDeleteNode={handleDeleteNode}
               onDeleteEdge={handleDeleteEdge}
               onExportConfig={(id) => setExportNodeId(id)}

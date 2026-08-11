@@ -189,7 +189,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onDone }) => {
         }}
       >
         {/* Logo + name */}
-        <div className="flex items-center space-x-2 mb-1">
+        <div className="flex flex-col items-center mb-1">
           <span className="text-3xl sm:text-4xl font-extrabold tracking-tight"
             style={{
               background: 'linear-gradient(90deg, #38bdf8, #818cf8, #34d399)',
@@ -197,7 +197,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onDone }) => {
               WebkitTextFillColor: 'transparent',
               backgroundClip: 'text',
             }}>
-            Mikrolab
+            NetLab
+          </span>
+          <span className="mt-1.5 text-sm sm:text-base font-medium tracking-tight text-slate-300">
+            (Networking Laboratory)
           </span>
         </div>
 

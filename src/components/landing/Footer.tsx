@@ -30,7 +30,7 @@ export function Footer({ onLaunch, onOpenDonate }: FooterProps) {
               <LogoMark size={32} />
               <div className="flex flex-col leading-none">
                 <span className="text-[14px] font-bold tracking-tight text-slate-100">NetLab</span>
-                <span className="text-[10px] font-mono text-slate-600 tracking-[0.16em] uppercase">by KazuDev</span>
+                <span className="text-[10px] font-mono text-slate-600 tracking-[0.16em] uppercase">Networking Laboratory · by KazuDev</span>
               </div>
             </div>
             <p className="mt-4 max-w-sm text-[13px] text-slate-400 leading-relaxed">

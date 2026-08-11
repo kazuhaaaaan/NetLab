@@ -157,7 +157,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       <div className="flex items-center space-x-3 flex-shrink-0">
         <div className="flex items-center space-x-2 bg-[#1A1D24] border border-[#2B2D31] px-2 sm:px-3 py-1.5 rounded-md text-slate-200 font-bold tracking-tight shadow-sm">
           <Network className="w-5 h-5 animate-pulse" />
-          <span className="hidden sm:inline text-base font-extrabold tracking-wider">MikroLab</span>
+          <span className="hidden sm:inline text-base font-extrabold tracking-wider">
+            NetLab <span className="text-xs font-medium text-slate-400 tracking-normal">(Networking Laboratory)</span>
+          </span>
         </div>
         <div className="hidden lg:block text-xs px-2 py-0.5 rounded border border-blue-500/40 bg-blue-500/10 text-blue-400 font-mono">
           v1.0 Foundation

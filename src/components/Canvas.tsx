@@ -172,6 +172,8 @@ interface CanvasProps {
   selectedEdgeId: string | null;
   onSelectEdge: (edgeId: string | null) => void;
   onDeleteEdge?: (edgeId: string) => void;
+  /** Hapus semua kabel yang terhubung ke sebuah node (dipakai tombol hapus kabel di overlay node). */
+  onDeleteNodeCables?: (nodeId: string) => void;
   viewPorts?: boolean;
   onToggleViewPorts?: () => void;
   /** Animasi paket ping yang melintasi kabel (dari hasil simulasi). */
@@ -242,6 +244,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   selectedEdgeId,
   onSelectEdge,
   onDeleteEdge,
+  onDeleteNodeCables,
   viewPorts = false,
   onToggleViewPorts,
   packetAnimations = [],
@@ -718,6 +721,10 @@ export const Canvas: React.FC<CanvasProps> = ({
           const isWireless =
             sourceNode.deviceType === 'wireless' ||
             targetNode.deviceType === 'wireless';
+          const tMid = 0.5;
+          const mtMid = 1 - tMid;
+          const edgeMx = mtMid * mtMid * mtMid * x1 + 3 * mtMid * mtMid * tMid * cx1 + 3 * mtMid * tMid * tMid * cx2 + tMid * tMid * tMid * x2;
+          const edgeMy = mtMid * mtMid * mtMid * y1 + 3 * mtMid * mtMid * tMid * cy1 + 3 * mtMid * tMid * tMid * cy2 + tMid * tMid * tMid * y2;
 
           if (isWireless) {
             // Draw animated dashed Bezier curve with Wifi icon at center
@@ -771,6 +778,22 @@ export const Canvas: React.FC<CanvasProps> = ({
                     <Wifi className={`w-3.5 h-3.5 ${isSelected ? 'text-red-400' : 'text-cyan-400'} animate-pulse`} />
                   </div>
                 </foreignObject>
+
+                {/* Tombol hapus kabel — muncul saat node di-hover atau kabel dipilih */}
+                {(isHoveredEdge || isSelected) && (
+                  <g
+                    className="cursor-pointer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteEdge?.(edge.id);
+                    }}
+                  >
+                    <circle cx={mx} cy={my} r="11" fill="#1A1D24" stroke="#f43f5e" strokeWidth="1.5" />
+                    <text x={mx} y={my + 3.5} textAnchor="middle" fontSize="10" fill="#f43f5e" fontWeight="bold" className="select-none pointer-events-none">
+                      ✕
+                    </text>
+                  </g>
+                )}
 
                 {/* endpoint dots */}
                 <circle cx={x1} cy={y1} r="4" fill={arcColor} />
@@ -856,6 +879,22 @@ export const Canvas: React.FC<CanvasProps> = ({
                     fontWeight="bold"
                   >
                     TRK
+                  </text>
+                </g>
+              )}
+
+              {/* Tombol hapus kabel — muncul saat node di-hover atau kabel dipilih */}
+              {(isHoveredEdge || isSelected) && (
+                <g
+                  className="cursor-pointer"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteEdge?.(edge.id);
+                  }}
+                >
+                  <circle cx={edgeMx} cy={edgeMy} r="11" fill="#1A1D24" stroke="#f43f5e" strokeWidth="1.5" />
+                  <text x={edgeMx} y={edgeMy + 3.5} textAnchor="middle" fontSize="10" fill="#f43f5e" fontWeight="bold" className="select-none pointer-events-none">
+                    ✕
                   </text>
                 </g>
               )}
@@ -955,6 +994,10 @@ export const Canvas: React.FC<CanvasProps> = ({
                     <button
                       data-delete-edge-id={edge.id}
                       title="Delete Cable"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteEdge?.(edge.id);
+                      }}
                       className="p-1 rounded-md bg-rose-600/80 hover:bg-rose-500 text-white shrink-0 transition-colors"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -1110,6 +1153,9 @@ export const Canvas: React.FC<CanvasProps> = ({
             cableWizard?.targetNodeId === node.id;
           const isWizardSource = cableWizard?.sourceNodeId === node.id;
           const isWizardTarget = cableWizard?.targetNodeId === node.id;
+          const nodeCableCount = edges.filter(
+            (e) => e.sourceNodeId === node.id || e.targetNodeId === node.id
+          ).length;
           return (
             <div
               key={node.id}
@@ -1194,11 +1240,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                 );
               })}
               
-              {/* Open CLI button that appears on hover/select — CLI always follows the selected device */}
+              {/* Open CLI button — selalu terlihat agar tidak "hilang" */}
               <button
-                className={`absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-slate-400 hover:text-white hover:border-emerald-500 transition-opacity z-30 ${
-                  isSelected ? "opacity-100 pointer-events-auto shadow-md" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
-                }`}
+                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-30 opacity-90 hover:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenTerminal(node.id);
@@ -1210,17 +1254,29 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Connect Cable button — mulai wizard kabel (klik perangkat juga bisa di mode cable) */}
               <button 
-                className={`absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-slate-400 hover:text-white hover:border-blue-500 transition-opacity z-30 ${
-                  isSelected ? "opacity-100 pointer-events-auto shadow-md" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
-                }`}
+                className="absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-30 opacity-90 hover:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   setCableWizard({ sourceNodeId: node.id, sourcePortId: null, cableType: null, targetNodeId: null });
                 }}
-                title="Sambungkan Kabel (pilih tipe kabel dulu)"
+                title="Sambungkan Kabel"
               >
                 <Plus className="w-3 h-3" />
               </button>
+
+              {/* Hapus semua kabel node ini — hanya muncul jika node punya kabel */}
+              {nodeCableCount > 0 && (
+                <button
+                  className="absolute -right-8 top-[calc(50%+18px)] -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-30 opacity-90 hover:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteNodeCables?.(node.id);
+                  }}
+                  title={`Hapus semua kabel node ini (${nodeCableCount})`}
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              )}
               
               {/* Panel Lihat Port — kabel terhubung di port mana saja */}
               {hoverNodeId === node.id || (viewPorts && isSelected) ? (
