@@ -1240,9 +1240,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                 );
               })}
               
+              {/* Tombol aksi node — SEMBUNYI saat mode kabel/wizard aktif agar tidak
+                  menutupi titik port (z-40). Di luar mode kabel tampil di atas panel (z-50). */}
+              {!nodeInCableFlow && (
+                <>
               {/* Open CLI button — selalu terlihat agar tidak "hilang" */}
               <button
-                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-30 opacity-90 hover:opacity-100"
+                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenTerminal(node.id);
@@ -1254,7 +1258,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Connect Cable button — mulai wizard kabel (klik perangkat juga bisa di mode cable) */}
               <button 
-                className="absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-30 opacity-90 hover:opacity-100"
+                className="absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   setCableWizard({ sourceNodeId: node.id, sourcePortId: null, cableType: null, targetNodeId: null });
@@ -1267,7 +1271,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               {/* Hapus semua kabel node ini — hanya muncul jika node punya kabel */}
               {nodeCableCount > 0 && (
                 <button
-                  className="absolute -right-8 top-[calc(50%+18px)] -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-30 opacity-90 hover:opacity-100"
+                  className="absolute -right-8 top-[calc(50%+18px)] -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
                   onClick={(e) => {
                     e.stopPropagation();
                     onDeleteNodeCables?.(node.id);
@@ -1276,6 +1280,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 >
                   <Trash2 className="w-3 h-3" />
                 </button>
+              )}
+                </>
               )}
               
               {/* Panel Lihat Port — kabel terhubung di port mana saja */}
