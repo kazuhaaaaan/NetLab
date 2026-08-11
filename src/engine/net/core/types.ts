@@ -135,6 +135,14 @@ export interface DhcpPool {
   network?: string;
   iface?: string;
   gateway?: string;
+  /** true = server/pool dinonaktifkan via CLI → tidak melayani lease. */
+  disabled?: boolean;
+  /** alamat yang dikecualikan dari alokasi (ip dhcp excluded-address). */
+  excluded?: string[];
+  /** lama lease (ms); default 24 jam bila tidak diatur. */
+  leaseTimeMs?: number;
+  /** DNS server yang diiklankan ke klien (option 6). */
+  dnsServers?: string[];
 }
 
 export interface DnsRecord {
@@ -174,6 +182,10 @@ export interface NetRoute {
   gateway: string | null;
   iface: string | null;
   kind: 'connected' | 'static' | 'dynamic';
+  /** Administrative distance / metric rute (semakin kecil semakin disukai). */
+  distance?: number;
+  /** false = rute ternyata tidak dapat dipakai (gateway unreachable, dst jinvalid) — di-skip oleh lookup. */
+  active?: boolean;
 }
 
 export interface NetLease {

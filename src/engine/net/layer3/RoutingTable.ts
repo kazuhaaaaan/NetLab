@@ -38,17 +38,28 @@ export class RoutingTable {
    * Longest Prefix Match. Hasil memuat next-hop IP dan interface keluar:
    * - connected  → gateway = dstIp, iface = interface lokal
    * - static/dyn → gateway = next hop, iface diisi dari subnet gateway
+   *
+   * Rute non-aktif (gateway unreachable / disabled) tidak pernah dipilih.
+   * Untuk prefix sama panjang, rute dengan administrative distance (metric)
+   * lebih kecil menang; sisanya urutan pemasangan (connected > static > dynamic).
    */
   lookup(dstIp: string): { gateway: string | null; iface: string | null } | null {
     let best: NetRoute | null = null;
     let bestPrefix = -1;
+    let bestMetric = Infinity;
     for (const r of this.routes) {
+      if (r.active === false) continue;
       const parsed = parseCidr(r.dst);
       if (!parsed) continue;
       const p = parsed.prefix;
+      const metric = r.distance ?? (r.kind === 'connected' ? 0 : r.kind === 'static' ? 1 : 110);
       if (p > bestPrefix && networkOf(dstIp, p) === networkOf(parsed.address, p)) {
         best = r;
         bestPrefix = p;
+        bestMetric = metric;
+      } else if (p === bestPrefix && metric < bestMetric && networkOf(dstIp, p) === networkOf(parsed.address, p)) {
+        best = r;
+        bestMetric = metric;
       }
     }
     if (!best) return null;
@@ -78,6 +89,8 @@ export function normalize(r: NetRoute): NetRoute | null {
     gateway: r.gateway,
     iface: r.iface,
     kind: r.kind,
+    distance: r.distance,
+    active: r.active,
   };
 }
 

@@ -54,6 +54,11 @@ export class RouterProcessor implements DeviceProcessor {
   // ── ARP ──────────────────────────────────────────────────
   private handleArp(pkt: Packet, inPort: string, core: SimulatorCore, traceId: string): void {
     const dev = this.device;
+    const inIfaceCheck = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+    if (inIfaceCheck && !inIfaceCheck.up) {
+      core.drop(dev, pkt, 'iface-down', traceId);
+      return;
+    }
     const p = (pkt.payload ?? {}) as { op?: number; senderIp?: string; senderMac?: string; targetIp?: string };
     if (!p.senderIp || !p.senderMac) {
       core.drop(dev, pkt, 'arp-malformed', traceId);
@@ -96,6 +101,14 @@ export class RouterProcessor implements DeviceProcessor {
   private handleIp(pkt: Packet, inPort: string, core: SimulatorCore, traceId: string): void {
     const dev = this.device;
     core.emit('PACKET_RECEIVED', traceId, { packetId: pkt.id }, dev.id, inPort);
+
+    // Interface masuk mati (shutdown) → frame ditolak (tidak diproses).
+    const inIfaceCheck = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+    if (inIfaceCheck && !inIfaceCheck.up) {
+      core.emit('PACKET_DROPPED', traceId, { reason: 'iface-down' }, dev.id, inPort);
+      core.drop(dev, pkt, 'iface-down', traceId);
+      return;
+    }
 
     // L2 filter: frame harus untuk MAC saya / broadcast
     const forMyMac =
@@ -149,7 +162,7 @@ export class RouterProcessor implements DeviceProcessor {
     let myIface = dev.hasIp(pkt.dstIp);
 
     // dstnat / port-forward
-    const dstnat = NatTranslator.dstnatRule(dev.natRules, pkt.dstIp, pkt.dstPort, pkt.protocol);
+    const dstnat = NatTranslator.dstnatRule(dev.natRules, pkt.dstIp, pkt.dstPort, pkt.protocol, pkt.srcIp);
     if (dstnat) {
       pkt.dstIp = NatTranslator.toAddresses(dstnat);
       pkt.dstPort = NatTranslator.toPort(dstnat, pkt.dstPort);
@@ -233,10 +246,26 @@ export class RouterProcessor implements DeviceProcessor {
       core.drop(dev, pkt, 'egress-down', traceId);
       return;
     }
+
+    // Firewall pass kedua (forward): rule dengan out-interface dinilai
+    // sekarang setelah interface keluar diketahui (mis. deny out-interface=wan).
+    const outIfaceName = egress.name;
+    if (!isDhcpBootstrap && aclBlocks(dev, pkt, inPort, outIfaceName)) {
+      core.emit('FIREWALL_BLOCK', traceId, { dstIp: pkt.dstIp, srcIp: pkt.srcIp, outInterface: outIfaceName }, dev.id, inPort);
+      const run = core.getRun(traceId);
+      if (run && run.status === 'running') {
+        run.blocked = true;
+        run.status = 'fail';
+        run.reason = 'blocked';
+      }
+      core.drop(dev, pkt, 'firewall', traceId);
+      return;
+    }
+
     const nextHopIp = nh.gateway || pkt.dstIp;
 
-    // srcnat masquerade di interface keluar
-    const masq = NatTranslator.srcnatRule(dev.natRules, egress.name);
+    // srcnat masquerade di interface keluar (src-address rule ikut dihormati)
+    const masq = NatTranslator.srcnatRule(dev.natRules, egress.name, pkt.srcIp);
     if (masq && pkt.srcIp !== egress.ip.address) {
       if (dev.nat.masquerade(pkt, egress.ip.address, egress.name, core.now)) {
         core.emit('NAT_REWRITE', traceId, { action: 'masquerade', to: egress.ip.address, port: pkt.srcPort }, dev.id, egress.name);
@@ -255,6 +284,14 @@ export class RouterProcessor implements DeviceProcessor {
     const dev = this.device;
     core.emit('PACKET_RECEIVED', traceId, { packetId: pkt.id }, dev.id, inPort);
     const p = (pkt.payload ?? {}) as { type?: number; ndp?: string; target?: string; seq?: number; id?: number };
+
+    // Interface masuk mati (shutdown) → frame ditolak.
+    const inIfaceCheck = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+    if (inIfaceCheck && !inIfaceCheck.up) {
+      core.emit('PACKET_DROPPED', traceId, { reason: 'iface-down' }, dev.id, inPort);
+      core.drop(dev, pkt, 'iface-down', traceId);
+      return;
+    }
 
     // NDP: NS/NA datang ke solicited-node multicast MAC (33:33:ff:..) —
     // harus ditangani sebelum filter L2.
@@ -311,6 +348,7 @@ export class RouterProcessor implements DeviceProcessor {
         reply.hops = pkt.hops.slice();
         reply.edgeIds = pkt.edgeIds.slice();
         reply.trace = pkt.trace.slice();
+        reply.vlan = pkt.vlan;
         core.transmit(dev, reply, (inIface || myIface).name, traceId);
         core.emit('PING_REPLY', traceId, { seq: p.seq }, dev.id, (inIface || myIface).name);
       } else if (pkt.protocol === 'icmp' && p.type === ICMPV6_ECHO_REPLY) {
@@ -345,15 +383,15 @@ export class RouterProcessor implements DeviceProcessor {
     pkt.ttl -= 1;
 
     const nh = dev.ipv6Routing.lookup(pkt.dstIp);
-    if (!nh) {
-      core.emit('ICMP_ERROR', traceId, { reason: 'no-route-v6' }, dev.id, inPort);
+    if (!nh || nh.gateway === 'discard') {
+      core.emit('ICMP_ERROR', traceId, { reason: nh?.gateway === 'discard' ? 'route-discard' : 'no-route-v6' }, dev.id, inPort);
       const run = core.getRun(traceId);
       if (run && run.status === 'running') {
         run.unreachable = true;
         run.status = 'fail';
         run.reason = 'unreachable';
       }
-      core.drop(dev, pkt, 'no-route-v6', traceId);
+      core.drop(dev, pkt, nh?.gateway === 'discard' ? 'route-discard' : 'no-route-v6', traceId);
       return;
     }
 
@@ -386,6 +424,8 @@ export class RouterProcessor implements DeviceProcessor {
       traceId,
       payload: { ...error },
     });
+    // ICMP error kembali lewat interface masuk → pertahankan tag VLAN-nya.
+    err.vlan = pkt.vlan;
     core.transmit(dev, err, inIface.name, traceId);
   }
 
@@ -414,6 +454,9 @@ export class RouterProcessor implements DeviceProcessor {
         reply.hops = pkt.hops.slice();
         reply.edgeIds = pkt.edgeIds.slice();
         reply.trace = pkt.trace.slice();
+        // Reply keluar lewat interface yang sama dengan frame masuk → pertahankan
+        // tag VLAN (subinterface) agar switch meneruskannya ke VLAN asal.
+        reply.vlan = pkt.vlan;
         core.transmit(dev, reply, iface.name, traceId);
         core.emit('PING_REPLY', traceId, { seq: p.seq }, dev.id, iface.name);
       } else if (p.type === ICMP_ECHO_REPLY) {
@@ -495,6 +538,7 @@ export class RouterProcessor implements DeviceProcessor {
       reply.trace = pkt.trace.slice();
       reply.flags['serverSeq'] = iseq;
       reply.flags['webContent'] = dev.webServer?.content || '';
+      reply.vlan = pkt.vlan;
       core.transmit(dev, reply, iface.name, traceId);
       core.emit('TCP_SYN_ACK', traceId, { seq: iseq, ack: seg.seq + 1 }, dev.id, iface.name);
     } else if (isAck(seg) && isSyn(seg)) {
@@ -523,6 +567,7 @@ export class RouterProcessor implements DeviceProcessor {
         flags: { tcp: 'ack' },
         payload: { ...buildTcpSegment(pkt.dstPort, pkt.srcPort, seg.ack, seg.seq + 1, TCP_ACK) },
       });
+      ack.vlan = pkt.vlan;
       if (iface.ip && inSameSubnet(iface.ip.address, iface.ip.prefix, pkt.srcIp)) {
         arpResolveAndSend(dev, ack, iface.name, pkt.srcIp, core, traceId);
       } else {
@@ -570,6 +615,7 @@ export class RouterProcessor implements DeviceProcessor {
           traceId,
           payload: { address: rec, name, nxdomain: !rec },
         });
+        reply.vlan = pkt.vlan;
         core.transmit(dev, reply, iface.name, traceId);
       }
       core.drop(dev, pkt, 'dns-consumed', traceId);
@@ -625,6 +671,7 @@ export class RouterProcessor implements DeviceProcessor {
         traceId,
         payload: { snmpResult: { ok: false, error: 'Bad community name', reason: 'auth' }, oid: req.oid },
       });
+      reply.vlan = pkt.vlan;
       core.transmit(dev, reply, iface.name, traceId);
       if (run && run.status === 'running') {
         run.status = 'fail';
@@ -685,6 +732,7 @@ export class RouterProcessor implements DeviceProcessor {
       traceId,
       payload: { snmpResult: { ...result, device: dev.name }, oid },
     });
+    reply.vlan = pkt.vlan;
     core.transmit(dev, reply, iface.name, traceId);
 
     const done: Record<string, unknown> = { ...result, device: dev.name };
@@ -723,6 +771,7 @@ export class RouterProcessor implements DeviceProcessor {
         traceId,
         payload: relayed ? { type: 'offer', xid: p.xid, ...grant, relayed } : { type: 'offer', xid: p.xid, ...grant },
       });
+      offer.vlan = pkt.vlan;
       core.transmit(dev, offer, inPort, traceId);
       core.emit('DHCP_OFFER', traceId, { ip: grant.ip }, dev.id, inPort);
       core.drop(dev, pkt, 'dhcp-consumed', traceId);
@@ -752,6 +801,7 @@ export class RouterProcessor implements DeviceProcessor {
           traceId,
           payload: relayed ? { type: 'nak', xid: p.xid, ip: requestedIp, relayed } : { type: 'nak', xid: p.xid, ip: requestedIp },
         });
+        nak.vlan = pkt.vlan;
         core.transmit(dev, nak, inPort, traceId);
         core.emit('DHCP_REQUEST', traceId, { xid: p.xid, nak: true, ip: requestedIp }, dev.id, inPort);
         core.drop(dev, pkt, 'dhcp-nak', traceId);
@@ -777,6 +827,7 @@ export class RouterProcessor implements DeviceProcessor {
         traceId,
         payload: relayed ? { type: 'ack', xid: p.xid, ...grant, relayed } : { type: 'ack', xid: p.xid, ...grant },
       });
+      ack.vlan = pkt.vlan;
       core.transmit(dev, ack, inPort, traceId);
       core.emit('DHCP_ACK', traceId, { ip: grant.ip }, dev.id, inPort);
       core.drop(dev, pkt, 'dhcp-consumed', traceId);
@@ -788,7 +839,14 @@ export class RouterProcessor implements DeviceProcessor {
   private grantFromPool(dev: NetworkDevice, pool: NonNullable<ReturnType<typeof findServingPool>>, core: SimulatorCore): LeaseGrant | null {
     const alloc = allocateIp(dev, pool, core.usedIps());
     if (!alloc) return null;
-    return { ip: alloc.ip, gateway: alloc.gateway, prefix: alloc.prefix, poolNodeId: dev.id };
+    return {
+      ip: alloc.ip,
+      gateway: alloc.gateway,
+      prefix: alloc.prefix,
+      poolNodeId: dev.id,
+      dnsServers: pool.dnsServers?.length ? pool.dnsServers : undefined,
+      leaseTimeMs: pool.leaseTimeMs,
+    };
   }
 
   // ── DHCP relay (ip helper-address) ──────────────────────────
@@ -875,6 +933,13 @@ export class RouterProcessor implements DeviceProcessor {
       this.device.getIfaceByName(pool.iface || '')?.ip?.prefix ??
       24;
     const gateway = pool.gateway || this.device.getIfaceByName(pool.iface || '')?.ip?.address || '';
-    return { ip, prefix, gateway, poolNodeId: this.device.id };
+    return {
+      ip,
+      prefix,
+      gateway,
+      poolNodeId: this.device.id,
+      dnsServers: pool.dnsServers?.length ? pool.dnsServers : undefined,
+      leaseTimeMs: pool.leaseTimeMs,
+    };
   }
 }

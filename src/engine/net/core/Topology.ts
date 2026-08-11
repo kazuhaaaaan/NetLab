@@ -105,14 +105,46 @@ export function linkDelayMs(cableType: string): number {
 export class Topology {
   readonly factory = new DeviceFactory();
   links = new LinkTable();
+  /** Edge yang ditolak saat sync (referensi node/port hilang, self-loop, duplikat). */
+  lastSkippedEdges: { id: string; reason: string }[] = [];
 
   sync(project: LabProjectLike): { nodes: Map<string, import('../devices/NetworkDevice').NetworkDevice> } {
     const nodes = new Map<string, import('../devices/NetworkDevice').NetworkDevice>();
+    const skipped: { id: string; reason: string }[] = [];
     for (const n of project.nodes) {
       nodes.set(n.id, this.factory.create(n));
     }
     this.links.clear();
+    const seen = new Set<string>();
     for (const e of project.edges) {
+      const aNode = nodes.get(e.sourceNodeId);
+      const bNode = nodes.get(e.targetNodeId);
+      if (!aNode || !bNode) {
+        skipped.push({ id: e.id || '(no-id)', reason: `node tidak ditemukan (${e.sourceNodeId}→${e.targetNodeId})` });
+        continue;
+      }
+      const aPort = aNode.getIfaceByPortId(e.sourcePortId);
+      const bPort = bNode.getIfaceByPortId(e.targetPortId);
+      if (!aPort || !bPort) {
+        skipped.push({
+          id: e.id || '(no-id)',
+          reason: `port tidak ditemukan (${e.sourceNodeId}:${e.sourcePortId} → ${e.targetNodeId}:${e.targetPortId})`,
+        });
+        continue;
+      }
+      // self-loop: kabel yang menempel port ke port itu sendiri.
+      if (e.sourceNodeId === e.targetNodeId && e.sourcePortId === e.targetPortId) {
+        skipped.push({ id: e.id || '(no-id)', reason: 'self-loop ditolak' });
+        continue;
+      }
+      // kabel ganda antara dua port yang sama (duplikat) — cegah state korup.
+      const key = [e.sourceNodeId, e.sourcePortId, e.targetNodeId, e.targetPortId].join('|');
+      const keyRev = [e.targetNodeId, e.targetPortId, e.sourceNodeId, e.sourcePortId].join('|');
+      if (seen.has(key) || seen.has(keyRev)) {
+        skipped.push({ id: e.id || '(no-id)', reason: 'edge duplikat ditolak' });
+        continue;
+      }
+      seen.add(key);
       this.links.addLink({
         id: e.id,
         a: { nodeId: e.sourceNodeId, port: e.sourcePortId },
@@ -123,6 +155,7 @@ export class Topology {
         down: e.down,
       });
     }
+    this.lastSkippedEdges = skipped;
     return { nodes };
   }
 }

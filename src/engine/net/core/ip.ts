@@ -32,7 +32,10 @@ export function maskToPrefix(mask: number): number {
 }
 
 export function networkOf(ip: string, prefix: number): number {
-  return ipToInt(ip) & prefixToMask(prefix);
+  // >>> 0 penting: bitwise AND menghasilkan int bertanda; tanpa ini nilai
+  // network di luar 127.x menjadi negatif dan perbandingan dengan ipToInt
+  // (unsigned) gagal — alamat network tidak terdeteksi.
+  return (ipToInt(ip) & prefixToMask(prefix)) >>> 0;
 }
 
 export function inSameSubnet(ipA: string, prefixA: number, ipB: string): boolean {
@@ -53,4 +56,31 @@ export function parseCidr(cidr: string): { address: string; prefix: number } | n
   const prefix = parseInt(p, 10);
   if (isNaN(prefix) || prefix < 0 || prefix > 32) return null;
   return { address: ip, prefix };
+}
+
+/** Prefix dengan hostBit bit tersedia (bukan /31 & /32, tidak bisa dipakai host). */
+export function hasHostAddressSpace(prefix: number): boolean {
+  return prefix <= 30;
+}
+
+/** True bila `ip/prefix` adalah alamat network dari subnet-nya (bukan host valid). */
+export function isNetworkAddress(ip: string, prefix: number): boolean {
+  if (!isValidIp(ip)) return false;
+  return ipToInt(ip) === networkOf(ip, prefix);
+}
+
+/** True bila `ip/prefix` adalah alamat broadcast subnet-nya (bukan host valid). */
+export function isBroadcastAddress(ip: string, prefix: number): boolean {
+  if (!isValidIp(ip) || !hasHostAddressSpace(prefix)) return false;
+  const mask = prefixToMask(prefix);
+  return ipToInt(ip) === (networkOf(ip, prefix) | (~mask >>> 0)) >>> 0;
+}
+
+/** Validasi alamat HOST yang sah: format benar, bukan network/broadcast address. */
+export function isValidHostIp(ip: string, prefix: number): boolean {
+  if (!isValidIp(ip)) return false;
+  if (!hasHostAddressSpace(prefix)) return false;
+  if (isNetworkAddress(ip, prefix)) return false;
+  if (isBroadcastAddress(ip, prefix)) return false;
+  return true;
 }

@@ -40,6 +40,8 @@ export class Ipv6RoutingTable {
     let best: NetRoute | null = null;
     let bestPrefix = -1;
     for (const r of this.routes) {
+      // Rute non-aktif (gateway unreachable / disabled) tidak pernah dipilih.
+      if (r.active === false) continue;
       const parsed = parseIpv6Cidr(r.dst);
       if (!parsed) continue;
       if (parsed.prefix > bestPrefix && inSameIpv6Subnet(dstIp, parsed.prefix, parsed.address)) {
@@ -48,6 +50,7 @@ export class Ipv6RoutingTable {
       }
     }
     if (!best) return null;
+    if (best.gateway === 'discard') return { gateway: 'discard', iface: null };
     if (best.kind === 'connected' && best.iface) return { gateway: dstIp, iface: best.iface };
     return { gateway: best.gateway, iface: best.iface };
   }

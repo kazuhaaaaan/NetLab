@@ -34,12 +34,20 @@ export interface DhcpPoolInfo {
   network?: string;
   iface?: string;
   gateway?: string;
+  /** true = server/pool dinonaktifkan via CLI (mis. /ip dhcp-server set disabled=yes). */
+  disabled?: boolean;
+  /** alamat yang dikecualikan dari alokasi. */
+  excluded?: string[];
+  /** lama lease (ms); default 24 jam bila tidak diatur. */
+  leaseTimeMs?: number;
+  /** DNS server yang diiklankan ke klien (option 6). */
+  dnsServers?: string[];
 }
 
 export interface DeviceStatsSnapshot {
   name: string;
   deviceType: string;
-  interfaces: { name: string; mac: string; ip: string | null; up: boolean }[];
+  interfaces: { name: string; mac: string; ip: string | null; ipv6: string | null; up: boolean }[];
   arp: { ip: string; mac: string }[];
   macTable: { mac: string; port: string }[];
   routes: { dst: string; gateway: string; iface: string; kind: string }[];
@@ -81,7 +89,7 @@ export interface DhcpLeaseGrant {
 
 export interface RoutingMemoryShape {
   /** interface → cost OSPF eksplisit (clé = nama interface) */
-  ospf?: { enabled?: boolean; networks?: string[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[] };
+  ospf?: { enabled?: boolean; networks?: string[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[]; routerId?: string };
   rip?: { enabled?: boolean; networks?: string[] };
   eigrp?: { enabled?: boolean; asn?: number; networks?: string[] };
 }
@@ -140,7 +148,7 @@ export interface OspfNeighborInfo {
 export interface BgpNeighborStateInfo {
   remoteAddr: string;
   remoteAs: number;
-  state: 'Established' | 'Idle' | 'Connect';
+  state: 'Established' | 'Idle' | 'Connect' | 'Active';
   uptime: string;
   prefixes: number;
 }

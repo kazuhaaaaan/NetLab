@@ -25,6 +25,8 @@ import { VENDOR_MAP } from './data/vendors';
 import { getDefaultModel, getModelsForVendor, getPortsForModel } from './data/deviceModels';
 import { VendorDispatcher } from '../packages/vendors/src/index';
 import { SimulationEngine, formatPingOutput, formatTracerouteOutput } from './engine/net';
+import { runLab, findScenarios, formatLabResult } from './engine/lab';
+import { LAB_SCENARIOS } from './engine/lab/scenarios';
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
@@ -337,7 +339,11 @@ export default function App() {
     const poolsByNode: Record<string, any[]> = {};
     for (const [nodeId, m] of Object.entries(mem)) {
       if (m && Array.isArray(m.dhcpPools) && m.dhcpPools.length > 0) {
-        poolsByNode[nodeId] = m.dhcpPools;
+        // excluded-address global (Cisco) berlaku untuk semua pool perangkat.
+        const excl = Array.isArray(m.dhcpExcluded) ? m.dhcpExcluded : [];
+        poolsByNode[nodeId] = excl.length > 0
+          ? m.dhcpPools.map((p: any) => ({ ...p, excluded: [...new Set([...(p.excluded || []), ...excl])] }))
+          : m.dhcpPools;
       }
     }
     simEngineRef.current.setDhcpPools(poolsByNode);
@@ -362,6 +368,8 @@ export default function App() {
     simEngineRef.current.setWebServer(nodeId, mem.webServer || undefined);
     simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
     simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    simEngineRef.current.setDhcpRelays(nodeId, mem.dhcpRelays || undefined);
+    simEngineRef.current.setPortSecurity(nodeId, mem.portSecurity || undefined);
     setTrunkPortsByNode((prev) => {
       const ports = mem.trunkPorts && mem.trunkPorts.length > 0 ? [...mem.trunkPorts] : undefined;
       if (!ports) {
@@ -389,6 +397,32 @@ export default function App() {
     for (const n of project.nodes) syncNodeToEngine(n.id);
     syncDhcpPools();
   }, [project, syncNodeToEngine, syncDhcpPools]);
+
+  /** Import .mlab dengan validasi: proyek + CLI state perangkat + engine sync. */
+  const handleImportMlab = useCallback(
+    async (file: File) => {
+      const result = await StorageEngine.parseProjectFile(file);
+      if ('error' in result) {
+        const e = result.error;
+        alert(`Import .mlab gagal (${e.code})${e.path ? ` di "${e.path}"` : ''}:\n${e.message}`);
+        return;
+      }
+      setProject(result.project);
+      historyRef.current = [result.project];
+      historyIndexRef.current = 0;
+      setCanUndo(false);
+      setCanRedo(false);
+      // CLI state (IP/rute/VLAN/NAT/ACL/routing) ikut di-restore bila ada di file.
+      vendorDispatcher.restoreMemory(result.deviceConfigs || null);
+      if (result.deviceConfigs) StorageEngine.saveDeviceConfigs(result.deviceConfigs);
+      else StorageEngine.clearDeviceConfigs();
+      const mem = vendorDispatcher.serializeMemory();
+      for (const nodeId of Object.keys(mem)) syncNodeToEngine(nodeId);
+      syncDhcpPools();
+      showToast('Import .mlab berhasil (topologi + konfigurasi)');
+    },
+    [showToast, syncDhcpPools, syncNodeToEngine]
+  );
 
   // Check tutorial on first visit (only for touch devices)
   useEffect(() => {
@@ -1097,6 +1131,38 @@ export default function App() {
 
     let responseText = '';
 
+    // /test — Automated Network Testing Laboratory: jalankan skenario di
+    // simulator segar (tanpa menyentuh topologi pengguna) dan tampilkan hasil.
+    if (/^\/test\b/.test(cmd.trim())) {
+      const args = cmd.trim().replace(/^\/test\s*/, '').trim();
+      const scenarios = findScenarios(LAB_SCENARIOS, args || undefined);
+      if (scenarios.length === 0) {
+        responseText = `NETWORK TEST\nNo scenario matches "${args}". Available categories: basic, switching, services, routing, security, ipv6, troubleshooting.`;
+      } else {
+        const summary = runLab(scenarios);
+        responseText = formatLabResult(summary);
+      }
+      const inputLog2: TerminalLog = {
+        id: String(Date.now() + 1),
+        nodeId,
+        text: cmd,
+        type: 'input',
+        timestamp: new Date().toLocaleTimeString()
+      };
+      const outputLog2: TerminalLog = {
+        id: String(Date.now() + 2),
+        nodeId,
+        text: responseText,
+        type: 'output',
+        timestamp: new Date().toLocaleTimeString()
+      };
+      setTerminalLogs((prev) => ({
+        ...prev,
+        [nodeId]: [...(prev[nodeId] || []), inputLog2, outputLog2]
+      }));
+      return;
+    }
+
     // AI Mentor — tanya AI dari terminal (/ai, /ask, /mentor, /diagnose, /hint, /learn, /fix, /summary)
     const aiText = tryAiMentor(cmd, vendor);
     if (aiText !== null) {
@@ -1159,6 +1225,7 @@ export default function App() {
         bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
         tcpProvider: () => simEngineRef.current.getTcpConnections(nodeId),
         arpProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.arp || [],
+        macTableProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.macTable || [],
         stpProvider: () => simEngineRef.current.getStpInfo(nodeId),
         wirelessProvider: () => simEngineRef.current.getWirelessInfo(nodeId),
         qosProvider: () => simEngineRef.current.getQosStats(nodeId),
@@ -1273,15 +1340,10 @@ export default function App() {
               StorageEngine.clearDeviceConfigs();
             }
           }}
-          onExportMlab={() => StorageEngine.exportProjectAsFile(project)}
-          onImportMlab={async (file) => {
-            try {
-              const imported = await StorageEngine.parseProjectFile(file);
-              setProject(imported);
-            } catch (err: any) {
-              alert(`Failed to import .mlab file: ${err.message}`);
-            }
-          }}
+          onExportMlab={() =>
+            StorageEngine.exportProjectAsFile(project, vendorDispatcher.serializeMemory())
+          }
+          onImportMlab={handleImportMlab}
           onOpenMonorepo={() => setIsMonorepoOpen(true)}
           onOpenTutorial={() => setIsTutorialOpen(true)}
           onOpenGrading={() => setIsGradingOpen(true)}
@@ -1317,15 +1379,10 @@ export default function App() {
               StorageEngine.clearDeviceConfigs();
             }
           }}
-          onExportMlab={() => StorageEngine.exportProjectAsFile(project)}
-          onImportMlab={async (file) => {
-            try {
-              const imported = await StorageEngine.parseProjectFile(file);
-              setProject(imported);
-            } catch (err: any) {
-              alert(`Failed to import .mlab file: ${err.message}`);
-            }
-          }}
+          onExportMlab={() =>
+            StorageEngine.exportProjectAsFile(project, vendorDispatcher.serializeMemory())
+          }
+          onImportMlab={handleImportMlab}
           onOpenMonorepo={() => setIsMonorepoOpen(true)}
           onOpenTutorial={() => setIsTutorialOpen(true)}
           onOpenGrading={() => setIsGradingOpen(true)}

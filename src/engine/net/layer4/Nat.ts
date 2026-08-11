@@ -32,24 +32,29 @@ export class NatTranslator {
     }
   }
 
-  /** Cari rule srcnat masquerade yang cocok untuk interface keluar. */
-  static srcnatRule(rules: NatRule[], outInterface: string): NatRule | null {
+  /** Cari rule srcnat masquerade yang cocok: chain, action, out-interface
+   *  dan (jika ada) src-address — paket yang tidak berasal dari subnet
+   *  rule TIDAK kena NAT (sesuai perilaku RouterOS). */
+  static srcnatRule(rules: NatRule[], outInterface: string, srcIp: string): NatRule | null {
     for (const r of rules) {
       if (r.chain !== 'srcnat') continue;
       if (r.action !== 'masquerade') continue;
       if (r.outInterface && r.outInterface !== outInterface) continue;
+      if (r.srcAddress && !addrInSpec(srcIp, r.srcAddress)) continue;
       return r;
     }
     return null;
   }
 
-  /** Cari rule dstnat untuk (dstIp, dstPort). */
-  static dstnatRule(rules: NatRule[], dstIp: string, dstPort: number, protocol: string): NatRule | null {
+  /** Cari rule dstnat untuk (dstIp, dstPort). Rule dengan src-address
+   *  hanya berlaku bila srcIp paket berada dalam subnet tsb. */
+  static dstnatRule(rules: NatRule[], dstIp: string, dstPort: number, protocol: string, srcIp?: string): NatRule | null {
     for (const r of rules) {
       if (r.chain !== 'dstnat') continue;
       if (!r.toAddresses) continue;
       if (r.protocol && r.protocol !== protocol && r.protocol !== 'any' && r.protocol !== 'ip') continue;
       if (r.dstAddress && !addrInSpec(dstIp, r.dstAddress)) continue;
+      if (r.srcAddress && (!srcIp || !addrInSpec(srcIp, r.srcAddress))) continue;
       if (r.dstPort && !portInRange(dstPort, r.dstPort)) continue;
       return r;
     }

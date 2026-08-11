@@ -10,8 +10,8 @@ import { RoutingTable } from '../layer3/RoutingTable';
 import { Ipv6RoutingTable } from '../layer3/Ipv6RoutingTable';
 import { NatTranslator } from '../layer4/Nat';
 import { AclRule, DeviceKind, DhcpPool, DnsRecord, NatRule, NetLease, NetRoute } from '../core/types';
-import { parseCidr, networkOf, intToIp } from '../core/ip';
-import { parseIpv6Cidr, ipv6NetworkString, inSameIpv6Subnet } from '../core/ipv6';
+import { parseCidr, networkOf, intToIp, isValidIp } from '../core/ip';
+import { parseIpv6Cidr, ipv6NetworkString, inSameIpv6Subnet, isIpv6Address } from '../core/ipv6';
 import { DEFAULT_STP_MODE, DEFAULT_STP_PRIORITY, StpBridgeState, StpConfig, StpPortState } from '../services/StpService';
 import { FhrpGroup } from '../services/FhrpService';
 import { WirelessIfaceCfg, WirelessProfileCfg, WirelessState } from '../services/WirelessService';
@@ -47,6 +47,9 @@ function defaultPortMac(deviceId: string, portId: string, portIndex: number): st
   ];
   return bytes.map((b) => b.toString(16).padStart(2, '0')).join(':');
 }
+
+/** Gateway khusus: blackhole (paket dibuang diam-diam). */
+export const DISCARD_GATEWAY = 'discard';
 
 export class NetworkDevice {
   readonly id: string;
@@ -86,7 +89,7 @@ export class NetworkDevice {
   aclRules: AclRule[] = [];
   natRules: NatRule[] = [];
   webServer: WebServerState | null = null;
-  routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[] }> = {};
+  routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[]; routerId?: string }> = {};
   bgpCfg: { asn: number; peers: { remoteAs: number; remoteAddr: string }[]; networks: string[] } | null = null;
   /** Agent SNMP (community, hidup/mati) — diisi via CLI + engine. */
   snmpAgent: SnmpAgentConfig | null = null;
@@ -208,8 +211,27 @@ export class NetworkDevice {
 
   private applyStaticRoutes(): void {
     for (const r of this.routes) {
-      if (r.kind === 'static') this.routing.addRoute(r);
+      if (r.kind === 'static') {
+        this.routing.addRoute({ ...r, active: this.staticRouteReachable(r.gateway) });
+      }
     }
+  }
+
+  /**
+   * Gateway statis dianggap dapat dijangkau bila berada di subnet titik-titik
+   * interface yang hidup (memenuhi kondisi ARP). Gateway di subnet yang tidak
+   * ada interface-nya → rute ditandai inactive (tetap tampil di print,
+   * tapi tidak dipakai lookup / tidak bisa meneruskan paket).
+   */
+  private staticRouteReachable(gateway: string | null): boolean {
+    if (!gateway) return true;
+    const parsed = parseCidr(gateway);
+    if (!parsed) return false;
+    for (const iface of this.interfaces.values()) {
+      if (!iface.ip || !iface.up) continue;
+      if (networkOf(gateway, iface.ip.prefix) === networkOf(iface.ip.address, iface.ip.prefix)) return true;
+    }
+    return false;
   }
 
   /** Route connected + statis untuk IPv6 (dipanggil setelah syncPorts/setIpv6ByName). */
@@ -224,9 +246,32 @@ export class NetworkDevice {
         kind: 'connected',
       });
     }
+    this.applyStaticRoutes6();
+  }
+
+  /** Terapkan semua rute statis IPv6 dengan flag aktif (mirip IPv4). */
+  applyStaticRoutes6(): void {
     for (const r of this.ipv6StaticRoutes) {
-      if (r.kind === 'static') this.ipv6Routing.addRoute(r);
+      if (r.kind === 'static') {
+        this.ipv6Routing.addRoute({ ...r, active: this.staticRouteReachable6(r.gateway) });
+      }
     }
+  }
+
+  /**
+   * Gateway statis IPv6 dianggap dapat dijangkau bila berada di subnet
+   * interface hidup. Gateway 'discard' = blackhole (selalu aktif, paket
+   * dibuang diam-diam). Gateway tidak valid / di subnet tanpa interface →
+   * rute inactive (tetap tampil di print, tidak dipakai lookup).
+   */
+  private staticRouteReachable6(gateway: string | null): boolean {
+    if (!gateway || gateway === DISCARD_GATEWAY) return true;
+    if (!isIpv6Address(gateway)) return false;
+    for (const iface of this.interfaces.values()) {
+      if (!iface.ipv6 || !iface.up) continue;
+      if (inSameIpv6Subnet(gateway, iface.ipv6.prefix, iface.ipv6.address)) return true;
+    }
+    return false;
   }
 
   /** Pasang alamat IPv6 pada interface (cidr: '2001:db8::1/64'). */
@@ -288,9 +333,10 @@ export class NetworkDevice {
     return true;
   }
 
-  addStaticRoute(dst: string, gateway: string): void {
-    this.routes.push({ dst, gateway, iface: null, kind: 'static' });
-    this.routing.addRoute({ dst, gateway, iface: null, kind: 'static' });
+  addStaticRoute(dst: string, gateway: string, distance?: number): void {
+    const norm = normalizeStaticRoute(dst, gateway, distance);
+    this.routes.push(norm);
+    this.routing.addRoute({ ...norm, active: this.staticRouteReachable(gateway) });
   }
 
   clearStaticRoutes(): void {
@@ -389,4 +435,16 @@ export class NetworkDevice {
 
 function ipNum(ip: string): number {
   return ip.split('.').reduce((acc, o) => (acc << 8) | parseInt(o, 10), 0) >>> 0;
+}
+
+/**
+ * Normalisasi rute statis: '0.0.0.0' tanpa prefix → default route /0 (bukan
+ * /24), dst berbentuk network+mask ('10.0.0.0 255.255.255.0') dinormalisasi.
+ */
+export function normalizeStaticRoute(dst: string, gateway: string | null, distance?: number): NetRoute {
+  const parsed = parseCidr(dst);
+  let normDst = dst;
+  if (dst.trim() === '0.0.0.0') normDst = '0.0.0.0/0';
+  else if (parsed) normDst = `${parsed.address}/${parsed.prefix}`;
+  return { dst: normDst, gateway, iface: null, kind: 'static', distance };
 }

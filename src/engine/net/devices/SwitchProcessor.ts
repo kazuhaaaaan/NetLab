@@ -11,6 +11,9 @@ import { isPortForwarding } from '../services/StpService';
 
 type NetIface = ReturnType<NetworkDevice['getInterfaces']>[number];
 
+/** Batas hop frame broadcast/unicast-unknown lewat switch (loop guard). */
+const L2_MAX_HOPS = 24;
+
 export class SwitchProcessor implements DeviceProcessor {
   constructor(private device: NetworkDevice) {}
 
@@ -19,6 +22,13 @@ export class SwitchProcessor implements DeviceProcessor {
     if (!dev.powered) {
       core.emit('PACKET_DROPPED', traceId, { reason: 'power' }, dev.id, inPort);
       core.drop(dev, pkt, 'power', traceId);
+      return;
+    }
+    // Perlindungan loop L2 (tanpa STP): frame yang berputar melebihi batas
+    // hop di-buang supaya topologi loop tidak menggantung simulasi.
+    if (pkt.hops.length > L2_MAX_HOPS) {
+      core.emit('PACKET_DROPPED', traceId, { reason: 'l2-loop' }, dev.id, inPort);
+      core.drop(dev, pkt, 'l2-loop', traceId);
       return;
     }
     const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
@@ -116,12 +126,12 @@ export class SwitchProcessor implements DeviceProcessor {
     if (sent === 0) core.drop(dev, pkt, 'flood-empty', traceId);
   }
 
-  private vlanAllows(frameVlan: number, iface: NetIface, trunkIn: boolean, dev: NetworkDevice): boolean {
+  private vlanAllows(frameVlan: number, iface: NetIface, _trunkIn: boolean, dev: NetworkDevice): boolean {
     if (dev.portVlans.size === 0 && dev.trunkPorts.size === 0) return true;
     if (dev.trunkPorts.has(iface.name)) return true; // trunk egress membawa semua VLAN
-    const inVlan = frameVlan;
-    const outVlan = dev.portVlans.get(iface.name) ?? 1;
-    if (trunkIn) return true; // ingress trunk → egress bebas
-    return inVlan === outVlan;
+    // Egress port access/akses: frame hanya boleh keluar bila VLAN-nya cocok
+    // dengan access-VLAN port (berlaku juga untuk frame bertag dari trunk).
+    const outVlan = dev.portVlans.get(iface.name) ?? iface.vlanId ?? 1;
+    return frameVlan === outVlan;
   }
 }

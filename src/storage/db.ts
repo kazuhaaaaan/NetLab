@@ -1,10 +1,15 @@
 import { LabProject } from '../types';
+import { validateProject, unwrapProjectFile, ValidationError } from '../utils/projectValidation';
 
 const DB_NAME = 'MikroLabDB';
 const DB_VERSION = 2;
 const STORE_PROJECTS = 'projects';
 const STORE_DEVICE_CONFIGS = 'device_configs';
 const TUTORIAL_KEY = 'mikrolab_seen_tutorial';
+
+export type ImportResult =
+  | { success: true; project: LabProject; deviceConfigs?: Record<string, any> }
+  | { success: false; error: { code: string; message: string; path: string } };
 
 export class StorageEngine {
   private static dbPromise: Promise<IDBDatabase> | null = null;
@@ -62,8 +67,13 @@ export class StorageEngine {
     }
   }
 
-  public static exportProjectAsFile(project: LabProject): void {
-    const jsonStr = JSON.stringify(project, null, 2);
+  /** Export proyek + konfigurasi CLI perangkat sebagai satu file .mlab. */
+  public static exportProjectAsFile(project: LabProject, deviceConfigs?: Record<string, any>): void {
+    const payload =
+      deviceConfigs && Object.keys(deviceConfigs).length > 0
+        ? { format: 'netlab-mlab', version: '1.0', project, deviceConfigs }
+        : project;
+    const jsonStr = JSON.stringify(payload, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -75,21 +85,32 @@ export class StorageEngine {
     URL.revokeObjectURL(url);
   }
 
-  public static parseProjectFile(file: File): Promise<LabProject> {
-    return new Promise((resolve, reject) => {
+  /**
+   * Import file .mlab dengan validasi penuh.
+   * - JSON tidak valid → error INVALID_JSON
+   * - struktur/schema salah → error terstruktur { code, message, path }
+   * - wrapper { project, deviceConfigs } → CLI state ikut di-restore
+   */
+  public static parseProjectFile(file: File): Promise<ImportResult> {
+    return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = (e) => {
+        let parsed: any;
         try {
-          const parsed = JSON.parse(e.target?.result as string);
-          if (!parsed.nodes || !parsed.edges) {
-            throw new Error('Invalid .mlab format: Missing topology nodes/edges');
-          }
-          resolve(parsed as LabProject);
-        } catch (err) {
-          reject(err);
+          parsed = JSON.parse(e.target?.result as string);
+        } catch {
+          resolve({ success: false, error: { code: 'INVALID_JSON', message: 'File bukan JSON yang valid', path: '$' } });
+          return;
         }
+        const { project, deviceConfigs } = unwrapProjectFile(parsed);
+        const res = validateProject(project);
+        if ('error' in res) {
+          resolve({ success: false, error: res.error });
+          return;
+        }
+        resolve({ success: true, project: res.project as LabProject, deviceConfigs });
       };
-      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.onerror = () => resolve({ success: false, error: { code: 'READ_ERROR', message: 'Failed to read file', path: '$' } });
       reader.readAsText(file);
     });
   }

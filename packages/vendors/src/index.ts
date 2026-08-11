@@ -121,7 +121,7 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
       return { action: 'add_ip', target, payload: { raw: rawInput, ast, ip: ast.kwargs['address'], iface: ast.kwargs['interface'] } };
     }
     if (action === 'add' && target === 'ip_route') {
-      return { action: 'add_route', target, payload: { raw: rawInput, ast, dst: ast.kwargs['dst-address'], gw: ast.kwargs['gateway'] } };
+      return { action: 'add_route', target, payload: { raw: rawInput, ast, dst: ast.kwargs['dst-address'], gw: ast.kwargs['gateway'], distance: ast.kwargs['distance'] } };
     }
     if (action === 'add' && target === 'routing_bgp_instance') {
       return { action: 'bgp_instance_add', target, payload: { raw: rawInput, ast, as: ast.kwargs['as'], routerId: ast.kwargs['router-id'] } };
@@ -320,6 +320,8 @@ export class CiscoVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_lldp_neighbors', target: 'ios', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'ospf') && isPrefix(subs[2], 'neighbor')) return { action: 'show_ospf_neighbor', target: 'ios', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'tcp') && isPrefix(subs[1], 'brief')) return { action: 'show_tcp_brief', target: 'ios', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'mac') && isPrefix(subs[1], 'address-table')) return { action: 'show_mac_table', target: 'ios', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'arp')) return { action: 'show_ip_arp', target: 'ios', payload: { raw: rawInput, ast } };
     }
     if (isPrefix(action, 'configure') || isPrefix(action, 'conf')) return { action: 'configure_terminal', target: 'ios', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'enable') || isPrefix(action, 'en')) return { action: 'enable', target: 'ios', payload: { raw: rawInput, ast } };
@@ -475,6 +477,18 @@ export class CiscoVendorAdapter implements IVendorAdapter {
         rows,
       ].join('\n');
     }
+    if (cmdResult.type === 'mac_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'Mac Address Table\n-------------------------------------------\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n';
+      const rows = entries.map((e: any) => `${String(e.vlan ?? 1).padEnd(7)} ${e.mac.padEnd(16)} DYNAMIC     ${e.port}`).join('\n');
+      return 'Mac Address Table\n-------------------------------------------\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n' + rows;
+    }
+    if (cmdResult.type === 'arp_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'Protocol  Address          Age (min)  Hardware Addr   Type   Interface\n';
+      const rows = entries.map((e: any) => `Internet  ${e.ip.padEnd(15)} -          ${e.mac.padEnd(15)} ARPA   Vlan1`).join('\n');
+      return 'Protocol  Address          Age (min)  Hardware Addr   Type   Interface\n' + rows;
+    }
     if (cmdResult.type === 'show_stp') {
       if (cmdResult.ports && cmdResult.ports.length > 0) {
         const modeLabel = cmdResult.mode === 'rapid-pvst' ? 'rapid-pvst' : cmdResult.mode === 'pvst' ? 'ieee (pvst)' : 'ieee';
@@ -548,6 +562,8 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'version')) return { action: 'show_version', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'cdp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_cdp_neighbors', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_lldp_neighbors', target: 'nxos', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'mac') && isPrefix(subs[1], 'address-table')) return { action: 'show_mac_table', target: 'nxos', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'arp')) return { action: 'show_ip_arp', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'ospf') && isPrefix(subs[2], 'neighbor')) return { action: 'show_ospf_neighbor', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'tcp') && isPrefix(subs[1], 'brief')) return { action: 'show_tcp_brief', target: 'nxos', payload: { raw: rawInput, ast } };
     }
@@ -579,6 +595,18 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
         '---- -------------------------------- --------- -------------------------------',
         rows,
       ].join('\n');
+    }
+    if (cmdResult.type === 'mac_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'Legend:\n\t* - primary entry\n\nVlan    Mac Address       Type        Age    Secure NTFY Ports\n----    -----------       --------    ---    ------ ---- -----\n';
+      const rows = entries.map((e: any) => `${String(e.vlan ?? 1).padEnd(7)} ${e.mac.padEnd(16)} dynamic     -      -      -    ${e.port}`).join('\n');
+      return 'Vlan    Mac Address       Type        Age    Secure NTFY Ports\n----    -----------       --------    ---    ------ ---- -----\n' + rows;
+    }
+    if (cmdResult.type === 'arp_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'Flags: * - Adjacencies learnt on non-active FHRP interface\nIP ARP Adjacency Table\n';
+      const rows = entries.map((e: any) => `* ${e.ip.padEnd(15)}  ${e.mac.padEnd(17)} Vlan1`).join('\n');
+      return 'Flags: * - Adjacencies learnt on non-active FHRP interface\nIP ARP Adjacency Table\n' + rows;
     }
     if (cmdResult.type === 'show_version') {
       return 'Cisco Nexus Operating System (NX-OS) Software\nTAC support: http://www.cisco.com/tac\nNX-OS version: 9.3(8)\n';
@@ -748,6 +776,8 @@ export class HuaweiVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'version')) return { action: 'display_version', target: 'vrp', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'ospf') && isPrefix(subs[1], 'peer')) return { action: 'display_ospf_peer', target: 'vrp', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbor')) return { action: 'show_lldp_neighbors', target: 'vrp', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'mac-address')) return { action: 'display_mac', target: 'vrp', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'arp')) return { action: 'display_arp', target: 'vrp', payload: { raw: rawInput, ast } };
     }
     if (isPrefix(action, 'system-view') || isPrefix(action, 'sys')) return { action: 'system_view', target: 'vrp', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'vrp', payload: { raw: rawInput, ast, host: subs[0] } };
@@ -776,6 +806,18 @@ export class HuaweiVendorAdapter implements IVendorAdapter {
         'DRAM Memory Size    : 1024 M bytes',
         'Flash Memory Size   : 256 M bytes',
       ].join('\n');
+    }
+    if (cmdResult.type === 'display_mac' || cmdResult.type === 'mac_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'Warning: The Mac address table is empty.\n';
+      const rows = entries.map((e: any) => `${e.mac.padEnd(18)} dynamic     ${String(e.vlan ?? 1).padEnd(6)} ${e.port}`).join('\n');
+      return 'MAC address table (dynamic):\n-------------------------------------------------\nMAC               Type        VLAN    Port\n-------------------------------------------------\n' + rows + '\n-------------------------------------------------\n';
+    }
+    if (cmdResult.type === 'display_arp' || cmdResult.type === 'arp_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return '  IP ADDRESS      MAC ADDRESS     EXPIRE(M) TYPE INTERFACE\n  --------------- --------------- ---------- ----------- ---------\n';
+      const rows = entries.map((e: any) => `  ${e.ip.padEnd(15)} ${e.mac.padEnd(15)} 20          I        -`).join('\n');
+      return '  IP ADDRESS      MAC ADDRESS     EXPIRE(M) TYPE INTERFACE\n  --------------- --------------- ---------- ----------- ---------\n' + rows;
     }
     if (cmdResult.type === 'system_view') return '[Huawei]';
     if (cmdResult.type === 'save') return 'The current configuration will be written to the device.\nAre you sure to continue?[Y/N]y\nInfo: Please input the file name ( *.cfg, *.zip ) [vrpcfg.zip]:\nNow saving the current configuration to the slot 0.\nSave the configuration successfully.';
@@ -1010,6 +1052,8 @@ export class ArubaVendorAdapter implements IVendorAdapter {
       if (isPrefix(subs[0], 'lldp') && isPrefix(subs[1], 'neighbors')) return { action: 'show_lldp_neighbors', target: 'cx', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'ospf') && isPrefix(subs[2], 'neighbor')) return { action: 'show_ospf_neighbor', target: 'cx', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'tcp') && isPrefix(subs[1], 'brief')) return { action: 'show_tcp_brief', target: 'cx', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'mac') && isPrefix(subs[1], 'address-table')) return { action: 'show_mac_table', target: 'cx', payload: { raw: rawInput, ast } };
+      if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'arp')) return { action: 'show_ip_arp', target: 'cx', payload: { raw: rawInput, ast } };
     }
     if (isPrefix(action, 'configure') || isPrefix(action, 'conf')) return { action: 'configure_terminal', target: 'cx', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'cx', payload: { raw: rawInput, ast, host: subs[0] } };
@@ -1030,6 +1074,18 @@ export class ArubaVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'show_version') {
       return 'ArubaOS-CX 10.13.1000\nArubaOS-CX (build 2024010101)\nCopyright (C) 2024 Hewlett Packard Enterprise Development LP\nModel: 6300M-48G4X\nSerial Number: SG11KKQ001';
+    }
+    if (cmdResult.type === 'mac_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'VLAN      MAC               Type       Port\n--------  ----------------  ---------  ----\n';
+      const rows = entries.map((e: any) => `${String(e.vlan ?? 1).padEnd(10)} ${e.mac.padEnd(16)} dynamic    ${e.port}`).join('\n');
+      return 'VLAN      MAC               Type       Port\n--------  ----------------  ---------  ----\n' + rows;
+    }
+    if (cmdResult.type === 'arp_table') {
+      const entries = cmdResult.entries || [];
+      if (entries.length === 0) return 'IPv4 Address      MAC Address       Type        Port\n----------------  ----------------  ----------  ----\n';
+      const rows = entries.map((e: any) => `${e.ip.padEnd(17)} ${e.mac.padEnd(16)} dynamic    Vlan1`).join('\n');
+      return 'IPv4 Address      MAC Address       Type        Port\n----------------  ----------------  ----------  ----\n' + rows;
     }
     if (cmdResult.type === 'ping') {
       const host = cmdResult.host || '192.168.1.1';
@@ -2418,7 +2474,8 @@ export class VendorDispatcher {
       if (ifaceRaw) {
         const iface = resolveIfaceName(context?.ports, ifaceRaw) || ifaceRaw;
         const cost = parseInt(raw.match(/cost=(\d+)/i)?.[1] || '0', 10);
-        if (cost >= 1) mem.routing.ospf.interfaceCosts[iface] = cost;
+        if (cost >= 1 && cost <= 65535) mem.routing.ospf.interfaceCosts[iface] = cost;
+        else cmdResult = { raw: '% failure: cost must be in range 1..65535' };
         if (/passive=(?:yes|true)/i.test(raw) && !mem.routing.ospf.passiveInterfaces.includes(iface)) {
           mem.routing.ospf.passiveInterfaces.push(iface);
         }
@@ -2467,6 +2524,8 @@ export class VendorDispatcher {
         const cur = mem.portSecurity[mem.currentIface] || {};
         mem.portSecurity[mem.currentIface] = { ...cur, limit, sticky: !!cur.sticky };
         cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Error: the number of secure MAC addresses is out of range (1-132)' };
       }
     } else if (/^switchport\s+port-security\s+mac-address\s+sticky/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       const cur = mem.portSecurity[mem.currentIface] || {};
@@ -2714,13 +2773,18 @@ export class VendorDispatcher {
       // MikroTik: "/interface vlan add name=vlan10 vlan-id=10 interface=ether2"
       const raw = rawInput.trim();
       const name = raw.match(/name=(\S+)/i)?.[1];
-      const id = raw.match(/vlan-id=(\d+)/i)?.[1];
+      const idRaw = raw.match(/vlan-id=(\d+)/i)?.[1];
       const iface = raw.match(/interface=(\S+)/i)?.[1];
-      if (name && id) {
-        mem.vlans.push({ id, name, iface: resolveIfaceName(context?.ports, iface) || iface });
-        // VLAN interfaces act as subinterfaces on their parent port (router-on-a-stick)
-        upsertSubinterface(mem, name, resolveIfaceName(context?.ports, iface) || iface, parseInt(id, 10));
-        cmdResult = { raw: '' };
+      const id = idRaw ? parseInt(idRaw, 10) : NaN;
+      if (name && idRaw) {
+        if (!(id >= 1 && id <= 4094)) {
+          cmdResult = { raw: `% failure: vlan-id must be in range 1..4094 (got ${idRaw})` };
+        } else {
+          mem.vlans.push({ id: String(id), name, iface: resolveIfaceName(context?.ports, iface) || iface });
+          // VLAN interfaces act as subinterfaces on their parent port (router-on-a-stick)
+          upsertSubinterface(mem, name, resolveIfaceName(context?.ports, iface) || iface, id);
+          cmdResult = { raw: '' };
+        }
       } else {
         cmdResult = { raw: '% Usage: /interface vlan add name=<nama> vlan-id=<id> interface=<port>' };
       }
@@ -2728,27 +2792,45 @@ export class VendorDispatcher {
       // Cisco IOS / NX-OS / Aruba: "vlan <id>" (+ optional "name <x>")
       const m = rawInput.trim().match(/^vlan\s+(\d+)/i);
       if (m) {
-        const id = m[1];
-        const nameMatch = rawInput.trim().match(/name\s+(\S+)/i);
-        const existing = mem.vlans.find((v: any) => v.id === id);
-        if (existing) existing.name = nameMatch?.[1] || existing.name;
-        else mem.vlans.push({ id, name: nameMatch?.[1] || `VLAN${id}` });
-        cmdResult = { raw: '' };
+        const idRaw = m[1];
+        const idNum = parseInt(idRaw, 10);
+        if (!(idNum >= 1 && idNum <= 4094)) {
+          cmdResult = { raw: `% Invalid input detected at '^' marker.\n% VLAN ID must be in range 1..4094` };
+        } else {
+          const id = idRaw;
+          const nameMatch = rawInput.trim().match(/name\s+(\S+)/i);
+          const existing = mem.vlans.find((v: any) => v.id === id);
+          if (existing) existing.name = nameMatch?.[1] || existing.name;
+          else mem.vlans.push({ id, name: nameMatch?.[1] || `VLAN${id}` });
+          cmdResult = { raw: '' };
+        }
       }
     } else if (/^vlan\s+(\d+)/i.test(rawInput.trim()) && vendorId === 'huawei') {
       // Huawei: "vlan <id>" (dari system view)
       const m = rawInput.trim().match(/^vlan\s+(\d+)/i);
       if (m) {
-        const id = m[1];
-        if (!mem.vlans.find((v: any) => v.id === id)) mem.vlans.push({ id, name: `VLAN${id}` });
-        cmdResult = { raw: '' };
+        const idRaw = m[1];
+        const idNum = parseInt(idRaw, 10);
+        if (!(idNum >= 1 && idNum <= 4094)) {
+          cmdResult = { raw: '% Error: Invalid VLAN ID, it should be 1 to 4094.' };
+        } else if (!mem.vlans.find((v: any) => v.id === idRaw)) {
+          mem.vlans.push({ id: idRaw, name: `VLAN${idRaw}` });
+          cmdResult = { raw: '' };
+        } else {
+          cmdResult = { raw: '' };
+        }
       }
     } else if (/^set\s+vlans\s+(\S+)\s+vlan-id\s+(\d+)/i.test(rawInput.trim()) && (vendorId === 'juniper' || vendorId === 'ubiquiti' || vendorId === 'vyos')) {
       // Juniper / EdgeOS / VyOS: "set vlans <name> vlan-id <id>"
       const m = rawInput.trim().match(/^set\s+vlans\s+(\S+)\s+vlan-id\s+(\d+)/i);
       if (m) {
-        mem.vlans.push({ id: m[2], name: m[1] });
-        cmdResult = { raw: '' };
+        const idNum = parseInt(m[2], 10);
+        if (!(idNum >= 1 && idNum <= 4094)) {
+          cmdResult = { raw: 'error: vlan-id out of range (1..4094)' };
+        } else {
+          mem.vlans.push({ id: m[2], name: m[1] });
+          cmdResult = { raw: '' };
+        }
       }
     } else if (/^uci\s+set\s+network\.(\S+)\.vlan=(\d+)/i.test(rawInput.trim()) && vendorId === 'openwrt') {
       // OpenWrt: "uci set network.vlan10.vlan=10"
@@ -2856,6 +2938,31 @@ export class VendorDispatcher {
         cmdResult = { raw: '' };
       } else {
         cmdResult = { raw: '% Usage: /ip dhcp-server add name=<nama> interface=<port> address-pool=<pool>' };
+      }
+    } else if (/^\/ip\s+dhcp-server\s+set\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
+      // MikroTik: "/ip dhcp-server set dhcp1 disabled=yes" — nonaktifkan server → tidak melayani lease
+      const raw = rawInput.trim();
+      const name = raw.match(/^\/ip\s+dhcp-server\s+set\s+(\S+)/i)?.[1];
+      const disabled = /disabled=yes/i.test(raw) ? true : /disabled=no/i.test(raw) ? false : undefined;
+      if (name && disabled !== undefined) {
+        const pool = mem.dhcpPools.find((p: any) => p.name === name);
+        if (pool) {
+          pool.disabled = disabled;
+          cmdResult = { raw: '' };
+        } else {
+          cmdResult = { raw: `% Error: dhcp-server '${name}' tidak ditemukan (lihat /ip dhcp-server print)` };
+        }
+      } else {
+        cmdResult = { raw: '% Usage: /ip dhcp-server set <nama> disabled=yes|no' };
+      }
+    } else if (/^ip\s+dhcp\s+excluded-address\s+(\d+\.\d+\.\d+\.\d+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco: "ip dhcp excluded-address 10.0.0.50 [10.0.0.60]" — alamat tidak dilease ke siapa pun
+      const m = rawInput.trim().match(/^ip\s+dhcp\s+excluded-address\s+(\d+\.\d+\.\d+\.\d+)(?:\s+(\d+\.\d+\.\d+\.\d+))?/i);
+      if (m) {
+        const excl = mem.dhcpExcluded || (mem.dhcpExcluded = []);
+        excl.push(m[1]);
+        if (m[2]) excl.push(m[2]);
+        cmdResult = { raw: '' };
       }
     } else if (/^ip\s+dhcp\s+pool\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco: "ip dhcp pool <nama>" — selanjutnya "network" & "default-router"
@@ -3162,10 +3269,26 @@ export class VendorDispatcher {
     } else if (/^spanning-tree\s+vlan\s+\d+\s+priority\s+\d+/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco: "spanning-tree vlan 1 priority 4096"
       const m = rawInput.trim().match(/^spanning-tree\s+vlan\s+\d+\s+priority\s+(\d+)/i);
-      mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
-      mem.stp.priority = m ? parseInt(m[1], 10) : 32768;
-      mem.stp.enabled = true;
-      cmdResult = { raw: '' };
+      const p = m ? parseInt(m[1], 10) : NaN;
+      if (p >= 0 && p <= 61440 && p % 4096 === 0) {
+        mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+        mem.stp.priority = p;
+        mem.stp.enabled = true;
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Error: Priority must be a multiple of 4096 in range 0..61440' };
+      }
+    } else if (/^stp\s+priority\s+(\d+)/i.test(rawInput.trim()) && vendorId === 'huawei' && mem.currentIface === '') {
+      // Huawei: "stp priority <0-61440>" (system view)
+      const p = parseInt(rawInput.trim().match(/^stp\s+priority\s+(\d+)/i)?.[1] || '32768', 10);
+      if (p >= 0 && p <= 61440 && p % 4096 === 0) {
+        mem.stp = mem.stp || { enabled: true, priority: 32768, mode: 'rstp' };
+        mem.stp.priority = p;
+        mem.stp.enabled = true;
+        cmdResult = { raw: '' };
+      } else {
+        cmdResult = { raw: '% Error: The bridge priority should be a multiple of 4096 in range 0-61440.' };
+      }
     } else if (/^spanning-tree\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco: "spanning-tree portfast"/"spanning-tree uplinkfast" → diterima (simplifikasi)
       cmdResult = { raw: '' };
@@ -3212,17 +3335,32 @@ export class VendorDispatcher {
       }
       const cm = rawInput.trim().match(/interface\s+(\S+)\s+cost\s+(\d+)/i);
       if (cm && proto === 'ospf') {
-        mem.routing.ospf.interfaceCosts[resolveIfaceName(context?.ports, cm[1]) || cm[1]] = parseInt(cm[2], 10);
+        const cost = parseInt(cm[2], 10);
+        if (cost >= 1 && cost <= 65535) {
+          mem.routing.ospf.interfaceCosts[resolveIfaceName(context?.ports, cm[1]) || cm[1]] = cost;
+        } else {
+          cmdResult = { raw: 'cost value must be in range 1..65535' };
+        }
       }
-      cmdResult = { raw: '' };
+      if (cmdResult === undefined) cmdResult = { raw: '' };
     } else if (/^switchport\s+(mode\s+access|access\s+vlan\s+\d+)$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco switch: "switchport mode access" / "switchport access vlan 10"
       const vlan = rawInput.trim().match(/access\s+vlan\s+(\d+)/i)?.[1];
-      if (vlan) mem.portVlans[mem.currentIface] = parseInt(vlan, 10);
-      if (rawInput.trim().match(/mode\s+access/i)) {
+      if (vlan) {
+        const v = parseInt(vlan, 10);
+        if (!(v >= 1 && v <= 4094)) {
+          cmdResult = { raw: `% Invalid input detected at '^' marker.\n% VLAN ID must be in range 1..4094` };
+        } else {
+          mem.portVlans[mem.currentIface] = v;
+          if (rawInput.trim().match(/mode\s+access/i)) {
+            mem.trunkPorts = (mem.trunkPorts || []).filter((t: string) => t !== mem.currentIface);
+          }
+          cmdResult = { raw: '' };
+        }
+      } else {
         mem.trunkPorts = (mem.trunkPorts || []).filter((t: string) => t !== mem.currentIface);
+        cmdResult = { raw: '' };
       }
-      cmdResult = { raw: '' };
     } else if (/^switchport\s+(mode\s+trunk|trunk\s+allowed\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco switch: "switchport mode trunk" — port carries every VLAN
       pushTrunk(mem, mem.currentIface);
@@ -3230,11 +3368,21 @@ export class VendorDispatcher {
     } else if (/^port\s+(link-type\s+access|default\s+vlan\s+\d+)$/i.test(rawInput.trim()) && mem.currentIface && vendorId === 'huawei') {
       // Huawei switch: "port link-type access" / "port default vlan 10"
       const vlan = rawInput.trim().match(/default\s+vlan\s+(\d+)/i)?.[1];
-      if (vlan) mem.portVlans[mem.currentIface] = parseInt(vlan, 10);
-      if (rawInput.trim().match(/link-type\s+access/i)) {
+      if (vlan) {
+        const v = parseInt(vlan, 10);
+        if (!(v >= 1 && v <= 4094)) {
+          cmdResult = { raw: '% Error: Invalid VLAN ID, it should be 1 to 4094.' };
+        } else {
+          mem.portVlans[mem.currentIface] = v;
+          if (rawInput.trim().match(/link-type\s+access/i)) {
+            mem.trunkPorts = (mem.trunkPorts || []).filter((t: string) => t !== mem.currentIface);
+          }
+          cmdResult = { raw: '' };
+        }
+      } else {
         mem.trunkPorts = (mem.trunkPorts || []).filter((t: string) => t !== mem.currentIface);
+        cmdResult = { raw: '' };
       }
-      cmdResult = { raw: '' };
     } else if (/^port\s+(link-type\s+trunk|trunk\s+allow-pass\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && vendorId === 'huawei') {
       // Huawei switch: "port link-type trunk" / "port trunk allow-pass vlan 10 20"
       pushTrunk(mem, mem.currentIface);
@@ -3410,18 +3558,31 @@ export class VendorDispatcher {
     } else if (normalized.action === 'add_route') {
       const { dst, gw } = normalized.payload as any;
       if (dst && gw) {
-        mem.routes.push({ dst, gateway: gw, distance: 1 });
+        const rawDist = parseInt(String((normalized.payload as any)?.distance ?? 1), 10);
+        const distance = Number.isFinite(rawDist) && rawDist >= 1 ? Math.floor(rawDist) : 1;
+        mem.routes.push({ dst, gateway: gw, distance });
         cmdResult = { raw: '' };
       } else {
         cmdResult = { raw: '% Error: missing dst-address or gateway' };
       }
     } else if (normalized.action === 'bgp_instance_add' || normalized.action === 'bgp_router') {
       const { as, routerId } = normalized.payload as any;
-      if (as) mem.bgp.asn = parseInt(String(as), 10);
-      if (routerId) mem.bgp.routerId = routerId;
-      mem.currentProto = 'bgp';
-      mem.currentDhcpPool = '';
-      cmdResult = { raw: '' };
+      if (as) {
+        const asn = parseInt(String(as), 10);
+        if (!(asn >= 1 && asn <= 4294967295)) {
+          cmdResult = { raw: `% Error: invalid autonomous system number ${as}` };
+        } else {
+          mem.bgp.asn = asn;
+          if (routerId) mem.bgp.routerId = routerId;
+          mem.currentProto = 'bgp';
+          mem.currentDhcpPool = '';
+          cmdResult = { raw: '' };
+        }
+      } else {
+        mem.currentProto = 'bgp';
+        mem.currentDhcpPool = '';
+        cmdResult = { raw: '' };
+      }
     } else if (normalized.action === 'bgp_peer_add') {
       const { remoteAs, remoteAddr, name } = normalized.payload as any;
       if (remoteAs && remoteAddr) {
@@ -3458,6 +3619,12 @@ export class VendorDispatcher {
       cmdResult = { type: 'tcp_print', connections: typeof context.tcpProvider === 'function' ? context.tcpProvider() : [] };
     } else if (normalized.action === 'ip_neigh') {
       cmdResult = { type: 'ip_neigh', entries: typeof context.arpProvider === 'function' ? context.arpProvider() : [] };
+    } else if (normalized.action === 'show_mac_table' || normalized.action === 'display_mac') {
+      cmdResult = { type: 'mac_table', entries: typeof context.macTableProvider === 'function' ? context.macTableProvider() : [] };
+    } else if (normalized.action === 'show_arp_table' || normalized.action === 'display_arp') {
+      cmdResult = { type: 'arp_table', entries: typeof context.arpProvider === 'function' ? context.arpProvider() : [] };
+    } else if (normalized.action === 'show_ip_arp') {
+      cmdResult = { type: 'arp_table', entries: typeof context.arpProvider === 'function' ? context.arpProvider() : [] };
     } else if (
       normalized.action === 'ip_address_print' ||
       (normalized.target === 'ip_address' && normalized.action === 'print')
@@ -3487,7 +3654,7 @@ export class VendorDispatcher {
       const connectedRoutes = (mergeIps(context?.ports, mem.configuredIps) || [])
         .filter((p: any) => p.ipAddress)
         .map((p: any) => ({ dst: p.ipAddress, iface: p.name, gateway: '', prefSrc: p.ipAddress?.split('/')[0], kind: 'connected' }));
-      const staticRoutes = mem.routes.map((r: any) => ({ dst: r.dst, iface: '', gateway: r.gateway || '', prefSrc: '', kind: 'static' }));
+      const staticRoutes = mem.routes.map((r: any) => ({ dst: r.dst, iface: '', gateway: r.gateway || '', prefSrc: '', kind: 'static', distance: r.distance }));
       const dynamic = dynamicRoutes
         .filter((r: any) => r.kind === 'dynamic')
         .map((r: any) => ({ dst: r.dst, iface: r.iface || '', gateway: r.gateway || '', prefSrc: '', kind: 'dynamic' }));
@@ -3555,7 +3722,8 @@ export class VendorDispatcher {
           : { raw: 'error: no configuration to roll back' };
         if (snap) this.restoreJuniper(mem, snap);
       } else {
-        cmdResult = { type: 'commit' };
+        // Command VyOS yang tidak dikenali: JANGAN pura-pura sukses.
+        cmdResult = { raw: '% Command not supported by NetLab simulator (vyos)' };
       }
     } else if (normalized.action === 'commit') {
       cmdResult = { type: 'commit' };
@@ -4015,7 +4183,13 @@ function fortinetCommand(raw: string, context: any, mem: any): any {
         return { raw: '' };
       }
     }
-    m = t.match(/^set\s+(mode|ntp-sync|lease-time|timezone-option)\s+/i);
+    m = t.match(/^set\s+lease-time\s+(\d+)/i);
+    if (m && !mem.fortiInRange) {
+      const seconds = parseInt(m[1], 10);
+      if (seconds > 0) pool.leaseTimeMs = seconds * 1000;
+      return { raw: '' };
+    }
+    m = t.match(/^set\s+(mode|ntp-sync|timezone-option)\s+/i);
     if (m) return { raw: '' };
     return undefined;
   }
@@ -4078,7 +4252,11 @@ function fortinetCommand(raw: string, context: any, mem: any): any {
     }
     let m = t.match(/^set\s+as\s+(\d+)/i);
     if (m) {
-      mem.bgp.asn = parseInt(m[1], 10);
+      const asn = parseInt(m[1], 10);
+      if (!(asn >= 1 && asn <= 4294967295)) {
+        return { raw: '% Error: invalid autonomous system number' };
+      }
+      mem.bgp.asn = asn;
       return { raw: '' };
     }
     m = t.match(/^set\s+router-id\s+(\S+)/i);
@@ -4381,7 +4559,11 @@ function juniperCommand(raw: string, context: any, mem: any): any {
   // BGP
   m = t.match(/^set\s+routing-options\s+autonomous-system\s+(\d+)/i);
   if (m) {
-    mem.bgp.asn = parseInt(m[1], 10);
+    const asn = parseInt(m[1], 10);
+    if (!(asn >= 1 && asn <= 4294967295)) {
+      return { raw: 'error: invalid autonomous system number' };
+    }
+    mem.bgp.asn = asn;
     return { raw: '' };
   }
   m = t.match(/^set\s+routing-options\s+router-id\s+(\S+)/i);
@@ -4636,6 +4818,9 @@ function vyosCommand(raw: string, context: any, mem: any): any {
   // BGP
   m = t.match(/^set\s+protocols\s+bgp\s+(\d+)\s+parameters\s+router-id\s+(\S+)/i);
   if (m) {
+    if (!(parseInt(m[1], 10) >= 1 && parseInt(m[1], 10) <= 4294967295)) {
+      return { raw: 'set failed: invalid ASN' };
+    }
     mem.bgp.asn = parseInt(m[1], 10);
     mem.bgp.routerId = m[2];
     return { raw: '' };

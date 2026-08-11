@@ -11,6 +11,10 @@ export interface LeaseGrant {
   gateway: string;
   prefix: number;
   poolNodeId: string;
+  /** DNS server pool (option 6) yang dikirim ke klien. */
+  dnsServers?: string[];
+  /** lama lease (ms) sesuai config pool. */
+  leaseTimeMs?: number;
 }
 
 const LEASE_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -20,6 +24,8 @@ export function findServingPool(server: NetworkDevice, inPort: string): DhcpPool
   const inIface = server.getIfaceByPortId(inPort) || server.getIfaceByName(inPort);
   const portName = inIface?.name || inPort;
   for (const pool of server.dhcpPools) {
+    // Server/pool dinonaktifkan (disabled=yes) tidak melayani lease.
+    if (pool.disabled) continue;
     if (pool.iface && pool.iface !== portName) continue;
     if (pool.iface) return pool;
     if (pool.network) {
@@ -56,13 +62,13 @@ export function allocateIp(
       const end = ipToInt(m[2]);
       for (let n = start; n <= end; n++) {
         const ip = intToIp(n);
-        if (ip === gateway || usedIps.has(ip)) continue;
+        if (ip === gateway || usedIps.has(ip) || isExcluded(pool, ip)) continue;
         return { ip, prefix, gateway };
       }
       return null;
     }
     const single = pool.range.trim();
-    if (single !== gateway && !usedIps.has(single)) {
+    if (single !== gateway && !usedIps.has(single) && !isExcluded(pool, single)) {
       return { ip: single, prefix, gateway };
     }
     return null;
@@ -86,7 +92,7 @@ export function allocateIp(
     const last = hostBits === 1 ? 1 : 2 ** hostBits - 2;
     for (let n = base + first; n <= base + last; n++) {
       const ip = intToIp(n);
-      if (ip === gw || usedIps.has(ip)) continue;
+      if (ip === gw || usedIps.has(ip) || isExcluded(pool, ip)) continue;
       return { ip, prefix: parsed.prefix, gateway: gw };
     }
     return null;
@@ -95,10 +101,17 @@ export function allocateIp(
   return null;
 }
 
+/** true bila alamat masuk daftar excluded pool (Cisco excluded-address). */
+function isExcluded(pool: DhcpPool, ip: string): boolean {
+  const excluded = pool.excluded || [];
+  return excluded.includes(ip);
+}
+
 export function buildLease(
   clientIface: string,
   grant: LeaseGrant,
-  now: number
+  now: number,
+  leaseTimeMs?: number
 ): NetLease {
   return {
     ip: grant.ip,
@@ -106,7 +119,7 @@ export function buildLease(
     prefix: grant.prefix,
     poolNodeId: grant.poolNodeId,
     iface: clientIface,
-    expiresAt: now + LEASE_DURATION_MS,
+    expiresAt: now + (leaseTimeMs || LEASE_DURATION_MS),
   };
 }
 

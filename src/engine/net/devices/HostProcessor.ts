@@ -54,7 +54,7 @@ export class HostProcessor extends RouterProcessor {
     if (iface.ip && inSameSubnet(iface.ip.address, iface.ip.prefix, dstIp)) return dstIp;
     const def = dev
       .getRoutes()
-      .find((r) => r.kind === 'static' && (r.dst === '0.0.0.0/0' || r.dst === '0.0.0.0'));
+      .find((r) => r.kind === 'static' && r.active !== false && (r.dst === '0.0.0.0/0' || r.dst === '0.0.0.0'));
     if (def?.gateway) return def.gateway;
     const lease = dev.leases.get(iface.name);
     if (lease?.gateway) return lease.gateway;
@@ -139,8 +139,12 @@ export class HostProcessor extends RouterProcessor {
       if (target) {
         target.ip = { address: String(p.ip), prefix: Number(p.prefix) || state.offered.prefix };
         target.up = true;
-        const lease = buildLease(target.name, state.offered, core.now);
+        const lease = buildLease(target.name, state.offered, core.now, Number(p.leaseTimeMs) || undefined);
         dev.leases.set(target.name, lease);
+        // DNS server dari option 6 — klien memakainya untuk resolve hostname.
+        if (Array.isArray(p.dnsServers) && (p.dnsServers as unknown[]).length > 0) {
+          dev.dnsServers = (p.dnsServers as string[]).filter((s) => typeof s === 'string');
+        }
         dev.dhcpClient = { ...state, state: 'bound' };
       }
       const run = core.getRun(traceId);

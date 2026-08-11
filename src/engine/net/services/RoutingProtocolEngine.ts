@@ -5,7 +5,7 @@
 
 import { NetworkDevice } from '../devices/NetworkDevice';
 import { LinkTable } from '../core/Topology';
-import { inSameSubnet, intToIp, networkOf, parseCidr } from '../core/ip';
+import { inSameSubnet, intToIp, ipToInt, networkOf, parseCidr } from '../core/ip';
 import { DhcpPool } from '../core/types';
 
 interface TableEntry {
@@ -28,9 +28,17 @@ export class RoutingProtocolEngine {
   compute(devices: NetworkDevice[], links: LinkTable): void {
     for (const dev of devices) dev.clearDynamicRoutes();
 
-    const segments = this.buildSegments(devices, links);
-    this.computeProtocolRoutes(devices, links, segments);
-    this.computeBgpRoutes(devices, links);
+    // Perlindungan power-off: perangkat yang mati tidak menyebarkan rute
+    // dan tidak boleh menjadi asal / penerima rute dinamis.
+    const alive = devices.filter((d) => d.powered);
+    if (alive.length < devices.length) {
+      for (const dev of devices) {
+        if (!dev.powered) dev.clearDynamicRoutes();
+      }
+    }
+    const segments = this.buildSegments(alive, links);
+    this.computeProtocolRoutes(alive, links, segments);
+    this.computeBgpRoutes(alive, links);
   }
 
   private isSwitch(dev: NetworkDevice): boolean {
@@ -72,7 +80,10 @@ export class RoutingProtocolEngine {
     const segments = new Map<string, string>();
     for (const dev of devices) {
       for (const iface of dev.getInterfaces()) {
-        segments.set(`${dev.id}:${iface.name}`, keyOfPort(dev.id, iface.name));
+        // Kunci pakai portId (bukan nama interface): konsultasi segmen selalu
+        // memakai port id dari link, sehingga konfigurasi port yang id != nama
+        // tetap membentuk adjacency yang benar.
+        segments.set(`${dev.id}:${iface.portId}`, keyOfPort(dev.id, iface.portId));
       }
     }
     return segments;
@@ -83,8 +94,12 @@ export class RoutingProtocolEngine {
       const myPort = link.a.nodeId === dev.id ? link.a.port : link.b.port;
       const segKey = segments.get(`${dev.id}:${myPort}`);
       if (segKey !== key) continue;
-      const iface = dev.getIfaceByName(myPort) || dev.getVirtualByParentPort(myPort);
-      if (iface?.ip) return iface.ip.address;
+      // myPort adalah port id dari link; cari interface lewat portId dulu,
+      // baru nama (kompatibel untuk port yang id != nama).
+      const iface = dev.getIfaceByPortId(myPort) || dev.getIfaceByName(myPort) || dev.getVirtualByParentPort(myPort);
+      // Interface harus HIDUP: adjacency tidak terbentuk lewat interface
+      // shutdown/down (rute tidak lagi dipertukarkan di segmen ini).
+      if (iface?.ip && iface.up) return iface.ip.address;
     }
     return null;
   }
@@ -99,22 +114,35 @@ export class RoutingProtocolEngine {
     return Math.max(1, Math.round(100 / speed));
   }
 
+  /**
+   * Argumen kedua statement network bisa berupa netmask (255.255.255.0 → /24)
+   * ATAU wildcard Cisco (0.0.0.255 → /24). Deteksi arah kontiguitas bit:
+   * ones berjejer dari kanan (LSB) = wildcard → prefix = 32 - jumlah ones;
+   * selain itu dianggap netmask → prefix = jumlah ones.
+   */
+  private maskOrWildcardToPrefix(maskStr: string): number {
+    const n = ipToInt(maskStr);
+    let ones = 0;
+    for (let bit = 0; bit < 32; bit++) if (((n >>> bit) & 1) === 1) ones++;
+    if (n !== 0 && (n & (n + 1)) === 0) {
+      // 0.0.0.255 / 0.0.0.0 (host) / 255.255.255.255 (any) — wildcard Cisco
+      return 32 - ones;
+    }
+    return ones;
+  }
+
   private normalizeNetworkEntry(dev: NetworkDevice, entry: string): string | null {
     const trimmed = entry.trim();
-    const parsed = parseCidr(trimmed);
-    if (parsed && (trimmed.includes('/') || trimmed.includes(' '))) {
-      return `${parsed.address}/${parsed.prefix}`;
+    // Dua token "ip mask" / "ip wildcard" — musti ditangani SEBELUM parseCidr
+    // karena parseCidr mengganti spasi dengan '/' lalu menganggap argumen kedua
+    // sebagai netmask (wildcard 0.0.0.255 jadi /0, bukan /24).
+    const two = trimmed.match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
+    if (two) {
+      return `${two[1]}/${this.maskOrWildcardToPrefix(two[2])}`;
     }
-    const wm = trimmed.match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
-    if (wm) {
-      const mask = wm[2];
-      let prefix = 0;
-      for (const part of mask.split('.')) {
-        for (let bit = 7; bit >= 0; bit--) {
-          if (((parseInt(part, 10) >> bit) & 1) === 1) prefix++;
-        }
-      }
-      return `${wm[1]}/${prefix}`;
+    const parsed = parseCidr(trimmed);
+    if (parsed) {
+      return `${parsed.address}/${parsed.prefix}`;
     }
     const iface = dev.getIfaceByName(trimmed);
     if (iface?.ip) {
@@ -202,6 +230,10 @@ export class RoutingProtocolEngine {
         const peer = devices.find((d) => d.id === c.peerId);
         if (!peer) continue;
         if (peer.hasIp(c.gateway)) continue;
+        // RIP: metric maksimum 15 hop (16 = infinity) — rute > 15 hop tidak
+        // diadopsi dan tidak disebarkan (loop prevention jarak terbatas).
+        const originProto = protoOf(peer.routingCfg);
+        if (originProto === 'rip' && c.metric > 15) continue;
         const list = tables.get(c.peerId) || [];
         const existing = list.find((t) => t.dst === c.dst);
         if (!existing || c.metric < existing.metric) {

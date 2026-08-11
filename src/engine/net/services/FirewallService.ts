@@ -8,14 +8,24 @@ import { parseCidr, networkOf } from '../core/ip';
 
 /**
  * True ketika paket DIBLOKIR (ada rule deny yang cocok). First-match wins.
- * `inPort` adalah port/interface tempat paket masuk (untuk rule inInterface).
+ * `inPort` adalah port/interface tempat paket masuk, `outName` interface
+ * keluar (hanya diketahui setelah routing — forwarding pass). Rule dengan
+ * outInterface hanya dipertimbangkan saat outName tersedia & cocok, agar
+ * rule "deny out-interface=wan" tidak memblokir trafik yang keluar lewat
+ * interface lain.
  */
-export function aclBlocks(device: NetworkDevice, pkt: Packet, inPort?: string): boolean {
+export function aclBlocks(device: NetworkDevice, pkt: Packet, inPort?: string, outName?: string): boolean {
   const rules = device.aclRules;
   if (!rules || rules.length === 0) return false;
   const inIface = inPort ? device.getIfaceByPortId(inPort) || device.getIfaceByName(inPort) : null;
   const inName = inIface?.name || inPort || '';
   for (const rule of rules) {
+    if (rule.outInterface) {
+      // Rule keluar: hanya berlaku bila interface keluar sudah diketahui
+      // (pass kedua setelah routing) dan namanya cocok.
+      if (!outName) continue;
+      if (!matchesIfaceName(rule.outInterface, outName)) continue;
+    }
     const protoOk =
       !rule.proto ||
       rule.proto === 'any' ||

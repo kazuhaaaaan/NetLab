@@ -25,7 +25,7 @@ import { computeWireless, WirelessIfaceCfg, WirelessProfileCfg } from '../servic
 import { applyMangle, applyQos, freshQosState, MangleRule, qosStatsOf, SimpleQueue } from '../services/QosService';
 import { NetworkInterfaceModel } from '../interfaces/NetworkInterface';
 import { NetworkInterface, Packet, RunResult, SimEvent, SimEventType } from './types';
-import { isValidIp, inSameSubnet } from './ip';
+import { isValidIp, inSameSubnet, isValidHostIp, parseCidr } from './ip';
 import { isIpv6Address, inSameIpv6Subnet, ipv6NetworkString, macToIpv6 } from './ipv6';
 import { buildTcpSegment, TCP_SYN } from '../layer4/Tcp';
 import { AclRule, DnsRecord, NatRule } from './types';
@@ -89,7 +89,7 @@ export class NetworkSimulator implements SimulatorCore {
   private pktSeq = 0;
 
   // ── State konfigurasi CLI (bertahan antar sync topology) ──────
-  private configs = new Map<string, { ips: Record<string, string>; routes: { dst: string; gateway: string | null }[] }>();
+  private configs = new Map<string, { ips: Record<string, string>; routes: { dst: string; gateway: string | null; distance?: number }[] }>();
   private configs6 = new Map<string, { ips6: Record<string, string>; routes6: { dst: string; gateway: string | null }[] }>();
   private dhcpPools = new Map<string, DhcpPoolInfo[]>();
   private routings = new Map<string, RoutingMemoryShape>();
@@ -173,6 +173,14 @@ export class NetworkSimulator implements SimulatorCore {
       let phys: ReturnType<NetworkDevice['getIfaceByName']> | null = iface;
       while (phys && phys.parentPort) phys = device.getIfaceByName(phys.parentPort);
       portId = phys?.portId || iface.parentPort || iface.portId || outPort;
+    }
+    // Interface keluar mati (shutdown) → frame tidak pernah dikirim.
+    // Berlaku untuk SEMUA perangkat (switch/wireless/router), termasuk port
+    // fisik induk subinterface VLAN.
+    const physIface = device.getIfaceByPortId(portId) || device.getIfaceByName(portId) || iface;
+    if (!physIface || !physIface.up) {
+      this.drop(device, pkt, 'iface-down', traceId);
+      return false;
     }
     // Keluar lewat subinterface (VLAN) → tandai tag agar switch meneruskannya ke VLAN yang benar.
     if (iface && iface.type === 'vlan' && iface.vlanId) pkt.vlan = iface.vlanId;
@@ -384,6 +392,11 @@ export class NetworkSimulator implements SimulatorCore {
     this.applyAllConfigs();
   }
 
+  /** Peringatan validasi topologi dari sync terakhir (edge ditolak dll.) — tidak pernah throw. */
+  getTopologyWarnings(): { id: string; reason: string }[] {
+    return [...(this.topology.lastSkippedEdges || [])];
+  }
+
   private applyAllConfigs(): void {
     for (const dev of this.nodes.values()) {
       const cfg = this.configs.get(dev.id);
@@ -505,10 +518,35 @@ export class NetworkSimulator implements SimulatorCore {
     }
   }
 
-  private applyConfigToDevice(dev: NetworkDevice, cfg: { ips: Record<string, string>; routes: { dst: string; gateway: string | null }[] }): void {
-    for (const [ifaceName, cidr] of Object.entries(cfg.ips)) dev.setIpByName(ifaceName, cidr);
+  private applyConfigToDevice(dev: NetworkDevice, cfg: { ips: Record<string, string>; routes: { dst: string; gateway: string | null; distance?: number }[] }): void {
+    for (const [ifaceName, cidr] of Object.entries(cfg.ips)) {
+      // Tolak alamat network/broadcast sebagai host — bukan IP yang bisa dipakai.
+      const parsed = parseCidr(cidr);
+      if (parsed && !isValidHostIp(parsed.address, parsed.prefix)) continue;
+      // IP duplikat pada perangkat lain → alamat tidak dipasang (validasi
+      // mencegah dua host memakai IP sama; konfigurasi tetap tampil di print
+      // CLI, tapi engine menolak efeknya).
+      if (parsed && this.ipUsedElsewhere(dev.id, parsed.address)) continue;
+      dev.setIpByName(ifaceName, cidr);
+    }
     dev.clearStaticRoutes();
-    for (const r of cfg.routes) if (r.gateway) dev.addStaticRoute(r.dst, r.gateway);
+    for (const r of cfg.routes) {
+      if (!r.gateway) continue;
+      // Gateway bukan alamat IP → rute ditolak (bukan fake success).
+      if (!isValidIp(r.gateway)) continue;
+      dev.addStaticRoute(r.dst, r.gateway, r.distance);
+    }
+  }
+
+  /** true bila alamat `ip` sudah dipakai interface/lease perangkat lain. */
+  private ipUsedElsewhere(selfNodeId: string, ip: string): boolean {
+    const now = this.time.now();
+    for (const dev of this.nodes.values()) {
+      if (dev.id === selfNodeId) continue;
+      for (const i of dev.getInterfaces()) if (i.ip && i.ip.address === ip) return true;
+      for (const lease of dev.leases.values()) if (lease.expiresAt > now && lease.ip === ip) return true;
+    }
+    return false;
   }
 
   getDevice(nodeId: string): NetworkDevice | undefined {
@@ -534,6 +572,9 @@ export class NetworkSimulator implements SimulatorCore {
     const dev = this.nodes.get(nodeId);
     if (dev) dev.powered = on;
     this.recomputeProtocols();
+    // Rute yang dipelajari lewat perangkat ini harus ditarik — device mati
+    // tidak bisa dijadikan next hop (OSPF/RIP/EIGRP/BGP distance-vector).
+    this.computeDynamicRoutes();
   }
 
   isNodePowered(nodeId: string): boolean {
@@ -660,11 +701,11 @@ export class NetworkSimulator implements SimulatorCore {
     };
   }
 
-  applyNodeConfig(nodeId: string, ips: Record<string, string>, routes: Array<{ dst: string; gateway: string }>): void {
+  applyNodeConfig(nodeId: string, ips: Record<string, string>, routes: Array<{ dst: string; gateway: string; distance?: number }>): void {
     const existing = this.configs.get(nodeId);
     const cfg = {
       ips: { ...(existing?.ips || {}), ...ips },
-      routes: routes.map((r) => ({ dst: r.dst, gateway: r.gateway || null })),
+      routes: routes.map((r) => ({ dst: r.dst, gateway: r.gateway || null, distance: r.distance })),
     };
     this.configs.set(nodeId, cfg);
     const dev = this.nodes.get(nodeId);
@@ -688,8 +729,10 @@ export class NetworkSimulator implements SimulatorCore {
       dev.configuredIpv6s.set(iface, cidr);
       dev.setIpv6ByName(iface, cidr);
     }
-    dev.ipv6StaticRoutes = cfg.routes6.map((r) => ({ dst: r.dst, gateway: r.gateway, iface: null, kind: 'static' }));
-    for (const r of dev.ipv6StaticRoutes) dev.ipv6Routing.addRoute(r);
+    dev.ipv6StaticRoutes = cfg.routes6
+      .filter((r) => r.gateway && (r.gateway === 'discard' || isIpv6Address(r.gateway)))
+      .map((r) => ({ dst: r.dst, gateway: r.gateway, iface: null, kind: 'static' }));
+    dev.applyStaticRoutes6();
   }
 
   setDhcpPools(poolsByNode: Record<string, DhcpPoolInfo[]>): void {
@@ -898,10 +941,11 @@ export class NetworkSimulator implements SimulatorCore {
         name: i.name,
         mac: i.mac,
         ip: i.ip ? `${i.ip.address}/${i.ip.prefix}` : null,
+        ipv6: i.ipv6 ? `${i.ipv6.address}/${i.ipv6.prefix}` : null,
         up: i.up,
       })),
       arp: dev.arpCache.entriesList().map((e) => ({ ip: e.ip, mac: e.mac })),
-      macTable: dev.macTable.entriesList().map((e) => ({ mac: e.mac, port: e.port })),
+      macTable: dev.macTable.entriesList().map((e) => ({ mac: e.mac, port: e.port, vlan: e.vlan ?? undefined })),
       routes: dev.getRoutes().map((r) => ({ dst: r.dst, gateway: r.gateway || '', iface: r.iface || '', kind: r.kind })),
       stp: stp
         ? {
@@ -993,6 +1037,12 @@ export class NetworkSimulator implements SimulatorCore {
       const rec = srv.dnsRecords.find((r) => r.name.toLowerCase() === n);
       if (rec) return { resolved: rec.address, server: srvIp };
     }
+    // Fallback: nama perangkat di topologi (mis. "PC2" → IP pertamanya).
+    const byName = this.deviceByName(n);
+    if (byName) {
+      const ip = byName.getIpAddress();
+      if (ip) return { resolved: ip, server: 'topology' };
+    }
     return { resolved: null, nxdomain: true };
   }
 
@@ -1015,11 +1065,36 @@ export class NetworkSimulator implements SimulatorCore {
     return oneWay * 2;
   }
 
+  /**
+   * Resolusi alamat tujuan: IP langsung, nama host via DNS (record statis /
+   * server DNS), terakhir nama perangkat di topologi (ping PC2 tanpa config).
+   * Nilai null = tidak bisa di-resolve (ping('invalid') → reason invalid).
+   */
+  private resolvePingTarget(srcNodeId: string, dstIp: string): string | null {
+    if (isValidIp(dstIp) || isIpv6Address(dstIp)) return dstIp;
+    const viaDns = this.resolveHostname(srcNodeId, dstIp);
+    if (viaDns.resolved) return viaDns.resolved;
+    const byName = this.deviceByName(dstIp);
+    if (byName?.getIpAddress()) return byName.getIpAddress();
+    return null;
+  }
+
+  private deviceByName(name: string): NetworkDevice | null {
+    const n = name.toLowerCase();
+    for (const dev of this.nodes.values()) {
+      if (dev.name.toLowerCase() === n) return dev;
+    }
+    return null;
+  }
+
   // ── Simulasi flow ──────────────────────────────────────────────
   simulatePing(srcNodeId: string, dstIp: string): PingSimResult {
     const src = this.nodes.get(srcNodeId);
     if (!src) return this.pingFail('not-found');
     if (isIpv6Address(dstIp)) return this.simulatePing6(srcNodeId, dstIp);
+    const target = this.resolvePingTarget(srcNodeId, dstIp);
+    if (!target) return this.pingFail('invalid');
+    dstIp = target;
     if (!isValidIp(dstIp)) return this.pingFail('invalid');
     if (!this.isNodePowered(src.id)) return this.pingFail('power');
     if (src.hasIp(dstIp)) {
@@ -1152,15 +1227,82 @@ export class NetworkSimulator implements SimulatorCore {
     };
   }
 
-  simulateTraceroute(srcNodeId: string, dstIp: string): TracerouteResult {    const src = this.nodes.get(srcNodeId);
+  simulateTraceroute(srcNodeId: string, dstIp: string): TracerouteResult {
+    const src = this.nodes.get(srcNodeId);
     if (!src) return { ok: false, hops: [], reason: 'not-found' };
+    if (isIpv6Address(dstIp)) return { ok: false, hops: [], reason: 'invalid' };
+    const target = this.resolvePingTarget(srcNodeId, dstIp);
+    if (!target) return { ok: false, hops: [], reason: 'invalid' };
+    dstIp = target;
     if (!isValidIp(dstIp)) return { ok: false, hops: [], reason: 'invalid' };
-    const ping = this.simulatePing(srcNodeId, dstIp);
-    if (!ping.success) return { ok: false, hops: [], reason: ping.reason };
-    return {
-      ok: true,
-      hops: ping.path.map((name, i) => ({ name, ttl: i + 1, ip: this.nodes.get(srcNodeId)?.name === name ? null : this.ipOf(name) })),
-    };
+    if (!this.isNodePowered(src.id)) return { ok: false, hops: [], reason: 'power' };
+
+    if (!src.getIpAddress()) {
+      const lease = this.ensureLease(srcNodeId);
+      if (!lease) return { ok: false, hops: [], reason: 'no-ip' };
+    }
+    const iface = src.getInterfaces().find((i) => i.ip && i.up);
+    if (!iface || !iface.ip) return { ok: false, hops: [], reason: 'no-ip' };
+
+    // Traceroute nyata: probe ICMP hop demi hop dengan TTL naik.
+    // Router yang TTL-nya habis membalas ICMP time-exceeded (hop ke-ttl),
+    // router tanpa rute membalas dest-unreachable (jalur putus), dst balas
+    // echo-reply (selesai). Hop diidentifikasi dari event log per probe.
+    const MAX_HOPS = 16;
+    const hops: TracerouteResult['hops'] = [];
+    for (let ttl = 1; ttl <= MAX_HOPS; ttl++) {
+      const traceId = `trace-${++this.runSeq}`;
+      const run = this.beginRun(traceId);
+      run.fwdPath = [src.name];
+      const logStart = this.eventLog.length;
+      const req = this.createPacket({
+        protocol: 'icmp',
+        srcIp: iface.ip.address,
+        dstIp,
+        srcMac: iface.mac,
+        dstMac: '',
+        srcPort: 0,
+        dstPort: 0,
+        ttl,
+        traceId,
+        flags: { dir: 'req', icmpType: 8 },
+        payload: { type: 8, code: 0, seq: ttl, id: (Math.random() * 0xffff) & 0xffff, traceroute: true },
+      });
+      run.rootPktId = req.id;
+      if (!this.inject(src, req, traceId)) break;
+      this.processUntil(traceId);
+
+      if (run.status === 'ok') {
+        const dst = this.deviceByIp(dstIp) || src;
+        hops.push({ name: dst.name, ttl, ip: dstIp });
+        return { ok: true, hops };
+      }
+
+      const probeEvents = this.eventLog.slice(logStart).filter((e) => e.traceId === traceId);
+      const ttlExpired = probeEvents.find((e) => e.type === 'TTL_EXCEEDED');
+      if (ttlExpired && ttlExpired.nodeId) {
+        const hopDev = this.nodes.get(ttlExpired.nodeId);
+        hops.push({
+          name: hopDev?.name || ttlExpired.nodeId,
+          ttl,
+          ip: hopDev?.getIpAddress() || null,
+        });
+        continue;
+      }
+      const icmpErr = probeEvents.find((e) => e.type === 'ICMP_ERROR');
+      if (icmpErr && icmpErr.nodeId) {
+        const hopDev = this.nodes.get(icmpErr.nodeId);
+        hops.push({
+          name: hopDev?.name || icmpErr.nodeId,
+          ttl,
+          ip: hopDev?.getIpAddress() || null,
+        });
+        return { ok: false, hops, reason: mapReason(run.reason) };
+      }
+      // Paket hilang diam-diam (firewall block / link down) → jalur putus tanpa hop.
+      return { ok: false, hops, reason: mapReason(run.reason) };
+    }
+    return { ok: false, hops, reason: 'unreachable' };
   }
 
   canReach(srcNodeId: string, dstIp: string): boolean {
@@ -1294,7 +1436,7 @@ export class NetworkSimulator implements SimulatorCore {
     if (nh && nh.gateway) nextHop = nh.gateway;
     else if (nh && nh.iface && sameSub) nextHop = pkt.dstIp;
     else {
-      const def = src.getRoutes().find((r) => r.kind === 'static' && (r.dst === '0.0.0.0/0' || r.dst === '0.0.0.0'));
+      const def = src.getRoutes().find((r) => r.kind === 'static' && r.active !== false && (r.dst === '0.0.0.0/0' || r.dst === '0.0.0.0'));
       nextHop = def?.gateway || null;
     }
     if (!nextHop) {
@@ -1321,6 +1463,7 @@ export class NetworkSimulator implements SimulatorCore {
 
     const nh = src.ipv6Routing.lookup(pkt.dstIp);
     let nextHop: string | null = null;
+    if (nh && nh.gateway === 'discard') return false; // blackhole: dibuang diam-diam
     if (nh && nh.gateway) nextHop = nh.gateway;
     else if (sameSub) nextHop = pkt.dstIp;
     if (!nextHop) return false;
@@ -1336,13 +1479,6 @@ export class NetworkSimulator implements SimulatorCore {
 
   private pingFail(reason: PingSimResult['reason']): PingSimResult {
     return { success: false, path: [], edgeIds: [], ttlAtDestination: 0, reason };
-  }
-
-  private ipOf(name: string): string | null {
-    for (const dev of this.nodes.values()) {
-      if (dev.name === name) return dev.getIpAddress();
-    }
-    return null;
   }
 
   // ── Neighbor helpers ───────────────────────────────────────────
@@ -1377,7 +1513,8 @@ export class NetworkSimulator implements SimulatorCore {
       const peerId = link.a.nodeId === nodeId ? link.b.nodeId : link.a.nodeId;
       const peer = this.nodes.get(peerId);
       if (!peer || peer.isSwitch) continue;
-      if (!peer.routingCfg.ospf?.enabled) continue;
+      // Adjacency hanya mungkin bila kedua perangkat hidup & OSPF aktif.
+      if (!this.isNodePowered(peerId) || !peer.routingCfg.ospf?.enabled) continue;
       const peerIp = peer.getIpAddress();
       if (!peerIp || seen.has(peerIp)) continue;
       const myPort = link.a.nodeId === nodeId ? link.a.port : link.b.port;
@@ -1388,8 +1525,15 @@ export class NetworkSimulator implements SimulatorCore {
       const myPassive = dev.routingCfg.ospf?.passiveInterfaces?.includes(myIface?.name || myPort) ?? false;
       const peerPassive = peer.routingCfg.ospf?.passiveInterfaces?.includes(peerIface?.name || peerPort) ?? false;
       if (myPassive || peerPassive) continue;
+      // Link/interface rusak → adjacency tidak terbentuk (state Down).
+      const myLinkUp = !!myIface && myIface.up;
+      const peerLinkUp = !!peerIface && peerIface.up;
+      const linkDown = !!link.down;
+      const full = myLinkUp && peerLinkUp && !linkDown;
       seen.add(peerIp);
-      out.push({ routerId: peerIp, ip: peerIp, iface: myIface?.name || myPort, state: 'Full/ -' });
+      // Router-ID OSPF: nilai router-id CLI bila diatur (bukan IP interface sembarang).
+      const rid = peer.routingCfg.ospf?.routerId || peerIp;
+      out.push({ routerId: rid, ip: peerIp, iface: myIface?.name || myPort, state: full ? 'Full/ -' : 'Down' });
     }
     return out;
   }
@@ -1399,13 +1543,34 @@ export class NetworkSimulator implements SimulatorCore {
     if (!cfg) return [];
     return cfg.peers.map((p) => {
       const peer = this.deviceByIp(p.remoteAddr);
-      const reachable = !!peer && this.bgps.has(peer.id) && this.isNodePowered(nodeId) && this.canReach(nodeId, p.remoteAddr);
-      const prefixes = reachable && peer ? peer.getRoutes().filter((r) => r.kind === 'dynamic').length : 0;
+      const peerCfg = peer ? this.bgps.get(peer.id) : undefined;
+      // Deterministic subset BGP: state diturunkan dari kondisi nyata topologi
+      // (power, konfigurasi AS, reachability). Bukan hardcoded success.
+      let state: BgpNeighborStateInfo['state'] = 'Idle';
+      let uptime = 'never';
+      let prefixes = 0;
+      if (!peer) {
+        state = 'Idle';
+      } else if (!this.bgps.has(peer.id)) {
+        state = 'Idle';
+      } else if (!this.isNodePowered(peer.id) || !this.isNodePowered(nodeId)) {
+        state = 'Idle';
+      } else if (peerCfg && peerCfg.asn !== p.remoteAs) {
+        // AS remote tidak cocok → session tidak pernah Established.
+        state = 'Active';
+      } else if (!this.canReach(nodeId, p.remoteAddr)) {
+        // TCP/179 tidak bisa dibangun ke peer → tetap di Connect.
+        state = 'Connect';
+      } else {
+        state = 'Established';
+        uptime = '00:00:12';
+        prefixes = peer.getRoutes().filter((r) => r.kind === 'dynamic').length;
+      }
       return {
         remoteAddr: p.remoteAddr,
         remoteAs: p.remoteAs,
-        state: reachable ? 'Established' : 'Idle',
-        uptime: reachable ? '00:00:12' : 'never',
+        state,
+        uptime,
         prefixes,
       };
     });

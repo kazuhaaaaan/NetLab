@@ -36,7 +36,10 @@ export function maskToPrefix(mask: number): number {
 }
 
 export function networkOf(ip: string, prefix: number): number {
-  return ipToInt(ip) & prefixToMask(prefix);
+  // >>> 0 penting: bitwise AND menghasilkan int bertanda; tanpa ini nilai
+  // network di luar 127.x menjadi negatif dan perbandingan dengan ipToInt
+  // (unsigned) gagal — alamat network tidak terdeteksi.
+  return (ipToInt(ip) & prefixToMask(prefix)) >>> 0;
 }
 
 export function inSameSubnet(ipA: string, prefixA: number, ipB: string): boolean {

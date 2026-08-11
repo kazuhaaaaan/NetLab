@@ -505,6 +505,20 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
 };
 
 /**
+ * Perintah global (semua vendor) — di-catat di hint tiap vendor oleh gabungan
+ * flattenHints; /test dijalankan di level terminal, bukan per vendor CLI.
+ */
+const GLOBAL_HINTS: CliHint[] = [
+  { command: '/test', description: 'Jalankan Automated Network Testing Laboratory (semua skenario)' },
+  { command: '/test <category>', description: 'Jalankan skenario per kategori: basic, switching, services, routing, security, ipv6, troubleshooting' },
+  { command: '/test <id-prefix>', description: 'Jalankan skenario spesifik (mis. /test dhcp, /test bgp)' },
+];
+
+for (const vendor of Object.keys(CLI_HINTS)) {
+  CLI_HINTS[vendor] = [...GLOBAL_HINTS, ...CLI_HINTS[vendor]];
+}
+
+/**
  * Get hint suggestions for a given input prefix and vendor.
  * Flattens command tree into a list of candidates that start with the prefix.
  */

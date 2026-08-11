@@ -8,6 +8,7 @@ import {
   networkOf,
   parseCidr,
   maskToPrefix,
+  prefixToMask,
 } from './ip';
 
 export interface SimLink {
@@ -56,7 +57,7 @@ export interface DhcpPoolInfo {
 export interface DeviceStatsSnapshot {
   name: string;
   deviceType: string;
-  interfaces: { name: string; mac: string; ip: string | null; up: boolean }[];
+  interfaces: { name: string; mac: string; ip: string | null; ipv6: string | null; up: boolean }[];
   arp: { ip: string; mac: string }[];
   macTable: { mac: string; port: string }[];
   routes: { dst: string; gateway: string; iface: string; kind: string }[];
@@ -392,6 +393,9 @@ export class SimulationEngine {
 
   private applyConfigToDevice(dev: SimDevice, cfg: { ips: Record<string, string>; routes: SimRoute[] }): void {
     for (const [ifaceName, cidr] of Object.entries(cfg.ips)) {
+      // Tolak alamat network/broadcast sebagai host — bukan IP yang bisa dipakai.
+      const parsed = parseCidr(cidr);
+      if (parsed && (parsed.prefix > 30 || (ipToInt(parsed.address) === networkOf(parsed.address, parsed.prefix)) || ((ipToInt(parsed.address) | (~prefixToMask(parsed.prefix) >>> 0)) >>> 0) === ipToInt(parsed.address))) continue;
       dev.setIpByName(ifaceName, cidr);
     }
     dev.clearStaticRoutes();
@@ -1506,7 +1510,7 @@ export class SimulationEngine {
 
     // The destination must actually listen: a web server on `localPort` with
     // the service running. Otherwise the connection is refused.
-    const web = this.webServers.get(dstDev.id) || { enabled: true, port: 80, content: '' };
+    const web = this.webServers.get(dstDev.id) || { enabled: false, port: 80, content: '' };
     if (!web.enabled || localPort !== web.port) {
       return { ok: false, reason: 'refused', handshake: [] };
     }
@@ -1601,6 +1605,7 @@ export class SimulationEngine {
         name: i.name,
         mac: i.mac,
         ip: i.ip ? `${i.ip.address}/${i.ip.prefix}` : null,
+        ipv6: null,
         up: i.up,
       })),
       arp: [...dev.arpCache.entries()].map(([ip, mac]) => ({ ip, mac })),
