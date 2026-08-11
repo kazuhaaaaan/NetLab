@@ -93,6 +93,14 @@ MikroLab uses a single, unified **Pointer Events Interaction Engine** (`@mikrola
 - **Format**: `.mlab` JSON Schema (supports compression & metadata).
 - **In-Browser Persistence**: IndexedDB with LocalStorage fallback for auto-saving lab sessions.
 - **Export / Import**: Seamless single-click export and import of full lab topologies.
+- **Running-Config Export**: Right-click any device → *Export Running Config* —
+  full config in the vendor's own syntax (RouterOS `.rsc`, IOS/NX-OS, Junos,
+  VRP, EdgeOS, ArubaOS-CX, OpenWrt, Linux), preview, per-file download, or ZIP
+  for the whole lab — including everything configured via the CLI.
+- **Topology Validation**: Duplicate IP detection, same-subnet/prefix conflicts,
+  netmask mismatch on direct links, VLAN without a switch, and unconfigured ports.
+- **Physical Link State**: Deleting a cable marks the port "not connected" in
+  `show` output (config stays intact); `shutdown` shows "administratively down".
 
 ---
 

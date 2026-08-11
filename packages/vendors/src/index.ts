@@ -199,8 +199,9 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
       const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const header = 'Flags: D - dynamic, X - disabled, R - running, S - slave\n #    NAME                TYPE       ACTUAL-MTU L2MTU MAC-ADDRESS       IP-ADDRESS\n';
       const rows = ifaces.map((p: any, i: number) => {
-        const disabled = shutdown.includes(p.name) ? 'X' : 'R';
-        return ` ${i} ${disabled} ${(p.name || '').padEnd(20)} ether      1500       1598   ${(p.macAddress || '00:00:00:00:00:00').padEnd(18)} ${p.ipAddress || '--'}`;
+        const op = portOperational(p, shutdown);
+        const flag = op.label === 'up' ? 'R' : op.label === 'administratively down' ? 'X' : ' ';
+        return ` ${i} ${flag} ${(p.name || '').padEnd(20)} ether      1500       1598   ${(p.macAddress || '00:00:00:00:00:00').padEnd(18)} ${p.ipAddress || '--'}`;
       }).join('\n');
       return header + (rows || ' -- no entries --');
     }
@@ -338,10 +339,12 @@ export class CiscoVendorAdapter implements IVendorAdapter {
     if (!cmdResult) return '';
     if (cmdResult.type === 'show_ip_int_brief') {
       const ports = cmdResult.ports || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const header = 'Interface              IP-Address      OK? Method Status                Protocol\n';
-      const rows = ports.map((p: any) =>
-        `${p.name.padEnd(23)}${(p.ipAddress ? p.ipAddress.split('/')[0] : 'unassigned').padEnd(16)}YES unset  ${p.status === 'up' ? 'up                    up' : 'down                  down'}`
-      ).join('\n');
+      const rows = ports.map((p: any) => {
+        const op = portOperational(p, shutdown);
+        return `${p.name.padEnd(23)}${(p.ipAddress ? p.ipAddress.split('/')[0] : 'unassigned').padEnd(16)}YES unset  ${op.label.padEnd(20)}${op.up ? 'up' : 'down'}`;
+      }).join('\n');
       return header + rows;
     }
     if (cmdResult.type === 'int_status') {
@@ -349,10 +352,10 @@ export class CiscoVendorAdapter implements IVendorAdapter {
       const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const header = 'Port          Name    Status       Vlan     Duplex  Speed Type\n';
       const rows = ports.map((p: any) => {
-        const down = shutdown.includes(p.name);
-        const status = down ? 'down' : p.status === 'up' ? 'up' : 'down';
-        const speed = down || p.status !== 'up' ? '-' : p.speedMbps && p.speedMbps <= 100 ? `${p.speedMbps}Mb/s` : p.speedMbps >= 10000 ? '10G' : '1G';
-        return `${(p.name || '').padEnd(12)} ${' '.padEnd(7)} ${status.padEnd(12)} ${(p.vlan || (down ? '--' : '1')).toString().padEnd(8)} ${p.status === 'up' && !down ? 'full' : '  '}   ${speed}`;
+        const op = portOperational(p, shutdown);
+        const status = op.up ? 'up' : op.label === 'not connected' ? 'notconn' : op.label === 'administratively down' ? 'adm-down' : 'down';
+        const speed = op.up ? (p.speedMbps && p.speedMbps <= 100 ? `${p.speedMbps}Mb/s` : p.speedMbps >= 10000 ? '10G' : '1G') : '-';
+        return `${(p.name || '').padEnd(12)} ${' '.padEnd(7)} ${status.padEnd(12)} ${(p.vlan || (op.up ? '1' : '--')).toString().padEnd(8)} ${op.up ? 'full' : '  '}   ${speed}`;
       });
       return header + (rows.join('\n') || '-- no interfaces --');
     }
@@ -362,10 +365,9 @@ export class CiscoVendorAdapter implements IVendorAdapter {
       const macOf = (p: any) => fmtMac(p.macAddress || '005079666800').toUpperCase();
       const lines: string[] = [];
       for (const p of ports) {
-        const down = shutdown.includes(p.name);
-        const up = p.status === 'up' && !down;
+        const op = portOperational(p, shutdown);
         lines.push(
-          `${p.name} is ${down ? 'administratively down' : up ? 'up' : 'down'}, line protocol is ${up ? 'up' : 'down'}${up ? ' (connected)' : ''}`,
+          `${p.name} is ${op.label}, line protocol is ${op.up ? 'up' : 'down'}${op.up ? ' (connected)' : ''}`,
           `  Hardware is GbE, address is ${macOf(p)} (bia ${macOf(p)})`,
           `  Internet address is ${p.ipAddress ? p.ipAddress.split('/')[0] + '/' + (p.ipAddress.split('/')[1] || 24) : 'unassigned'}`,
           `  MTU 1500 bytes, BW ${(p.speedMbps || 1000) * 1000} Kbit/sec, DLY 10 usec,`,
@@ -580,10 +582,13 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
     if (!cmdResult) return '';
     if (cmdResult.type === 'show_ip_int_brief') {
       const ports = cmdResult.ports || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const header = 'IP Interface Status for VRF "default"(1)\nInterface              IP Address      Interface Status\n';
-      const rows = ports.map((p: any) =>
-        `${p.name.padEnd(23)}${(p.ipAddress ? p.ipAddress.split('/')[0] : 'unassigned').padEnd(16)}protocol-${p.status === 'up' ? 'up/link-up' : 'down/link-down'}`
-      ).join('\n');
+      const rows = ports.map((p: any) => {
+        const op = portOperational(p, shutdown);
+        const st = op.up ? 'up/link-up' : op.label === 'administratively down' ? 'adm-down/down' : op.label === 'not connected' ? 'not-conn/down' : 'down/link-down';
+        return `${p.name.padEnd(23)}${(p.ipAddress ? p.ipAddress.split('/')[0] : 'unassigned').padEnd(16)}protocol-${st}`;
+      }).join('\n');
       return header + rows;
     }
     if (cmdResult.type === 'show_vlan') {
@@ -616,10 +621,10 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
       const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const header = 'Port          Status    Vlan      Duplex  Speed Type\n';
       const rows = ports.map((p: any) => {
-        const down = shutdown.includes(p.name);
-        const status = down ? 'down' : p.status === 'up' ? 'connected' : 'notconnected';
-        const speed = down || p.status !== 'up' ? '-' : p.speedMbps && p.speedMbps <= 100 ? `${p.speedMbps}Mb/s` : p.speedMbps >= 10000 ? '10G' : '1G';
-        return `${(p.name || '').padEnd(13)} ${status.padEnd(10)} ${(p.vlan || (down ? '--' : '1')).toString().padEnd(9)} ${p.status === 'up' && !down ? 'full    ' : ''}${speed}`;
+        const op = portOperational(p, shutdown);
+        const status = op.up ? 'connected' : op.label === 'administratively down' ? 'adm-down' : op.label === 'not connected' ? 'notconnected' : 'down';
+        const speed = op.up ? (p.speedMbps && p.speedMbps <= 100 ? `${p.speedMbps}Mb/s` : p.speedMbps >= 10000 ? '10G' : '1G') : '-';
+        return `${(p.name || '').padEnd(13)} ${status.padEnd(10)} ${(p.vlan || (op.up ? '1' : '--')).toString().padEnd(9)} ${op.up ? 'full    ' : ''}${speed}`;
       });
       return header + (rows.join('\n') || '-- no interfaces --');
     }
@@ -628,9 +633,9 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
       const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const lines: string[] = [];
       for (const p of ports) {
-        const down = shutdown.includes(p.name);
+        const op = portOperational(p, shutdown);
         lines.push(
-          `${p.name} is ${down ? 'administratively down' : p.status === 'up' ? 'up' : 'down'}, line protocol is ${down || p.status !== 'up' ? 'down' : 'up'}${p.status === 'up' && !down ? ' (connected)' : ''}`,
+          `${p.name} is ${op.label}, line protocol is ${op.up ? 'up' : 'down'}${op.up ? ' (connected)' : ''}`,
           `  Hardware is GbE, address is ${fmtMac(p.macAddress || '005079666800').replace(/\./g, '').toUpperCase()} (bia ${fmtMac(p.macAddress || '005079666800').replace(/\./g, '').toUpperCase()})`,
           `  Internet address is ${p.ipAddress ? p.ipAddress.split('/')[0] + '/' + (p.ipAddress.split('/')[1] || 24) : 'unassigned'}`,
           `  MTU 1500 bytes, BW ${(p.speedMbps || 1000) * 1000} Kbit/sec, DLY 10 usec,`,
@@ -681,10 +686,14 @@ export class JuniperVendorAdapter implements IVendorAdapter {
     if (!cmdResult) return '';
     if (cmdResult.type === 'show_interfaces_terse') {
       const ports = cmdResult.ports || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const header = 'Interface               Admin Link Proto    Local                 Remote\n';
-      const rows = ports.map((p: any) =>
-        `${p.name.padEnd(24)}up    ${p.status === 'up' ? 'up   ' : 'down '} inet     ${p.ipAddress || ''}`.padEnd(70)
-      ).join('\n');
+      const rows = ports.map((p: any) => {
+        const op = portOperational(p, shutdown);
+        const link = op.up ? 'up   ' : 'down ';
+        const admin = op.label === 'administratively down' ? 'down' : 'up';
+        return `${p.name.padEnd(24)}${admin}   ${link} inet     ${op.up ? p.ipAddress || '' : ''}`.padEnd(70);
+      }).join('\n');
       return header + rows;
     }
     if (cmdResult.type === 'show_route') {
@@ -790,9 +799,11 @@ export class HuaweiVendorAdapter implements IVendorAdapter {
     if (!cmdResult) return '';
     if (cmdResult.type === 'display_ip_int') {
       const ports = cmdResult.ports || [];
-      const rows = ports.map((p: any) =>
-        `${p.name}\n  Internet Address is ${p.ipAddress || 'unassigned'}\n  Physical is ${p.status === 'up' ? 'up, line protocol is up' : 'down, line protocol is down'}`
-      ).join('\n\n');
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
+      const rows = ports.map((p: any) => {
+        const op = portOperational(p, shutdown);
+        return `${p.name}\n  Internet Address is ${op.up ? p.ipAddress || 'unassigned' : 'unassigned'}\n  Physical is ${op.label}, line protocol is ${op.up ? 'up' : 'down'}`;
+      }).join('\n\n');
       return rows || '-- No interfaces --';
     }
     if (cmdResult.type === 'display_version' || cmdResult.type === 'show_version') {
@@ -896,9 +907,11 @@ export class UbiquitiVendorAdapter implements IVendorAdapter {
     if (!cmdResult) return '';
     if (cmdResult.type === 'show_interfaces') {
       const ports = cmdResult.ports || [];
-      const rows = ports.map((p: any) =>
-        `${p.name}      Link encap:Ethernet  HWaddr ${p.macAddress || '00:00:00:00:00:00'}\n          inet addr:${p.ipAddress || 'unassigned'}  Bcast:0.0.0.0  Mask:255.255.255.0\n          ${p.status === 'up' ? 'UP BROADCAST RUNNING MULTICAST' : 'DOWN'}  MTU:1500  Metric:1`
-      ).join('\n\n');
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
+      const rows = ports.map((p: any) => {
+        const op = portOperational(p, shutdown);
+        return `${p.name}      Link encap:Ethernet  HWaddr ${p.macAddress || '00:00:00:00:00:00'}\n          inet addr:${op.up ? p.ipAddress || 'unassigned' : 'unassigned'}  Bcast:0.0.0.0  Mask:255.255.255.0\n          ${op.up ? 'UP BROADCAST RUNNING MULTICAST' : op.label === 'administratively down' ? 'DOWN (administratively down)' : 'DOWN (not connected)'}  MTU:1500  Metric:1`;
+      }).join('\n\n');
       return rows || '-- no interfaces --';
     }
     if (cmdResult.type === 'show_version') return 'EdgeOS v2.0.9.5247762.221128.1601\nBuild ID: 5247762\nBuild date: 2024-01-01';
@@ -1066,10 +1079,14 @@ export class ArubaVendorAdapter implements IVendorAdapter {
     if (!cmdResult) return '';
     if (cmdResult.type === 'show_int_brief') {
       const ports = cmdResult.ports || [];
+      const shutdown = (cmdResult.shutdownIfaces || []) as string[];
       const header = 'Interface     Admin  Link   Speed  Description\n------------- ------ ------ ------  -----------\n';
-      const rows = ports.map((p: any) =>
-        `${p.name.padEnd(14)}up     ${p.status === 'up' ? 'up   ' : 'down '}  1000M  `
-      ).join('\n');
+      const rows = ports.map((p: any) => {
+        const op = portOperational(p, shutdown);
+        const admin = op.label === 'administratively down' ? 'down' : 'up';
+        const link = op.up ? 'up   ' : op.label === 'not connected' ? 'down ' : 'down ';
+        return `${p.name.padEnd(14)}${admin.padEnd(6)}${link}  1000M  `;
+      }).join('\n');
       return header + rows;
     }
     if (cmdResult.type === 'show_version') {
@@ -1169,7 +1186,8 @@ export class OpenwrtVendorAdapter implements IVendorAdapter {
       return ports.map((p: any, i: number) => {
         const ip = p.ipAddress ? p.ipAddress.split('/')[0] : undefined;
         const prefix = p.ipAddress ? (p.ipAddress.split('/')[1] || '24') : undefined;
-        const up = p.status === 'up' && !(cmdResult.shutdownIfaces || []).includes(p.name);
+        const op = portOperational(p, (cmdResult.shutdownIfaces || []) as string[]);
+        const up = op.up;
         return [
           `${i + 2}: ${p.name}: <BROADCAST,MULTICAST,${up ? 'UP,LOWER_UP' : 'DOWN'}> mtu 1500 qdisc noqueue state ${up ? 'UP' : 'DOWN'}`,
           `    link/ether ${p.macAddress || '00:00:00:00:00:00'} brd ff:ff:ff:ff:ff:ff`,
@@ -1273,8 +1291,9 @@ export class LinuxDebianVendorAdapter implements IVendorAdapter {
       const rows = ports.map((p: any, i: number) => {
         const ip = p.ipAddress ? p.ipAddress.split('/')[0] : undefined;
         const prefix = p.ipAddress ? (p.ipAddress.split('/')[1] || '24') : undefined;
+        const op = portOperational(p, (cmdResult.shutdownIfaces || []) as string[]);
         return [
-          `${i + 1}: ${p.name}: <BROADCAST,MULTICAST,${p.status === 'up' ? 'UP,LOWER_UP' : 'DOWN'}> mtu 1500 qdisc mq state ${p.status.toUpperCase()} group default qlen 1000`,
+          `${i + 1}: ${p.name}: <BROADCAST,MULTICAST,${op.up ? 'UP,LOWER_UP' : 'DOWN'}> mtu 1500 qdisc mq state ${op.up ? 'UP' : 'DOWN'} group default qlen 1000`,
           `    link/ether ${p.macAddress || '00:00:00:00:00:00'} brd ff:ff:ff:ff:ff:ff`,
           ...(ip ? [
             `    inet ${ip}/${prefix} brd ${ip.replace(/\.\d+$/, '.255')} scope global ${p.name}`,
@@ -1298,9 +1317,10 @@ export class LinuxDebianVendorAdapter implements IVendorAdapter {
       return rows.join('\n\n') || '-- no interfaces --';
     }
     if (cmdResult.type === 'ip_link') {
-      const rows = ports.map((p: any, i: number) =>
-        `${i + 1}: ${p.name}: <BROADCAST,MULTICAST,${p.status === 'up' ? 'UP,LOWER_UP' : 'DOWN'}> mtu 1500 qdisc mq state ${p.status.toUpperCase()} mode DEFAULT group default qlen 1000\n    link/ether ${p.macAddress || '00:00:00:00:00:00'} brd ff:ff:ff:ff:ff:ff`
-      );
+      const rows = ports.map((p: any, i: number) => {
+        const op = portOperational(p, (cmdResult.shutdownIfaces || []) as string[]);
+        return `${i + 1}: ${p.name}: <BROADCAST,MULTICAST,${op.up ? 'UP,LOWER_UP' : 'DOWN'}> mtu 1500 qdisc mq state ${op.up ? 'UP' : 'DOWN'} mode DEFAULT group default qlen 1000\n    link/ether ${p.macAddress || '00:00:00:00:00:00'} brd ff:ff:ff:ff:ff:ff`;
+      });
       return rows.join('\n') || '';
     }
     if (cmdResult.type === 'ip_neigh') {
@@ -1501,6 +1521,16 @@ export class VendorDispatcher {
       this.nodeMemory.set(nodeId, this.blankNodeMemory());
     }
     return this.nodeMemory.get(nodeId);
+  }
+
+  /**
+   * Export running-config lengkap node (untuk fitur "Export Config" dari UI),
+   * format mengikuti vendor: RouterOS /interface/…, IOS router prompt, dst.
+   */
+  exportRunningConfig(vendorId: string, context: any): string {
+    const nodeId = context.nodeId;
+    const mem = this.getNodeMemory(nodeId);
+    return generateRunningConfig(context, mem, vendorId);
   }
 
   /** Snapshot per-node yang disimpan "startup-config" (write memory / save). */
@@ -2373,6 +2403,19 @@ export class VendorDispatcher {
 
     // Baris kosong: perangkat sungguhan hanya mengulang prompt, tidak ada output.
     if (!rawInput || !rawInput.trim()) return '';
+
+    // Dekorasi port dengan status link fisik dari topologi (context.portLinks:
+    // portId|name → true / 'down' / false). Kabel dihapus → linkConnected=false
+    // → CLI menampilkan "not connected" tetapi konfigurasi interface tetap utuh.
+    // Tanpa portLinks (context manual/test) semua port dianggap terhubung.
+    if (Array.isArray(context.ports)) {
+      const links = portLinksOf(context);
+      context.ports = context.ports.map((p: any) => ({
+        ...p,
+        linkConnected: links ? (links[p.name] ?? links[p.id] ?? false) === true : true,
+        linkDown: links ? (links[p.name] ?? links[p.id] ?? null) === 'down' : false,
+      }));
+    }
 
     const normalized = adapter.parseSyntax(rawInput);
 
@@ -5522,6 +5565,30 @@ function mergeIps(ports: any[], configuredIps: Record<string, string>) {
   }));
 }
 
+/**
+ * Status operasional sebuah port untuk output CLI — gabungan kabel fisik
+ * (linkConnected/linkDown dari host App via context.portLinks) dan
+ * admin-down (shutdown via CLI).
+ *
+ * Prinsip: DELETE CABLE ≠ DELETE INTERFACE CONFIG. Port tanpa kabel punya
+ * label "not connected" dan tidak up, tetapi konfigurasi interface (IP,
+ * VLAN, NAT, dll.) tetap utuh dan tetap muncul di running-config/export.
+ */
+function portOperational(p: any, shutdownIfaces: string[]): { up: boolean; label: string } {
+  const names = new Set((shutdownIfaces || []).map((s: string) => String(s).toLowerCase()));
+  if (names.has(String(p.name || '').toLowerCase())) return { up: false, label: 'administratively down' };
+  if (p.linkDown) return { up: false, label: 'down' };
+  if (p.linkConnected === false) return { up: false, label: 'not connected' };
+  if (p.status !== 'up') return { up: false, label: 'down' };
+  return { up: true, label: 'up' };
+}
+
+/** Peta port (nama|portId) → status kabel: true=aktif, 'down'=link fail, false/tanpa kunci=tidak ada kabel. */
+function portLinksOf(context: any): Record<string, boolean | 'down'> | null {
+  const links = context?.portLinks;
+  return links && typeof links === 'object' ? links : null;
+}
+
 /** Ambil 12 digit hex (4 prioritas + 8 MAC) dari bridge ID STP. */
 function rootIdStr(id: string | undefined): string {
   const hex = (id || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase().padEnd(12, '0');
@@ -5615,6 +5682,18 @@ function maskToBits(mask: string): number {
   return bits;
 }
 
+/** Wildcard IOS "0.0.0.3" (atau "ip mask" / cidr) → "network/prefix" utk export. */
+function wildcardToCidr(net: string): string {
+  const parts = String(net || '').trim().split(/\s+/);
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(parts[0] || '')) return net;
+  if (parts.length === 1) return cidrOf(net);
+  const mask = parts[1];
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(mask) && mask.startsWith('255')) return cidrOf(net);
+  let bits = 0;
+  for (const g of mask.split('.').map(Number)) bits += maskToBits(String((~g) & 255));
+  return `${parts[0]}/${bits}`;
+}
+
 /** Ubah entry IP apa pun → "ip mask" (bentuk IOS/Huawei/Fortinet). */
 function maskedPair(entry: string): string {
   const c = cidrOf(entry);
@@ -5704,6 +5783,12 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     mem.routes.forEach((r: any) => {
       lines.push(`/ip route add dst-address=${r.dst} gateway=${r.gateway}`);
     });
+    if (mem.routing?.ospf?.enabled) {
+      if (mem.routing.ospf.routerId) lines.push(`/routing ospf instance set default router-id=${mem.routing.ospf.routerId}`);
+      lines.push('/routing ospf area add name=backbone area-id=0.0.0.0');
+      (mem.routing.ospf.networks || []).forEach((n: string) => lines.push(`/routing ospf interface-template add networks=${n}`));
+      Object.entries(mem.routing.ospf.interfaceCosts || {}).forEach(([iface, cost]) => lines.push(`/routing ospf interface-template set [find name=${iface}] cost=${cost}`));
+    }
     Object.entries(mem.configuredIps6 || {}).forEach(([name, addr]: [string, any]) => {
       lines.push(`/ipv6 address add address=${addr} interface=${name}`);
     });
@@ -6021,6 +6106,12 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
       lines.push(` ip address ${maskedPair(p.ipAddress)}`);
       lines.push(` ${(mem.shutdownIfaces || []).includes(p.name) ? 'shutdown' : 'no shutdown'}`);
     });
+    // Port yang di-shutdown tapi belum punya IP tetap muncul di config.
+    (mem.shutdownIfaces || []).forEach((name: string) => {
+      if (withIp.some((p: any) => p.name === name)) return;
+      lines.push(`interface ${name}`);
+      lines.push(` shutdown`);
+    });
     (mem.subinterfaces || []).forEach((s: any) => {
       lines.push(`interface ${s.name}`);
       lines.push(` encapsulation dot1q ${s.vlanId}`);
@@ -6031,8 +6122,24 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
       lines.push(` switchport mode trunk`);
     });
     mem.routes.forEach((r: any) => {
-      lines.push(`ip route ${r.dst} ${r.gateway}`);
+      lines.push(`ip route ${maskedPair(r.dst)} ${r.gateway}`);
     });
+    // Route protocol: OSPF / RIP / EIGRP wajib ikut di ekspor (Cisco IOS/NX-OS/Aruba).
+    if (mem.routing?.ospf?.enabled) {
+      lines.push('router ospf 1');
+      if (mem.routing.ospf.routerId) lines.push(` router-id ${mem.routing.ospf.routerId}`);
+      (mem.routing.ospf.networks || []).forEach((n: string) => lines.push(` network ${wildcardToCidr(n)} area 0`));
+      (mem.routing.ospf.passiveInterfaces || []).forEach((name: string) => lines.push(` passive-interface ${name}`));
+    }
+    if (mem.routing?.rip?.enabled) {
+      lines.push('router rip');
+      lines.push(' version 2');
+      (mem.routing.rip.networks || []).forEach((n: string) => lines.push(` network ${cidrOf(n)}`));
+    }
+    if (mem.routing?.eigrp?.enabled) {
+      lines.push(`router eigrp ${mem.routing.eigrp.asn || 1}`);
+      (mem.routing.eigrp.networks || []).forEach((n: string) => lines.push(` network ${cidrOf(n)}`));
+    }
     // IPv6: alamat per interface + rute statis
     Object.entries(mem.configuredIps6 || {}).forEach(([name, addr]: [string, any]) => {
       lines.push(`interface ${name}`);

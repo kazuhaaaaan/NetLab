@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, Trash2, Power, Layers } from 'lucide-react';
+import { Terminal, Trash2, Power, Layers, FileDown } from 'lucide-react';
 
 interface ContextMenuProps {
   x: number;
@@ -9,6 +9,8 @@ interface ContextMenuProps {
   onOpenTerminal: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onDeleteEdge?: (edgeId: string) => void;
+  /** Export running-config (format vendor) ke modal preview/download. */
+  onExportConfig?: (nodeId: string) => void;
   /** Perangkat yang sedang terpilih sekaligus (multi-select). */
   selectedNodeIds?: string[];
   /** Hapus semua perangkat yang terpilih sekaligus. */
@@ -24,6 +26,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onOpenTerminal,
   onDeleteNode,
   onDeleteEdge,
+  onExportConfig,
   selectedNodeIds = [],
   onDeleteNodes,
   onClose
@@ -51,6 +54,18 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             <Terminal className="w-3.5 h-3.5" />
             <span>Open Vendor CLI</span>
           </button>
+          {onExportConfig && (
+            <button
+              onClick={() => {
+                onExportConfig(targetId);
+                onClose();
+              }}
+              className="w-full text-left px-2.5 py-1.5 rounded hover:bg-slate-800 flex items-center space-x-2 text-emerald-400 font-medium"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              <span>Export Running Config</span>
+            </button>
+          )}
           <div className="h-px bg-slate-800 my-1" />
           <button
             onClick={() => {

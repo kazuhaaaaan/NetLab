@@ -19,6 +19,7 @@ import type { LabProjectLike } from './src/engine/net/core/Topology';
 import type { AclRule, NatRule } from './src/engine/net/core/types';
 import { runLab, findScenarios, formatLabResult } from './src/engine/lab';
 import { LAB_SCENARIOS } from './src/engine/lab/scenarios';
+import { buildNodeExports, validateConfigExport, portLinksOfNode } from './src/utils/configExport';
 
 let passed = 0;
 let failed = 0;
@@ -821,7 +822,10 @@ console.log('\n== 9. STP (loop-breaking & failover) ==');
     sim.applyNodeConfig('pc1', { ether1: '10.0.0.2/24' }, []);
     sim.applyNodeConfig('pc2', { ether1: '10.0.0.3/24' }, []);
     const st = sim.getStpInfo('sw1');
-    check('9b linear: semua port forwarding', st?.ports.every((p) => p.state === 'forwarding'), JSON.stringify(st?.ports));
+    // Port tanpa kabel (ether3) tidak bisa forwarding — STP disabled sesuai topologi.
+    const wired = st?.ports.filter((p: any) => p.port !== 'ether3');
+    check('9b linear: semua port BERKABEL forwarding', !!wired && wired.every((p) => p.state === 'forwarding'), JSON.stringify(st?.ports));
+    check('9b linear: port tanpa kabel = disabled', st?.ports.find((p: any) => p.port === 'ether3')?.state === 'disabled', JSON.stringify(st?.ports));
     check('9b linear: ping sukses', sim.simulatePing('pc1', '10.0.0.3').success);
   }
 }
@@ -2534,6 +2538,117 @@ console.log('\n== 20. CLI route distance + /test E2E ==');
     check('20c output /test memuat id skenario', subset.every((s) => out.includes(s.id)), out.slice(0, 400));
     check('20c output /test memuat kategori', /Test\/Expected|Expected|assert/i.test(out), out.slice(0, 400));
     check('20c /test semua skenario tidak crash + lulus', formatLabResult(runLab(all)).includes(`RESULT: ${all.length}`));
+  }
+}
+
+// ── 21. Export running-config & status link fisik (kabel dihapus) ─────────
+console.log('\n== 21. Export config & link status ==');
+{
+  const vPorts = (n: number, seed: string): any[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `ether${i + 1}`, name: `ether${i + 1}`, status: 'up' as const,
+      macAddress: `00:0c:29:${seed}:${(i + 1).toString().padStart(2, '0')}:01`,
+    }));
+  const vNode = (id: string, name: string, vendor: string, model: string, n: number, seed: string): any => ({
+    id, name, vendor, model,
+    deviceType: model === 'switch' ? 'switch' : model === 'pc' || model === 'server' ? model : 'router',
+    ports: vPorts(n, seed),
+  });
+  const vEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+
+  // 21a. Port tanpa kabel → "not connected" di show; export tetap memuat config.
+  {
+    const dis = new VendorDispatcher();
+    const ctx = mkCtx('n21a', 'R1', ['ether1', 'ether2']);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 192.168.1.1 255.255.255.0', ctx);
+    dis.dispatch('cisco_ios', 'exit', ctx);
+
+    const ctxLinks = { ...ctx, ports: ctx.ports.map((p) => ({ ...p, status: 'up' as const })), portLinks: { ether2: true } as Record<string, boolean> };
+    const brief = dis.dispatch('cisco_ios', 'show ip interface brief', ctxLinks);
+    check('21a port tanpa kabel → "not connected"', /ether1[^\n]*not connected/.test(brief), brief);
+    check('21a port berkabel tetap up', /ether2[^\n]*\bup\b/.test(brief), brief);
+    const full = dis.dispatch('cisco_ios', 'show interfaces', ctxLinks);
+    check('21a "is not connected, line protocol is down"', full.includes('ether1 is not connected, line protocol is down'), full.split('\n').slice(0, 2).join(' | '));
+
+    const cfg = dis.exportRunningConfig('cisco_ios', ctxLinks);
+    check('21a IP tetap diekspor walau kabel dihapus', cfg.includes('ip address 192.168.1.1 255.255.255.0'), cfg.split('\n').slice(0, 10).join(' | '));
+    check('21a interface tetap "no shutdown"', /\n no shutdown/.test(cfg), cfg.split('\n').slice(0, 10).join(' | '));
+  }
+
+  // 21b. "shutdown" via CLI → administratively down (bukan not connected).
+  {
+    const dis = new VendorDispatcher();
+    const ctx = mkCtx('n21b', 'R1', ['ether1', 'ether2']);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'shutdown', ctx);
+    dis.dispatch('cisco_ios', 'exit', ctx);
+    const brief = dis.dispatch('cisco_ios', 'show ip interface brief', { ...ctx, portLinks: { ether1: true, ether2: true } });
+    check('21b shutdown → administratively down', /ether1[^\n]*administratively down/.test(brief), brief);
+    const cfg = dis.exportRunningConfig('cisco_ios', ctx);
+    check('21b "shutdown" ikut diekspor', /\n shutdown\b/.test(cfg), cfg.split('\n').slice(0, 10).join(' | '));
+  }
+
+  // 21c. Export: mask di ip route Cisco + OSPF (Cisco & MikroTik).
+  {
+    const dis = new VendorDispatcher();
+    const ctx = mkCtx('n21c', 'R1', ['ether1', 'ether2']);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.0.1 255.255.255.252', ctx);
+    dis.dispatch('cisco_ios', 'exit', ctx);
+    dis.dispatch('cisco_ios', 'ip route 10.20.0.0 255.255.0.0 192.168.1.254', ctx);
+    dis.dispatch('cisco_ios', 'router ospf 1', ctx);
+    dis.dispatch('cisco_ios', 'network 10.0.0.0 0.0.0.3 area 0', ctx);
+    dis.dispatch('cisco_ios', 'exit', ctx);
+    const cfg = dis.exportRunningConfig('cisco_ios', ctx);
+    check('21c ip route memakai netmask', cfg.includes('ip route 10.20.0.0 255.255.0.0 192.168.1.254'), cfg.split('\n').filter((l) => l.includes('ip route')).join(' | '));
+    check('21c OSPF masuk running-config cisco', cfg.includes('router ospf 1') && cfg.includes('network 10.0.0.0/30 area 0'), cfg.split('\n').filter((l) => l.includes('ospf') || l.includes('network')).join(' | '));
+
+    const ctxM = mkCtx('n21d', 'MT', ['ether1', 'ether2']);
+    dis.dispatch('mikrotik', '/ip address add address=10.0.0.2/30 interface=ether1', ctxM);
+    dis.dispatch('mikrotik', '/routing ospf instance add name=ospf1', ctxM);
+    dis.dispatch('mikrotik', '/routing ospf network add network=10.0.0.0/30 area=0', ctxM);
+    const cfgM = dis.exportRunningConfig('mikrotik', ctxM);
+    check('21c IP mikrotik terekpor', cfgM.includes('/ip address add address=10.0.0.2/30 interface=ether1'), cfgM.split('\n').slice(0, 6).join(' | '));
+    check('21c OSPF mikrotik di export (area + interface-template)', cfgM.includes('/routing ospf area add name=backbone area-id=0.0.0.0') && cfgM.includes('/routing ospf interface-template add networks=10.0.0.0/30'), cfgM.split('\n').filter((l) => l.includes('ospf')).join(' | '));
+  }
+
+  // 21d. buildNodeExports + validasi: duplicate IP, netmask mismatch,
+  //      VLAN tanpa switch, port belum dikonfigurasi, format file per vendor.
+  {
+    const dis = new VendorDispatcher();
+    const r1 = vNode('r1', 'R1', 'cisco_ios', 'router', 2, 'x1');
+    const r2 = vNode('r2', 'R2', 'mikrotik', 'router', 2, 'x2');
+    const r3 = vNode('r3', 'R3', 'mikrotik', 'router', 1, 'x3');
+    r1.ports[0].ipAddress = '192.168.1.1/24';
+    r1.ports[1].ipAddress = '192.168.2.1/30';
+    r2.ports[0].ipAddress = '192.168.2.2/28';
+    r2.ports[1].ipAddress = '192.168.1.1/24'; // duplikat dgn r1.ether1
+    const project: any = {
+      nodes: [r1, r2, r3],
+      edges: [vEdge('e1', 'r1', 'ether2', 'r2', 'ether1')],
+    };
+    dis.getNodeMemory('r3').vlans.push({ id: 10, name: 'VLAN10' });
+
+    const pl = portLinksOfNode(r1, project.edges);
+    check('21d portLinks r1: ether2 terhubung, ether1 tidak', pl['ether2'] === true && !('ether1' in pl), JSON.stringify(pl));
+
+    const warnings = validateConfigExport(project, dis);
+    check('21d error IP duplikat terdeteksi', warnings.some((w) => w.severity === 'error' && w.message.includes('duplikat')), JSON.stringify(warnings));
+    check('21d warning netmask mismatch (30 vs 28)', warnings.some((w) => w.severity === 'warn' && /netmask mismatch/i.test(w.message)), JSON.stringify(warnings));
+    check('21d warning VLAN tanpa switch', warnings.some((w) => w.severity === 'warn' && w.nodeName === 'R3' && /switch/i.test(w.message)), JSON.stringify(warnings));
+    check('21d info port belum ber-IP', warnings.some((w) => w.severity === 'info' && w.nodeName === 'R3'), JSON.stringify(warnings));
+
+    const entries = buildNodeExports(project, dis);
+    check('21d export membangun 3 entri', entries.length === 3, `${entries.length}`);
+    const eR1 = entries.find((e) => e.nodeId === 'r1');
+    check('21d r1 → .txt + hostname + ip', !!eR1 && eR1.filename.endsWith('.txt') && eR1.content.includes('hostname R1') && eR1.content.includes('ip address 192.168.1.1 255.255.255.0'), JSON.stringify(eR1?.content.slice(0, 220)));
+    const eR2 = entries.find((e) => e.nodeId === 'r2');
+    check('21d r2 → .rsc + ip', !!eR2 && eR2.filename.endsWith('.rsc') && eR2.content.includes('/ip address add address=192.168.2.2/28 interface=ether1'), JSON.stringify(eR2?.content.slice(0, 220)));
+    const eR3 = entries.find((e) => e.nodeId === 'r3');
+    check('21d r3 (kosong) tetap ada file', !!eR3 && eR3.lineCount > 0, JSON.stringify(eR3?.content.slice(0, 120)));
   }
 }
 

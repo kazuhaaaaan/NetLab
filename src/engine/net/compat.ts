@@ -47,7 +47,24 @@ export interface DhcpPoolInfo {
 export interface DeviceStatsSnapshot {
   name: string;
   deviceType: string;
-  interfaces: { name: string; mac: string; ip: string | null; ipv6: string | null; up: boolean }[];
+  interfaces: {
+    name: string;
+    mac: string;
+    ip: string | null;
+    ipv6: string | null;
+    up: boolean;
+    /** ada kabel fisik yang menempel (edge) */
+    linked: boolean;
+    /**
+     * Status operasional interface:
+     * - 'up': kabel ada, admin up, link aktif
+     * - 'not-connected': tidak ada kabel (kabel dihapus) — konfigurasi tetap utuh
+     * - 'admin-down': interface di-shutdown via CLI
+     * - 'link-down': kabel ada tetapi link di-fail (edge.down / failure injection)
+     * - 'down': kabel ada tetapi interface tidak aktif
+     */
+    operational: 'up' | 'down' | 'not-connected' | 'admin-down' | 'link-down';
+  }[];
   arp: { ip: string; mac: string }[];
   macTable: { mac: string; port: string }[];
   routes: { dst: string; gateway: string; iface: string; kind: string }[];

@@ -31,6 +31,8 @@ import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/sha
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
+import { ConfigExportModal } from './components/ConfigExportModal';
+import { portLinksOfNode } from './utils/configExport';
 
 const vendorDispatcher = new VendorDispatcher();
 
@@ -280,6 +282,8 @@ export default function App() {
     }
   });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; targetId?: string; targetType?: string } | null>(null);
+  // Export running-config (dari context menu node)
+  const [exportNodeId, setExportNodeId] = useState<string | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>(() => loadUiState()?.theme ?? 'dark');
   // Mobile: deteksi viewport <768px → layout canvas-first
   const isMobile = useMediaQuery('(max-width: 767px)');
@@ -1175,6 +1179,7 @@ export default function App() {
         nodeId,
         name: node.name,
         ports: node.ports,
+        portLinks: portLinksOfNode(node, project.edges),
         pingSimulator: (host: string, vendorId: string) => {
           const result = simEngineRef.current.simulatePing(nodeId, host);
           return formatPingOutput(vendorId, host, result);
@@ -1500,6 +1505,7 @@ export default function App() {
               onOpenTerminal={handleOpenTerminal}
               onDeleteNode={handleDeleteNode}
               onDeleteEdge={handleDeleteEdge}
+              onExportConfig={(id) => setExportNodeId(id)}
               selectedNodeIds={selectedNodeIds}
               onDeleteNodes={handleDeleteNodes}
               onClose={() => setContextMenu(null)}
@@ -1610,6 +1616,15 @@ export default function App() {
         onClose={() => setIsGradingOpen(false)}
         nodes={project.nodes}
         engine={simEngineRef.current}
+      />
+
+      {/* Export Running Config Modal */}
+      <ConfigExportModal
+        open={exportNodeId !== null}
+        nodeId={exportNodeId}
+        project={project}
+        source={vendorDispatcher}
+        onClose={() => setExportNodeId(null)}
       />
 
       {/* AI Mentor Chat Panel */}

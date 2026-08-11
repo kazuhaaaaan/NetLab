@@ -457,7 +457,54 @@ export class NetworkSimulator implements SimulatorCore {
         dev.qosState = freshQosState();
       }
     }
+    // Operasional port mengikuti KEBERADAAN kabel fisik (cable delete →
+    // interface tetap terkonfigurasi tetapi link turun), lalu protokol
+    // (STP/FHRP/wireless) dan rute dinamis (OSPF/BGP) dihitung ulang.
+    this.applyLinkPresence();
     this.recomputeProtocols();
+    this.computeDynamicRoutes();
+  }
+
+  /**
+   * Kehadiran kabel fisik menentukan state OPERASIONAL interface, bukan
+   * konfigurasinya. Prinsip: "DELETE CABLE ≠ DELETE INTERFACE CONFIG".
+   *
+   * - Port ethernet tanpa kabel → operasional DOWN (NOT_CONNECTED): tidak
+   *   menerima/mengirim paket, rute connected menjadi inactive, adjacency
+   *   OSPF/BGP ikut turun. Konfigurasi (IP/VLAN/NAT/...) tetap utuh.
+   * - Port yang ternyata punya kabel → dibiarkan mengikuti status admin
+   *   (shutdown/no-shutdown dari konfigurasi CLI).
+   * - Subinterface VLAN mengikuti port fisik induknya.
+   * - Interface wireless/bridge/loopback tidak bergantung kabel fisik.
+   *
+   * Pass ini TIDAK pernah menaikkan port: admin-down (shutdown) tidak akan
+   * pernah dibuat hidup oleh keberadaan kabel, dan port yang kabelnya
+   * dipasang kembali akan hidup lewat sync berikutnya (syncPorts/config).
+   */
+  private applyLinkPresence(): void {
+    for (const dev of this.nodes.values()) {
+      for (const iface of dev.getInterfaces()) {
+        if (iface.type === 'wireless' || iface.type === 'bridge' || iface.type === 'loopback') continue;
+        if (!this.portHasPhysicalLink(dev, iface)) dev.setIfaceUp(iface.name, false);
+      }
+    }
+  }
+
+  /** Port fisik sebuah interface (subinterface VLAN → port induk). */
+  private physicalPortId(dev: NetworkDevice, iface: NetworkInterfaceModel): string | null {
+    if (iface.type === 'vlan' && iface.parentPort) {
+      const parent = dev.getIfaceByName(iface.parentPort);
+      return parent ? parent.portId : null;
+    }
+    return iface.portId;
+  }
+
+  /** Benarkah ada kabel (edge) yang menempel ke port fisik interface ini? */
+  private portHasPhysicalLink(dev: NetworkDevice, iface: NetworkInterfaceModel): boolean {
+    const portId = this.physicalPortId(dev, iface);
+    if (!portId) return false;
+    const link = this.topology.links.linkOn(dev.id, portId);
+    return link !== null;
   }
 
   /** Hitung ulang STP / FHRP / wireless setelah topologi & konfigurasi berubah. */
@@ -937,13 +984,27 @@ export class NetworkSimulator implements SimulatorCore {
     return {
       name: dev.name,
       deviceType: dev.deviceType,
-      interfaces: dev.getInterfaces().map((i) => ({
-        name: i.name,
-        mac: i.mac,
-        ip: i.ip ? `${i.ip.address}/${i.ip.prefix}` : null,
-        ipv6: i.ipv6 ? `${i.ipv6.address}/${i.ipv6.prefix}` : null,
-        up: i.up,
-      })),
+      interfaces: dev.getInterfaces().map((i) => {
+        const hasCable = this.portHasPhysicalLink(dev, i);
+        const adminUp = !dev.shutdownIfaces.has(i.name);
+        const portId = this.physicalPortId(dev, i);
+        const linkDown = !!(hasCable && portId && this.topology.links.linkOn(dev.id, portId)?.down);
+        let operational: 'up' | 'down' | 'not-connected' | 'admin-down' | 'link-down';
+        if (!hasCable) operational = 'not-connected';
+        else if (!adminUp) operational = 'admin-down';
+        else if (linkDown) operational = 'link-down';
+        else if (i.up) operational = 'up';
+        else operational = 'down';
+        return {
+          name: i.name,
+          mac: i.mac,
+          ip: i.ip ? `${i.ip.address}/${i.ip.prefix}` : null,
+          ipv6: i.ipv6 ? `${i.ipv6.address}/${i.ipv6.prefix}` : null,
+          up: i.up,
+          linked: hasCable,
+          operational,
+        };
+      }),
       arp: dev.arpCache.entriesList().map((e) => ({ ip: e.ip, mac: e.mac })),
       macTable: dev.macTable.entriesList().map((e) => ({ mac: e.mac, port: e.port, vlan: e.vlan ?? undefined })),
       routes: dev.getRoutes().map((r) => ({ dst: r.dst, gateway: r.gateway || '', iface: r.iface || '', kind: r.kind })),
