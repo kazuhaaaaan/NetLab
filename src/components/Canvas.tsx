@@ -1177,6 +1177,9 @@ export const Canvas: React.FC<CanvasProps> = ({
           const nodeCableCount = edges.filter(
             (e) => e.sourceNodeId === node.id || e.targetNodeId === node.id
           ).length;
+          const nodeEdges = edges.filter(
+            (e) => e.sourceNodeId === node.id || e.targetNodeId === node.id
+          );
           return (
             <div
               key={node.id}
@@ -1348,15 +1351,46 @@ export const Canvas: React.FC<CanvasProps> = ({
                             />
                             <span className="text-slate-300 truncate">{port.name}</span>
                           </span>
-                          <span className={`truncate text-right ${conn ? 'text-cyan-300' : 'text-slate-600'}`}>
-                            {conn ? `→ ${conn}` : port.ipAddress || 'kosong'}
+                          <span
+                            className={`truncate text-right ${
+                              conn ? 'text-cyan-300' : 'text-slate-600'
+                            }`}
+                            title={port.ipAddress ? `IP ${port.ipAddress}` : 'No cable connected · tanpa IP'}
+                          >
+                            {conn ? `→ ${conn}` : 'No cable connected'}
                           </span>
                         </div>
                       );
                     })}
                   </div>
-                  <div className="px-2.5 py-1 text-[9px] font-mono text-slate-600 border-t border-[#2B2D31] bg-[#1A1D24]/60">
-                    panah = kabel terhubung · warna cyan = port terpakai
+                  <div className="px-2.5 py-1.5 border-t border-[#2B2D31] bg-[#1A1D24]/60">
+                    <div className="flex items-center gap-1">
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const target = e.target.value;
+                          if (target) onDeleteEdge?.(target);
+                        }}
+                        className="flex-1 min-w-0 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-[9.5px] font-mono px-1.5 py-1 text-slate-200 outline-none focus:border-rose-500/60"
+                        title="Pilih kabel yang ingin dihapus"
+                      >
+                        <option value="">Hapus kabel (pilih port)…</option>
+                        {nodeEdges.length === 0 && <option value="" disabled>— tidak ada kabel terpasang —</option>}
+                        {nodeEdges.map((e) => {
+                          const sN = nodes.find((n) => n.id === e.sourceNodeId);
+                          const tN = nodes.find((n) => n.id === e.targetNodeId);
+                          const label = `${sN?.name ?? e.sourceNodeId}:${e.sourcePortId} ↔ ${tN?.name ?? e.targetNodeId}:${e.targetPortId}`;
+                          return (
+                            <option key={e.id} value={e.id}>
+                              {label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div className="px-0.5 pt-1 text-[8.5px] font-mono text-slate-600">
+                      Menghapus kabel tidak menghapus konfigurasi port — status port menjadi "No cable connected".
+                    </div>
                   </div>
                 </div>
               ) : null}
