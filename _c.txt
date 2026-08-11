@@ -1,5 +1,0 @@
-[main 6b191b8] feat: konsolidasi logika kabel ke src/connection.ts (single source of truth), anchor port dari metadata side/slot, tool controller desktop setara mobile (Select/Kabel/Tambah/View/Terminal)
- 6 files changed, 211 insertions(+), 40 deletions(-)
- create mode 100644 _m.txt
- create mode 100644 src/components/DesktopToolbar.tsx
- create mode 100644 src/connection.ts
