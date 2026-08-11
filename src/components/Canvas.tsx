@@ -18,7 +18,7 @@ import {
   Lock,
   Unlock,
 } from "lucide-react";
-import { cableMatchesPort, portSide, portSlot } from "../connection";
+import { cableMatchesPort, inferCableType, portSide, portSlot } from "../connection";
 
 const LockFilled = () => <Lock className="w-4 h-4" />;
 const LockOpen = () => <Unlock className="w-4 h-4" />;
@@ -281,6 +281,15 @@ export const Canvas: React.FC<CanvasProps> = ({
     sourcePortId: string | null;
     cableType: string | null;
     targetNodeId: string | null;
+  } | null>(null);
+  /** Draft kabel dari drag-and-drop: kabel BELUM disambung sampai tipe dikonfirmasi. */
+  const [cableDraft, setCableDraft] = useState<{
+    srcNodeId: string;
+    srcPortId: string;
+    tgtNodeId: string;
+    tgtPortId: string;
+    inferred: LabEdge['cableType'];
+    selected: LabEdge['cableType'];
   } | null>(null);
   const [pointerWorld, setPointerWorld] = useState<{ x: number; y: number } | null>(null);
   const [cableDrag, setCableDrag] = useState<{
@@ -546,11 +555,26 @@ export const Canvas: React.FC<CanvasProps> = ({
       setCableDrag(null);
       setCableHover(null);
       setCableWizard(null);
-      if (gesture.nodeId && gesture.portId && gesture.targetNodeId) {
-        onCableConnect(
-          { nodeId: gesture.nodeId, portId: gesture.portId },
-          { nodeId: gesture.targetNodeId, portId: gesture.targetPortId }
+      if (gesture.nodeId && gesture.portId && gesture.targetNodeId && gesture.targetPortId) {
+        // Jangan langsung sambung: minta konfirmasi tipe kabel dulu (dropdown).
+        const srcNode = nodes.find((n) => n.id === gesture.nodeId);
+        const tgtNode = nodes.find((n) => n.id === gesture.targetNodeId);
+        const srcPort = srcNode?.ports.find((p) => p.id === gesture.portId);
+        const tgtPort = tgtNode?.ports.find((p) => p.id === gesture.targetPortId);
+        const inferred = inferCableType(
+          srcNode?.deviceType ?? '',
+          tgtNode?.deviceType ?? '',
+          srcPort?.type,
+          tgtPort?.type
         );
+        setCableDraft({
+          srcNodeId: gesture.nodeId,
+          srcPortId: gesture.portId,
+          tgtNodeId: gesture.targetNodeId,
+          tgtPortId: gesture.targetPortId,
+          inferred,
+          selected: inferred,
+        });
       }
     } else if (gesture.type === "CABLE_CANCEL") {
       setCableDrag(null);
@@ -1490,6 +1514,82 @@ export const Canvas: React.FC<CanvasProps> = ({
           );
         })}
       </div>
+
+      {/* Konfirmasi tipe kabel — drop port langsung diblokir sampai tipe dipilih (dropdown) */}
+      {cableDraft && (() => {
+        const srcNode = nodes.find((n) => n.id === cableDraft.srcNodeId);
+        const tgtNode = nodes.find((n) => n.id === cableDraft.tgtNodeId);
+        const tgtPort = tgtNode?.ports.find((p) => p.id === cableDraft.tgtPortId);
+        const tgtBusy = tgtNode ? getPortConnection(tgtNode.id, cableDraft.tgtPortId) !== null : null;
+        const match = cableMatchesPort(cableDraft.selected, tgtPort?.type);
+        const isDefault = cableDraft.selected === cableDraft.inferred;
+        return (
+          <WizardPopover className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[80] w-60 bg-[#0F1015]/95 backdrop-blur-md border border-blue-500/30 rounded-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+            <div className="px-2.5 py-2 border-b border-[#2B2D31] flex items-center justify-between bg-[#1A1D24]/80">
+              <span className="text-[10px] font-semibold text-slate-200">Sambungkan Kabel</span>
+              <button onClick={() => setCableDraft(null)} className="text-slate-500 hover:text-white transition-colors">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="p-2">
+              <div className="text-[9.5px] font-mono text-slate-400 mb-1.5 truncate">
+                {srcNode?.name}:{cableDraft.srcPortId} <span className="text-slate-600">↔</span> {tgtNode?.name}:{cableDraft.tgtPortId}
+              </div>
+              <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wide mb-1">
+                1. Tipe Kabel <span className="text-rose-400">*pilih dulu</span>
+              </label>
+              <select
+                value={cableDraft.selected}
+                onChange={(e) =>
+                  setCableDraft({ ...cableDraft, selected: e.target.value as LabEdge['cableType'] })
+                }
+                className="w-full bg-[#1A1D24] border border-[#2B2D31] rounded-md text-[10px] px-1.5 py-1.5 text-slate-200 outline-none focus:border-blue-500/60 mb-1.5"
+              >
+                <option value="copper_straight">Straight (UTP)</option>
+                <option value="copper_cross">Cross (UTP)</option>
+                <option value="fiber">Fiber Optik</option>
+                <option value="serial">Serial</option>
+              </select>
+              {isDefault && (
+                <div className="mb-1.5 px-1.5 py-1 text-[8.5px] font-mono text-cyan-300/80 bg-cyan-500/10 rounded border border-cyan-500/20">
+                  otomatis: {cableDraft.inferred === 'copper_straight' ? 'Straight (UTP)' : cableDraft.inferred === 'copper_cross' ? 'Cross (UTP)' : cableDraft.inferred === 'fiber' ? 'Fiber Optik' : 'Serial'}
+                </div>
+              )}
+              {tgtBusy && (
+                <div className="mb-1.5 px-1.5 py-1 text-[8.5px] font-mono text-rose-300/80 bg-rose-500/10 rounded border border-rose-500/20">
+                  Port tujuan terpakai — tidak bisa disambung
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 mt-1">
+                <button
+                  onClick={() => setCableDraft(null)}
+                  className="flex-1 px-2 py-1.5 text-[10px] rounded-md border border-[#2B2D31] text-slate-300 hover:bg-slate-800 transition"
+                >
+                  Batal
+                </button>
+                <button
+                  disabled={tgtBusy || !match}
+                  onClick={() => {
+                    onCableConnect(
+                      { nodeId: cableDraft.srcNodeId, portId: cableDraft.srcPortId },
+                      { nodeId: cableDraft.tgtNodeId, portId: cableDraft.tgtPortId },
+                      cableDraft.selected
+                    );
+                    setCableDraft(null);
+                  }}
+                  className={`flex-1 px-2 py-1.5 text-[10px] rounded-md font-semibold transition ${
+                    tgtBusy || !match
+                      ? 'bg-slate-800 text-slate-600 cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-500'
+                  }`}
+                >
+                  Sambungkan
+                </button>
+              </div>
+            </div>
+          </WizardPopover>
+        );
+      })()}
 
       {(selectionBox || selectionRect) && (
         <div
