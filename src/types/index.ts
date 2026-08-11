@@ -101,4 +101,8 @@ export interface PacketAnimation {
   edgeIds: string[];
   /** true = arah balik (reply) */
   reverse?: boolean;
+  /** true = paket merah untuk menandai kegagalan di hop terakhir */
+  red?: boolean;
+  /** durasi animasi (ms) — opsional, default 1200 */
+  durationMs?: number;
 }

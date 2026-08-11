@@ -15,7 +15,12 @@ import {
   TerminalSquare,
   Eye,
   EyeOff,
+  Lock,
+  Unlock,
 } from "lucide-react";
+
+const LockFilled = () => <Lock className="w-4 h-4" />;
+const LockOpen = () => <Unlock className="w-4 h-4" />;
 
 export interface Point {
   x: number;
@@ -179,6 +184,17 @@ interface CanvasProps {
   onToggleNodeSelected?: (nodeId: string) => void;
   /** Perbarui properti sebuah kabel (latensi/bandwidth/down). */
   onUpdateEdge?: (edgeId: string, partial: Partial<LabEdge>) => void;
+  /** Nama interface yang dikonfigurasi sebagai trunk (untuk warna kabel). */
+  trunkPortsByNode?: Record<string, string[]>;
+  /** true = kanvas terkunci (gesture pan/zoom/drag nonaktif; tombol tetap jalan). */
+  locked?: boolean;
+  onToggleLock?: () => void;
+  /** true = viewport mobile (menampilkan floating action bar + tidak menampilkan tombol desktop). */
+  isMobile?: boolean;
+  /** Id perangkat yang sedang diuji ping (badge kuning). */
+  pingingNodeIds?: string[];
+  /** Id perangkat tujuan ping yang gagal (badge merah menyala). */
+  failedPingNodeIds?: string[];
 }
 
 /** Popover interaktif di atas canvas — blokir gesture engine (preventDefault + TAP) agar klik asli & dropdown tetap berfungsi. */
@@ -234,6 +250,12 @@ export const Canvas: React.FC<CanvasProps> = ({
   onToggleNodeSelected,
   onUpdateEdge,
   onNodeTap,
+  trunkPortsByNode = {},
+  locked = false,
+  onToggleLock,
+  isMobile = false,
+  pingingNodeIds = [],
+  failedPingNodeIds = [],
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const handleGestureRef = useRef<(gesture: GestureDetail) => void>(() => {});
@@ -297,8 +319,9 @@ export const Canvas: React.FC<CanvasProps> = ({
       const positions: Record<string, { x: number; y: number }> = {};
       let alive = 0;
       for (const run of packetRuns) {
+        const duration = run.durationMs ?? PACKET_DURATION;
         const elapsed = now - run.startedAt;
-        if (elapsed >= PACKET_DURATION) continue;
+        if (elapsed >= duration) continue;
         alive++;
         const edgeIds = run.reverse ? [...run.edgeIds].reverse() : run.edgeIds;
         const pts: { x: number; y: number }[] = [];
@@ -343,7 +366,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           }
         }
         if (pts.length === 0) continue;
-        const t = Math.min(1, elapsed / PACKET_DURATION);
+        const t = Math.min(1, elapsed / duration);
         const idx = Math.min(pts.length - 1, Math.floor(t * (pts.length - 1)));
         positions[run.id] = pts[idx];
       }
@@ -376,6 +399,11 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, []);
 
   const handleGesture = (gesture: GestureDetail) => {
+    // Kanvas terkunci (Lock): tolak gesture yang mengubah viewport/posisi node.
+    // Klik/tap, kabel, selection tetap berfungsi.
+    if (locked && (gesture.type === 'PAN' || gesture.type === 'PINCH' || gesture.type === 'NODE_DRAG' || gesture.type === 'SELECTION_BOX')) {
+      return;
+    }
     if (gesture.type === "PAN" && gesture.panDelta) {
       onViewportChange({
         ...viewport,
@@ -538,10 +566,40 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   /** Warna garis sesuai tipe kabel (sama dengan rendering edge). */
   const cableColorOf = (t: string | null | undefined): string => {
-    if (t === "fiber") return "#f97316";
-    if (t === "serial") return "#f43f5e";
-    if (t === "copper_cross") return "#eab308";
-    return "#3b82f6";
+    if (t === "fiber") return "#4CAF50";
+    return "#2196F3";
+  };
+
+  // ── Skema warna kabel (Tugas 1 — Connection Color-Coding) ──
+  // Access/Ethernet   : solid biru #2196F3
+  // Trunk (VLAN)      : dashed oranye #FF9800
+  // Fiber optik       : solid hijau #4CAF50
+  // Link down / error : merah #F44336
+  const isTrunkEdge = (edge: LabEdge): boolean => {
+    const hasTrunk = (nodeId: string, portId: string) => {
+      const trunks = trunkPortsByNode[nodeId];
+      if (!trunks || trunks.length === 0) return false;
+      const node = nodes.find((n) => n.id === nodeId);
+      const portName = node?.ports.find((p) => p.id === portId)?.name ?? portId;
+      return trunks.includes(portName) || trunks.includes(portId);
+    };
+    return hasTrunk(edge.sourceNodeId, edge.sourcePortId) || hasTrunk(edge.targetNodeId, edge.targetPortId);
+  };
+
+  const cableStroke = (edge: LabEdge, isSelected: boolean, isHovered: boolean, isHoverConnected: boolean): string => {
+    if (isSelected) return "#F44336"; // terpilih: merah agar menonjol
+    if (edge.down) return "#F44336"; // link down: merah
+    if (isHovered || isHoverConnected) return "#FFB300"; // hover: kuning
+    if (isTrunkEdge(edge)) return "#FF9800"; // trunk: oranye
+    if (edge.cableType === "fiber") return "#4CAF50"; // fiber: hijau
+    return "#2196F3"; // access/ethernet biasa: biru
+  };
+
+  const cableDash = (edge: LabEdge): string => {
+    if (edge.down) return "8,4"; // error/down: putus-putus tegas
+    if (isTrunkEdge(edge)) return "8,6"; // trunk: dashed (markah VLAN)
+    if (edge.cableType === "serial") return "2,4";
+    return "none";
   };
 
   /** Kecocokan tipe kabel dengan tipe port: copper → port copper, fiber → port fiber, dst. */
@@ -735,31 +793,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                 data-edge-id={edge.id}
                 d={`M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`}
                 fill="none"
-                stroke={
-                  isSelected 
-                    ? "#ef4444" 
-                    : edge.down
-                      ? "#dc2626"
-                      : isHoveredEdge
-                        ? "#fbbf24"
-                        : edge.cableType === "fiber"
-                          ? "#f97316"
-                          : edge.cableType === "serial"
-                            ? "#f43f5e"
-                            : edge.cableType === "copper_cross"
-                              ? "#eab308"
-                              : "#3b82f6"
-                }
+                stroke={cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected)}
                 strokeWidth={isSelected ? "5" : isHoveredEdge || isHoverConnected ? "4.5" : "3"}
-                strokeDasharray={
-                  edge.down
-                    ? "8,4"
-                    : edge.cableType === "copper_cross"
-                      ? "6,6"
-                      : edge.cableType === "serial"
-                        ? "2,4"
-                        : "none"
-                }
+                strokeDasharray={cableDash(edge)}
                 className="transition-all hover:stroke-[4px]"
                 style={isHoveredEdge || (isHoverConnected && !isSelected) ? { filter: "drop-shadow(0 0 5px currentColor)" } : undefined}
               />
@@ -770,8 +806,59 @@ export const Canvas: React.FC<CanvasProps> = ({
                 stroke="transparent"
                 strokeWidth="20"
               />
-              <circle cx={x1} cy={y1} r="4" fill={isSelected ? "#ef4444" : "#3b82f6"} />
-              <circle cx={x2} cy={y2} r="4" fill={isSelected ? "#ef4444" : "#3b82f6"} />
+              <circle cx={x1} cy={y1} r="4" fill={cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected)} />
+              <circle cx={x2} cy={y2} r="4" fill={cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected)} />
+
+              {/* Label interface di ujung kabel (kabel terpilih) */}
+              {isSelected && (
+                <>
+                  <text
+                    x={x1}
+                    y={y1 - 8}
+                    textAnchor={x2 > x1 ? "end" : "start"}
+                    fontSize="10"
+                    fill="#FFB300"
+                    className="select-none"
+                    stroke="#0B0C0E"
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                    style={{ pointerEvents: 'none' }}
+                  >
+                    {sourceNode.ports.find((p) => p.id === edge.sourcePortId)?.name ?? edge.sourcePortId}
+                  </text>
+                  <text
+                    x={x2}
+                    y={y2 - 8}
+                    textAnchor={x2 > x1 ? "start" : "end"}
+                    fontSize="10"
+                    fill="#FFB300"
+                    className="select-none"
+                    stroke="#0B0C0E"
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                    style={{ pointerEvents: 'none' }}
+                  >
+                    {targetNode.ports.find((p) => p.id === edge.targetPortId)?.name ?? edge.targetPortId}
+                  </text>
+                </>
+              )}
+
+              {/* Badge trunk kecil di tengah kabel */}
+              {isTrunkEdge(edge) && (
+                <g pointerEvents="none">
+                  <circle cx={(x1 + x2) / 2} cy={(y1 + y2) / 2} r="7" fill="#0F1015" stroke="#FF9800" strokeWidth="1.2" opacity="0.95" />
+                  <text
+                    x={(x1 + x2) / 2}
+                    y={(y1 + y2) / 2 + 3}
+                    textAnchor="middle"
+                    fontSize="7.5"
+                    fill="#FF9800"
+                    fontWeight="bold"
+                  >
+                    TRK
+                  </text>
+                </g>
+              )}
             </g>
           );
         })}
@@ -916,20 +1003,28 @@ export const Canvas: React.FC<CanvasProps> = ({
           );
         })()}
 
-        {/* Paket ping yang melintasi kabel */}
-        {Object.entries(packetPositions).map(([id, pos]) => (
-          <circle
-            key={id}
-            cx={(pos as { x: number; y: number }).x}
-            cy={(pos as { x: number; y: number }).y}
-            r="5"
-            fill="#22d3ee"
-            stroke="#0B0C0E"
-            strokeWidth="1"
-            className="animate-pulse"
-            style={{ filter: "drop-shadow(0 0 6px rgba(34,211,238,0.9))" }}
-          />
-        ))}
+        {/* Paket ping yang melintasi kabel (cyan=request/reply, merah=gagal) */}
+        {Object.entries(packetPositions).map(([id, pos]) => {
+          const run = packetRuns.find((r) => r.id === id);
+          const isRed = run?.red === true;
+          return (
+            <circle
+              key={id}
+              cx={(pos as { x: number; y: number }).x}
+              cy={(pos as { x: number; y: number }).y}
+              r={isRed ? 6 : 5}
+              fill={isRed ? "#F44336" : "#22d3ee"}
+              stroke={isRed ? "#FFF1F1" : "#0B0C0E"}
+              strokeWidth="1"
+              className="animate-pulse"
+              style={{
+                filter: isRed
+                  ? "drop-shadow(0 0 8px rgba(244,67,54,0.95))"
+                  : "drop-shadow(0 0 6px rgba(34,211,238,0.9))",
+              }}
+            />
+          );
+        })}
       </svg>
 
       {/* Cable hover tooltip: tampilkan perangkat & port yang dihubungkan kabel */}
@@ -1045,12 +1140,16 @@ export const Canvas: React.FC<CanvasProps> = ({
             >
               <div className="pointer-events-none flex items-center justify-center w-12 h-12 bg-[#1A1D24] border border-[#2B2D31] rounded-lg shadow-sm mb-2 group-hover:border-[#4B4D51] transition-colors relative">
                 {getNodeIcon(node.deviceType)}
-                {/* Status indicator tipis: hijau menyala, merah mati */}
+                {/* Status indicator: hijau normal · kuning sedang diuji · merah mati/gagal */}
                 <span
-                  className={`absolute -top-1 -right-1 w-2 h-2 rounded-full border border-[#1A1D24] ${
-                    node.powered === false ? 'bg-rose-500' : 'bg-emerald-500'
+                  className={`absolute -top-1.5 -right-1.5 rounded-full border border-[#1A1D24] ${
+                    node.powered === false || failedPingNodeIds.includes(node.id)
+                      ? 'w-3 h-3 bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.9)] animate-pulse'
+                      : pingingNodeIds.includes(node.id)
+                        ? 'w-2.5 h-2.5 bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.9)] animate-pulse'
+                        : 'w-2 h-2 bg-emerald-500'
                   }`}
-                ></span>
+                />
               </div>
               <div className="text-center pointer-events-none flex flex-col items-center">
                 <span className={`text-[11px] font-medium tracking-tight leading-tight max-w-[88px] truncate ${
@@ -1346,50 +1445,81 @@ export const Canvas: React.FC<CanvasProps> = ({
       )}
 
       {}
-      <div className="absolute right-4 bottom-6 z-30 flex flex-col space-y-1.5 bg-slate-900/90 border border-slate-800 rounded-lg p-1.5 shadow-xl backdrop-blur-md">
+      {/* Desktop controls (disembunyikan di mobile — pakai floating action bar) */}
+      {!isMobile && (
+        <div className="absolute right-4 bottom-6 z-30 flex flex-col space-y-1.5 bg-slate-900/90 border border-slate-800 rounded-lg p-1.5 shadow-xl backdrop-blur-md">
+          <button
+            onClick={() => onToggleViewPorts?.()}
+            title={viewPorts ? 'Sembunyikan panel port' : 'Lihat port & kabel terhubung'}
+            className={`p-2 rounded transition ${
+              viewPorts
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            {viewPorts ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() =>
+              onViewportChange({
+                ...viewport,
+                zoom: Math.min(viewport.zoom + 0.15, 3.0),
+              })
+            }
+            title="Zoom In"
+            className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() =>
+              onViewportChange({
+                ...viewport,
+                zoom: Math.max(viewport.zoom - 0.15, 0.25),
+              })
+            }
+            title="Zoom Out"
+            className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onViewportChange({ x: 0, y: 0, zoom: 1.0 })}
+            title="Reset Zoom & Pan"
+            className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onToggleLock}
+            title={locked ? 'Kanvas terkunci — klik untuk buka' : 'Kunci kanvas (cegah geseran tak sengaja)'}
+            className={`p-2 rounded transition ${
+              locked
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            {locked ? <LockFilled /> : <LockOpen />}
+          </button>
+        </div>
+      )}
+
+      {/* Mobile Floating Action Bar — tombol kunci kanvas ringkas
+          (zoom in/out/reset sudah ada di MobileToolbar bawah) */}
+      {isMobile && (
         <button
-          onClick={() => onToggleViewPorts?.()}
-          title={viewPorts ? 'Sembunyikan panel port' : 'Lihat port & kabel terhubung'}
-          className={`p-2 rounded transition ${
-            viewPorts
-              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-              : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+          onClick={onToggleLock}
+          aria-label={locked ? 'Buka kunci kanvas' : 'Kunci kanvas'}
+          title={locked ? 'Kanvas terkunci' : 'Kunci kanvas'}
+          className={`absolute right-3 top-3 z-30 w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900/90 border shadow-xl backdrop-blur-md transition ${
+            locked
+              ? 'border-amber-500/50 text-amber-300'
+              : 'border-slate-700/80 text-slate-200'
           }`}
         >
-          {viewPorts ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          {locked ? <LockFilled /> : <LockOpen />}
         </button>
-        <button
-          onClick={() =>
-            onViewportChange({
-              ...viewport,
-              zoom: Math.min(viewport.zoom + 0.15, 3.0),
-            })
-          }
-          title="Zoom In"
-          className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
-        >
-          <ZoomIn className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() =>
-            onViewportChange({
-              ...viewport,
-              zoom: Math.max(viewport.zoom - 0.15, 0.25),
-            })
-          }
-          title="Zoom Out"
-          className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
-        >
-          <ZoomOut className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => onViewportChange({ x: 0, y: 0, zoom: 1.0 })}
-          title="Reset Zoom & Pan"
-          className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
-      </div>
+      )}
     </div>
   );
 };

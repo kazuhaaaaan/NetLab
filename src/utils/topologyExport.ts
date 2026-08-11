@@ -63,11 +63,11 @@ function edgePath(
   return `M ${tx(a.x)} ${ty(a.y)} C ${tx(cx1)} ${ty(cy1)}, ${tx(cx2)} ${ty(cy2)}, ${tx(b.x)} ${ty(b.y)}`;
 }
 
-function cableColor(cableType: string): string {
-  if (cableType === 'fiber') return '#f97316';
-  if (cableType === 'serial') return '#f43f5e';
-  if (cableType === 'copper_cross') return '#eab308';
-  return '#3b82f6';
+function cableColor(cableType: string, down?: boolean): string {
+  // Skema warna kabel terpusat (Tugas 1): down=merah, fiber=hijau, sisanya biru.
+  if (down) return '#F44336';
+  if (cableType === 'fiber') return '#4CAF50';
+  return '#2196F3';
 }
 
 function deviceGlyph(deviceType: string): string {
@@ -144,7 +144,7 @@ export function buildSvg(project: LabProject, theme: 'dark' | 'light'): string {
       const tgt = nodes.find((n) => n.id === e.targetNodeId);
       if (!src || !tgt) return '';
       const d = edgePath(src, e.sourcePortId, tgt, e.targetPortId, tx, ty);
-      const col = cableColor(e.cableType);
+      const col = cableColor(e.cableType, e.down);
       return `<path d="${d}" fill="none" stroke="${col}" stroke-width="3"/>`;
     })
     .join('');
@@ -199,22 +199,132 @@ export function exportTopologySvg(project: LabProject, theme: 'dark' | 'light'):
   download(blob, `${fileBaseName(project)}.svg`);
 }
 
-export function exportTopologyPng(project: LabProject, theme: 'dark' | 'light'): void {
+export function exportTopologyPng(project: LabProject, theme: 'dark' | 'light', scale = 2): void {
   const svg = buildSvg(project, theme);
   const encoded = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   const img = new Image();
   img.onload = () => {
     const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
+    canvas.width = img.width * scale;
+    canvas.height = img.height * scale;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.fillStyle = theme === 'dark' ? '#0B0C0E' : '#F4F5F8';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
       if (blob) download(blob, `${fileBaseName(project)}.png`);
     }, 'image/png');
   };
   img.src = encoded;
+}
+
+// ── Export / Import topologi sebagai file JSON (Tugas 2) ────────
+
+export const NETLAB_FILE_VERSION = '1.0';
+
+/**
+ * Simpan seluruh data kanvas (node + posisi + properti + kabel +
+ * konfigurasi CLI per perangkat) sebagai file .json yang bisa
+ * dimuat kembali. Konfigurasi CLI disertakan agar reload tidak
+ * kehilangan state vendor.
+ */
+export function exportTopologyJson(
+  project: LabProject,
+  deviceConfigs: Record<string, unknown> = {}
+): string {
+  const payload = {
+    format: 'netlab-topology',
+    version: NETLAB_FILE_VERSION,
+    exportedAt: new Date().toISOString(),
+    project,
+    deviceConfigs,
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+export function downloadTopologyJson(project: LabProject, deviceConfigs: Record<string, unknown> = {}): void {
+  const json = exportTopologyJson(project, deviceConfigs);
+  const blob = new Blob([json], { type: 'application/json' });
+  const name = (project.metadata.name || 'topology').toLowerCase().replace(/[^a-z0-9]+/g, '_') || 'topology';
+  download(blob, `${name}.json`);
+}
+
+export interface TopologyFileContents {
+  project: LabProject;
+  deviceConfigs: Record<string, unknown>;
+}
+
+/** Parse + validasi file JSON topologi. Error berbahasa jelas. */
+export function parseTopologyJson(text: string): TopologyFileContents {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('File JSON tidak dapat dibaca — bukan JSON yang valid.');
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Isi file topologi kosong atau bukan objek.');
+  }
+  const p = parsed as Record<string, unknown>;
+
+  // Format NetLab (wrapper) atau .mlab lama (LabProject langsung)
+  if (p.nodes && p.edges) {
+    const project = p as unknown as LabProject;
+    if (!Array.isArray(project.nodes) || !Array.isArray(project.edges)) {
+      throw new Error('Struktur topologi tidak lengkap: nodes/edges harus berupa array.');
+    }
+    return { project: normalizeProject(project), deviceConfigs: {} };
+  }
+  if (p.format === 'netlab-topology' && p.project) {
+    const project = p.project as LabProject;
+    if (!Array.isArray(project?.nodes) || !Array.isArray(project?.edges)) {
+      throw new Error('Struktur topologi tidak lengkap: nodes/edges hilang atau bukan array.');
+    }
+    const configs = (p.deviceConfigs && typeof p.deviceConfigs === 'object' ? p.deviceConfigs : {}) as Record<string, unknown>;
+    return { project: normalizeProject(project), deviceConfigs: configs };
+  }
+  throw new Error('Format tidak dikenali. File ini bukan file topologi NetLab (.mlab/.json).');
+}
+
+/** Normalisasi proyek hasil parse: isi field yang hilang agar engine tidak crash. */
+export function normalizeProject(project: LabProject): LabProject {
+  const nodes = Array.isArray(project.nodes)
+    ? project.nodes.map((n) => ({
+        ...n,
+        ports: Array.isArray(n.ports) ? n.ports : [],
+        position:
+          n.position && typeof n.position.x === 'number' && typeof n.position.y === 'number'
+            ? n.position
+            : { x: 100, y: 100 },
+      }))
+    : [];
+  const edges = Array.isArray(project.edges)
+    ? project.edges.filter(
+        (e) =>
+          e &&
+          typeof e.sourceNodeId === 'string' &&
+          typeof e.targetNodeId === 'string' &&
+          typeof e.sourcePortId === 'string' &&
+          typeof e.targetPortId === 'string'
+      )
+    : [];
+  return {
+    version: '1.0',
+    metadata: {
+      name: typeof project.metadata?.name === 'string' ? project.metadata.name : 'Imported Topology',
+      author: typeof project.metadata?.author === 'string' ? project.metadata.author : 'NetLab',
+      description: typeof project.metadata?.description === 'string' ? project.metadata.description : '',
+      createdAt: typeof project.metadata?.createdAt === 'string' ? project.metadata.createdAt : new Date().toISOString(),
+      updatedAt: typeof project.metadata?.updatedAt === 'string' ? project.metadata.updatedAt : new Date().toISOString(),
+    },
+    nodes,
+    edges,
+    viewport:
+      project.viewport &&
+      typeof project.viewport.x === 'number' &&
+      typeof project.viewport.zoom === 'number'
+        ? project.viewport
+        : { x: 0, y: 0, zoom: 1 },
+  };
 }

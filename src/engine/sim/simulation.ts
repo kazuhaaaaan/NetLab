@@ -40,6 +40,8 @@ interface PathResult {
   path?: SimDevice[];
   edges?: string[];
   ttl?: number;
+  /** jalur parsial (edge ids) yang sudah dilewati sebelum paket gagal — untuk animasi merah */
+  passedEdges?: string[];
   reason?: 'ttl' | 'unreachable' | 'blocked' | 'power';
 }
 
@@ -877,23 +879,35 @@ export class SimulationEngine {
     // same port = loop, but re-entry via a different port is legitimate
     // (e.g. host → switch → router → switch → host).
     const visitKey = src.isSwitch ? `${src.id}:${ingressPort || ''}` : src.id;
-    if (visited.has(visitKey)) return { ok: false, reason: 'unreachable' };
-    if (!this.isNodePowered(src.id)) return { ok: false, reason: 'power' };
+    if (visited.has(visitKey)) {
+      return { ok: false, reason: 'unreachable', passedEdges: [...edges] };
+    }
+    if (!this.isNodePowered(src.id)) {
+      return { ok: false, reason: 'power', passedEdges: [...edges] };
+    }
 
     const localIface = src.hasIp(dstIp);
     if (localIface) {
       // the destination device itself may filter ICMP via ACL / firewall
-      if (this.aclBlocks(src, srcIp, dstIp)) return { ok: false, reason: 'blocked' };
+      if (this.aclBlocks(src, srcIp, dstIp)) {
+        return { ok: false, reason: 'blocked', passedEdges: [...edges] };
+      }
       return { ok: true, path: [src], edges: [...edges], ttl };
     }
 
-    if (ttl <= 0) return { ok: false, reason: 'ttl' };
+    if (ttl <= 0) {
+      return { ok: false, reason: 'ttl', passedEdges: [...edges], ttl };
+    }
 
     const next = new Set(visited);
     next.add(visitKey);
 
     if (src.isSwitch) {
-      let best: PathResult = { ok: false, reason: 'unreachable' };
+      let best: PathResult = {
+        ok: false,
+        reason: 'unreachable',
+        passedEdges: [...edges],
+      };
       const ingressEdgeId = edges.length > 0 ? edges[edges.length - 1] : undefined;
       for (const link of this.linksOfDevice(src.id)) {
         const peer = this.devices.get(link.nodeIdA === src.id ? link.nodeIdB : link.nodeIdA);
@@ -905,26 +919,35 @@ export class SimulationEngine {
           this.learnHop(src, peer, link);
           return { ok: true, path: [src, ...(r.path || [])], edges: r.edges, ttl: r.ttl };
         }
-        if (r.reason === 'ttl') best = r;
-        if (r.reason === 'blocked') best = r;
+        if (r.reason === 'ttl' || r.reason === 'blocked' || r.reason === 'power') {
+          if (!best.passedEdges || (r.passedEdges?.length ?? 0) > best.passedEdges.length) best = r;
+        }
       }
       return best;
     }
 
     // L3 device — ACL / firewall filter applies before forwarding
-    if (this.aclBlocks(src, srcIp, dstIp)) return { ok: false, reason: 'blocked' };
+    if (this.aclBlocks(src, srcIp, dstIp)) {
+      return { ok: false, reason: 'blocked', passedEdges: [...edges] };
+    }
 
     const nh = src.nextHop(dstIp);
-    if (!nh || !nh.iface) return { ok: false, reason: 'unreachable' };
+    if (!nh || !nh.iface) {
+      return { ok: false, reason: 'unreachable', passedEdges: [...edges] };
+    }
 
     const peer = this.peerViaIface(src.id, nh.iface);
-    if (!peer) return { ok: false, reason: 'unreachable' };
+    if (!peer) {
+      return { ok: false, reason: 'unreachable', passedEdges: [...edges] };
+    }
 
     const portName = this.physicalPortName(src.id, nh.iface);
     const link = this.linksOfDevice(src.id).find(
       (l) => (l.nodeIdA === src.id && l.portNameA === portName) || (l.nodeIdB === src.id && l.portNameB === portName)
     );
-    if (!link) return { ok: false, reason: 'unreachable' };
+    if (!link) {
+      return { ok: false, reason: 'unreachable', passedEdges: [...edges] };
+    }
 
     const peerIngress = link.nodeIdA === peer.id ? link.portNameA : link.portNameB;
     const r = this.findPath(peer, dstIp, srcIp, ttl - 1, next, [...edges, link.id], peerIngress);
@@ -1061,7 +1084,7 @@ export class SimulationEngine {
             return {
               success: false,
               path: [],
-              edgeIds: [],
+              edgeIds: tail.passedEdges && tail.passedEdges.length > 0 ? [...edges, ...tail.passedEdges] : edges,
               ttlAtDestination: 0,
               reason: 'unreachable',
             };
@@ -1080,20 +1103,21 @@ export class SimulationEngine {
         const back = this.findPath(dstDev, backTarget, dstDev.getIpAddress() || '', 64, new Set(), []);
         if (back.ok && natIp && natDev) {
           // de-NAT: the NAT router must still reach the original source on its LAN
-          if (!this.findPath(natDev, srcIp, natIp, 64, new Set(), []).ok) {
+          const deNat = this.findPath(natDev, srcIp, natIp, 64, new Set(), []);
+          if (!deNat.ok) {
             return {
               success: false,
               path: [],
-              edgeIds: [],
+              edgeIds: deNat.passedEdges && deNat.passedEdges.length > 0 ? [...edges, ...deNat.passedEdges] : edges,
               ttlAtDestination: 0,
-              reason: 'unreachable',
+              reason: deNat.reason || 'unreachable',
             };
           }
         } else if (!back.ok) {
           return {
             success: false,
             path: [],
-            edgeIds: [],
+            edgeIds: back.passedEdges && back.passedEdges.length > 0 ? [...edges, ...back.passedEdges] : edges,
             ttlAtDestination: 0,
             reason: back.reason || 'unreachable',
           };
@@ -1110,7 +1134,7 @@ export class SimulationEngine {
     return {
       success: false,
       path: [],
-      edgeIds: [],
+      edgeIds: result.passedEdges || [],
       ttlAtDestination: 0,
       reason: result.reason || 'unreachable',
     };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { X } from 'lucide-react';
 import { LabProject, LabNode, LabEdge, Viewport, TerminalLog, VendorType, ActiveTool, PacketAnimation } from './types';
 import { Navbar } from './components/Navbar';
@@ -247,6 +247,34 @@ export default function App() {
 
   // Packet animation (paket ICMP melintasi kabel di canvas)
   const [packetAnimations, setPacketAnimations] = useState<PacketAnimation[]>([]);
+  // Kunci kanvas: cegah gesture pan/zoom/drag node tak sengaja
+  const [canvasLocked, setCanvasLocked] = useState(false);
+  // Interface trunk per node (dari konfigurasi CLI) → warna kabel oranye di canvas
+  const [trunkPortsByNode, setTrunkPortsByNode] = useState<Record<string, string[]>>({});
+  // Perangkat yang terlibat dalam animasi ping berjalan (badge kuning di canvas)
+  const pingingNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const a of packetAnimations) {
+      for (const eid of a.edgeIds) {
+        const e = project.edges.find((ed) => ed.id === eid);
+        if (e) {
+          ids.add(e.sourceNodeId);
+          ids.add(e.targetNodeId);
+        }
+      }
+    }
+    return [...ids];
+  }, [packetAnimations, project.edges]);
+  // Perangkat tujuan ping yang gagal (badge merah menyala)
+  const failedPingNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const a of packetAnimations) {
+      if (!a.red) continue;
+      const e = project.edges.find((ed) => ed.id === a.edgeIds[a.edgeIds.length - 1]);
+      if (e) ids.add(e.targetNodeId);
+    }
+    return [...ids];
+  }, [packetAnimations, project.edges]);
   // Penanda pembaruan state engine → panel statistik perlu di-refresh
   const [statsVersion, setStatsVersion] = useState(0);
 
@@ -290,6 +318,16 @@ export default function App() {
     simEngineRef.current.setWebServer(nodeId, mem.webServer || undefined);
     simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
     simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    setTrunkPortsByNode((prev) => {
+      const ports = mem.trunkPorts && mem.trunkPorts.length > 0 ? [...mem.trunkPorts] : undefined;
+      if (!ports) {
+        if (!(nodeId in prev)) return prev;
+        const next = { ...prev };
+        delete next[nodeId];
+        return next;
+      }
+      return { ...prev, [nodeId]: ports };
+    });
     simEngineRef.current.setStp(nodeId, mem.stp || undefined);
     simEngineRef.current.setFhrp(nodeId, mem.fhrpGroups || undefined);
     simEngineRef.current.setWireless(
@@ -865,6 +903,21 @@ export default function App() {
           self: 'Tujuan adalah device ini sendiri',
         };
         message = reasons[simResult.reason || 'unreachable'];
+
+        // Animasi paket gagal: paket merah melintasi jalur parsial sebelum drop
+        if (simResult.edgeIds.length > 0) {
+          const reqId = `${pingId}-req`;
+          const repId = `${pingId}-rep`;
+          setPacketAnimations((prev) => [
+            ...prev.filter((a) => a.id !== reqId && a.id !== repId),
+            { id: reqId, edgeIds: simResult.edgeIds, red: true, durationMs: 1600 },
+          ]);
+          window.setTimeout(() => {
+            setPacketAnimations((prev) =>
+              prev.filter((a) => a.id !== reqId && a.id !== repId)
+            );
+          }, 3200);
+        }
       }
 
       setPingResults((prev) =>
@@ -1320,6 +1373,12 @@ export default function App() {
             viewPorts={viewPorts}
             onToggleViewPorts={() => setViewPorts((v) => !v)}
             packetAnimations={packetAnimations}
+            trunkPortsByNode={trunkPortsByNode}
+            locked={canvasLocked}
+            onToggleLock={() => setCanvasLocked((v) => !v)}
+            pingingNodeIds={pingingNodeIds}
+            failedPingNodeIds={failedPingNodeIds}
+            isMobile={isMobile}
             onNodeTap={
               isMobile
                 ? (id) => {
