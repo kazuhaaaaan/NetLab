@@ -41,6 +41,29 @@
   100% { transform: rotate(360deg); }
 }
 
+/* 404 page — luar angkasa: bintang berkelip, teks glow, float pelan */
+@keyframes netlab-star-twinkle {
+  0%, 100% { opacity: 0.15; transform: scale(0.8); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+.netlab-star {
+  animation: netlab-star-twinkle 3s ease-in-out infinite;
+}
+@keyframes netlab-404-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-12px); }
+}
+.netlab-float-404 {
+  animation: netlab-404-float 5.5s ease-in-out infinite;
+}
+.netlab-404-glow {
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 26px rgba(103, 232, 249, 0.35)) drop-shadow(0 0 60px rgba(167, 139, 250, 0.28));
+}
+
 /* Pause all in-scope animations when the simulation is paused */
 .netlab-paused *,
 .netlab-paused *::before,

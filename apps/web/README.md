@@ -1,4 +1,4 @@
-# MikroLab Web Application (`apps/web`)
+# NetLab Web Application (`apps/web`)
 
 > Single Page Application client built with React 19, TypeScript 5, Tailwind CSS v4, and Vite.
 

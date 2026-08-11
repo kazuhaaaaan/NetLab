@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://net-lab-wheat.vercel.app/sitemap.xml
+Sitemap: https://netlab.kazudev.my.id/sitemap.xml

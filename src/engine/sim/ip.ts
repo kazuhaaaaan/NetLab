@@ -1,5 +1,5 @@
 // ============================================================
-// IPv4 utilities for the MikroLab simulation engine
+// IPv4 utilities for the NetLab simulation engine
 // ============================================================
 
 export function isValidIp(ip: string): boolean {

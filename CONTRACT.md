@@ -1,4 +1,4 @@
-# MikroLab Root System Contract
+# NetLab Root System Contract
 
 ## Contract Standard v1.0
 

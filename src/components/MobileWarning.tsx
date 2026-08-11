@@ -46,7 +46,7 @@ export const MobileWarning: React.FC = () => {
             <MonitorSmartphone className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-xs font-bold text-amber-300">Mikrolab paling optimal di Desktop / Laptop</h3>
+            <h3 className="text-xs font-bold text-amber-300">NetLab paling optimal di Desktop / Laptop</h3>
             <p className="mt-1 text-[11px] text-slate-300 leading-relaxed">
               Website ini lebih mudah dioperasikan lewat komputer (desktop, laptop, atau
               MacBook) — mouse, keyboard, dan layar lebar memberikan pengalaman terbaik.

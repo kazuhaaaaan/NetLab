@@ -225,9 +225,10 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
     if (cmdResult.type === 'bgp_peer_print') {
       const peers = cmdResult.peers || [];
       const header = 'Flags: X - disabled, E - established, C - connected, P - peer in AS\n #   NAME                                  REMOTE-ADDRESS                                  REMOTE-AS\n';
-      const rows = peers.map((p: any, i: number) =>
-        ` ${i} E ${(p.name || 'peer'+i).padEnd(37)} ${(p.remoteAddr || '0.0.0.0').padEnd(47)} ${p.remoteAs || '0'}`
-      ).join('\n');
+      const rows = peers.map((p: any, i: number) => {
+        const established = p.state === 'Established';
+        return ` ${i} ${established ? 'E' : 'X'} ${(p.name || 'peer' + i).padEnd(37)} ${(p.remoteAddr || '0.0.0.0').padEnd(47)} ${p.remoteAs || '0'}`;
+      }).join('\n');
       return header + (rows || ' -- no entries --');
     }
     if (cmdResult.type === 'version' || cmdResult.type === 'show_version') {
@@ -464,7 +465,7 @@ export class CiscoVendorAdapter implements IVendorAdapter {
       const neighbors = cmdResult.neighbors || [];
       const header = 'Neighbor ID     Pri   State           Dead Time   Address         Interface\n';
       const rows = neighbors.map((n: any) =>
-        `${(n.routerId || '0.0.0.0').padEnd(15)}   1   FULL/  -        00:00:31    ${(n.ip || '').padEnd(16)} ${n.iface || ''}`
+        `${(n.routerId || '0.0.0.0').padEnd(15)}   1   ${(n.state === 'Full' ? 'FULL/  -' : (n.state || 'Down')).padEnd(14)} 00:00:31    ${(n.ip || '').padEnd(16)} ${n.iface || ''}`
       );
       return header + (rows.join('\n') || '(no OSPF neighbors)');
     }
@@ -890,14 +891,16 @@ export class HuaweiVendorAdapter implements IVendorAdapter {
       if (peers.length === 0) {
         return ` BGP local router ID : ${routerId}\n Local AS number : ${asn}\n Total number of peers : 0`;
       }
+      const establishedCount = peers.filter((p: any) => p.state === 'Established').length;
       const rows = peers.map((p: any) => {
         const addr = (p.remoteAddr || '0.0.0.0').padEnd(16);
-        return `${addr}  4   ${String(p.remoteAs || 0).padEnd(8)} 0        0        0 00:00:18  Established 0`;
+        const state = p.state === 'Established' ? 'Established' : p.state || 'Idle';
+        return `${addr}  4   ${String(p.remoteAs || 0).padEnd(8)} 0        0        0 ${String(p.uptime || 'never').padEnd(10)} ${state} ${p.prefixes || 0}`;
       }).join('\n');
       return [
         ` BGP local router ID : ${routerId}`,
         ` Local AS number : ${asn}`,
-        ` Total number of peers : ${peers.length}                 Peers in established state : ${peers.length}`,
+        ` Total number of peers : ${peers.length}                 Peers in established state : ${establishedCount}`,
         '',
         '  Peer            V          AS  MsgRcvd  MsgSent  OutQ  Up/Down       State PrefRcv',
         '  ------------------------------------------------------------------------------------',
@@ -1307,7 +1310,7 @@ export class OpenwrtVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'ip_route') {
       const routes = cmdResult.routes || [];
-      if (routes.length === 0) return 'default via 192.168.1.1 dev br-lan';
+      if (routes.length === 0) return '(route table empty — tidak ada jaringan yang dikonfigurasi)';
       return routes.map((r: any) => {
         const dst = r.dst === '0.0.0.0/0' || r.dst === 'default' ? 'default' : r.dst;
         return `${dst}${r.gateway ? ` via ${r.gateway}` : ''} dev ${r.iface || 'br-lan'}`;
@@ -1439,7 +1442,14 @@ export class LinuxDebianVendorAdapter implements IVendorAdapter {
       return entries.map((e: any) => `${e.ip} dev eth0 lladdr ${e.mac} REACHABLE`).join('\n');
     }
     if (cmdResult.type === 'ip_route' || cmdResult.type === 'show_ip_route') {
-      return 'default via 192.168.1.1 dev eth0 proto static metric 100\n192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10';
+      const routes = cmdResult.routes || [];
+      if (routes.length === 0) return 'default via 192.168.1.1 dev eth0 proto static metric 100\n192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10';
+      return routes.map((r: any) => {
+        const dst = r.dst === '0.0.0.0/0' || r.dst === 'default' ? 'default' : r.dst;
+        const proto = r.kind === 'connected' ? 'kernel scope link' : 'static';
+        const src = r.prefSrc ? ` src ${r.prefSrc}` : '';
+        return `${dst}${r.gateway ? ` via ${r.gateway}` : ''} dev ${r.iface || 'eth0'} proto ${proto} metric 100${src}`;
+      }).join('\n');
     }
     if (cmdResult.type === 'tcp_print') {
       const conns = cmdResult.connections || [];
@@ -3830,7 +3840,7 @@ export class VendorDispatcher {
       cmdResult = { raw: '' };
     } else if (/^\/ip\s+firewall\s+mangle\s+print/i.test(rawInput.trim()) || (normalized.target === 'ip_firewall_mangle' && normalized.action === 'print')) {
       cmdResult = { type: 'mangle_print', rules: mem.mangleRules };
-    } else if (/^\/routing\s+(ospf|rip|bgp)\s+(instance|network)?\s*(print)?/i.test(rawInput.trim()) && vendorId === 'mikrotik' && /print/i.test(rawInput.trim())) {
+    } else if (/^\/routing\s+(ospf|rip|bgp)\s+(?:instance|network)?\s*print/i.test(rawInput.trim()) && !/peer/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       cmdResult = { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
     } else if (/^show\s+ip\s+protocols/i.test(rawInput.trim())) {
       cmdResult = { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
@@ -3930,7 +3940,12 @@ export class VendorDispatcher {
         cmdResult = { raw: '% Incomplete command' };
       }
     } else if (normalized.action === 'bgp_peer_print') {
-      cmdResult = { type: 'bgp_peer_print', peers: mem.bgp.peers, asn: mem.bgp.asn, routerId: mem.bgp.routerId };
+      const states = typeof context.bgpNeighborProvider === 'function' ? context.bgpNeighborProvider() : [];
+      const peers = mem.bgp.peers.map((p: any) => {
+        const s = states.find((x: any) => x.remoteAddr === p.remoteAddr);
+        return { ...p, state: s?.state || 'Idle', prefixes: s?.prefixes ?? 0, uptime: s?.uptime || 'never' };
+      });
+      cmdResult = { type: 'bgp_peer_print', peers, asn: mem.bgp.asn, routerId: mem.bgp.routerId };
     } else if (normalized.action === 'show_bgp_summary') {
       const states = typeof context.bgpNeighborProvider === 'function' ? context.bgpNeighborProvider() : [];
       const peers = mem.bgp.peers.map((p: any) => {
@@ -5388,7 +5403,12 @@ function huaweiCommand(raw: string, context: any, mem: any): any {
     return { type: 'nat_print', rules: mem.natRules };
   }
   if (/^display\s+bgp\s+peer/i.test(t)) {
-    return { type: 'bgp_peer_print', peers: mem.bgp.peers };
+    const states = typeof context.bgpNeighborProvider === 'function' ? context.bgpNeighborProvider() : [];
+    const peers = mem.bgp.peers.map((p: any) => {
+      const s = states.find((x: any) => x.remoteAddr === p.remoteAddr);
+      return { ...p, state: s?.state || 'Idle', prefixes: s?.prefixes ?? 0, uptime: s?.uptime || 'never' };
+    });
+    return { type: 'bgp_peer_print', peers, asn: mem.bgp.asn, routerId: mem.bgp.routerId };
   }
   return undefined;
 }

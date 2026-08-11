@@ -32,15 +32,15 @@ export const MonorepoExplorerModal: React.FC<MonorepoExplorerModalProps> = ({ is
               <FolderTree className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-100">MikroLab Monorepo Foundation Architecture</h2>
+              <h2 className="text-base font-bold text-slate-100">NetLab Monorepo Foundation Architecture</h2>
               <p className="text-xs text-slate-400">11 Workspace Packages • Clean Architecture • SOLID Contracts</p>
             </div>
           </div>
 
           <div className="flex items-center space-x-3">
             <a
-              href="/MikroLab-Foundation-v1.zip"
-              download="MikroLab-Foundation-v1.zip"
+              href="/NetLab-Foundation-v1.zip"
+              download="NetLab-Foundation-v1.zip"
               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-md shadow-emerald-950/40 transition"
             >
               <Download className="w-4 h-4" />

@@ -1,4 +1,4 @@
-# MikroLab Coding Standards & Rules
+# NetLab Coding Standards & Rules
 
 ## 1. Clean Architecture & SOLID Standards
 

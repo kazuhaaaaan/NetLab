@@ -1,6 +1,6 @@
-# MikroLab System Prompt Specification
+# NetLab System Prompt Specification
 
-This file serves as the system prompt directive for AI coding assistants and autonomous agents working on the MikroLab repository.
+This file serves as the system prompt directive for AI coding assistants and autonomous agents working on the NetLab repository.
 
 ## Core Directives for AI Agents:
 1. **Never pollute Core Logic with Vendor Syntax**: Core simulation engine modules (`@mikrolab/core`, `@mikrolab/packet`, `@mikrolab/protocols`) must remain 100% vendor-neutral.

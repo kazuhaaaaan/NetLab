@@ -1,8 +1,8 @@
-# MikroLab System Architecture
+# NetLab System Architecture
 
 ## 1. Architectural Philosophy
 
-MikroLab is designed from first principles following **Clean Architecture**, **SOLID Principles**, and a **Plugin Architecture**.
+NetLab is designed from first principles following **Clean Architecture**, **SOLID Principles**, and a **Plugin Architecture**.
 
 ### Core Invariants:
 1. **Zero Server Dependency**: 100% of execution occurs inside client browser threads (Web Workers & React UI layer).
@@ -82,7 +82,7 @@ apps/web ──► @mikrolab/ui ──► @mikrolab/canvas ──► @mikrolab/s
 
 ## 5. Security & Isolation
 
-Since MikroLab runs entirely in client memory:
+Since NetLab runs entirely in client memory:
 - No user credentials or lab configurations are transmitted to remote servers.
 - Lab files (`.mlab`) are validated against JSON schema definitions before parsing.
 - Web Worker threads prevent complex packet simulations from blocking the main React UI frame thread.

@@ -246,7 +246,7 @@ export interface TcpConnectResult {
 }
 
 /**
- * MikroLab real network simulation engine.
+ * NetLab real network simulation engine.
  *
  * Maintains per-device state (interfaces, IPs, routes, ARP caches),
  * derives links from the topology edges and routes packets hop-by-hop

@@ -29,9 +29,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Inject Gemini key (mode langsung browser -> Gemini)
-        run: echo "VITE_GEMINI_API_KEY=${{ secrets.VITE_GEMINI_API_KEY }}" >> .env
-
       - name: Build (BASE_PATH untuk subfolder GitHub Pages)
         run: npm run build
         env:

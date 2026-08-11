@@ -4,7 +4,7 @@ import path from 'path';
 const packages = [
   {
     name: 'ui',
-    title: 'MikroLab UI Design System',
+    title: 'NetLab UI Design System',
     desc: 'VS Code, Figma, and Cisco Packet Tracer inspired React UI components, panels, dark/light theme systems, gesture controls, and responsive layouts.',
     deps: { '@mikrolab/shared': 'workspace:*', 'lucide-react': '^0.546.0', 'react': '^19.0.1', 'motion': '^12.23.24' },
     code: `export interface UITheme {
@@ -29,7 +29,7 @@ export const defaultDarkTheme: UITheme = {
   },
   {
     name: 'canvas',
-    title: 'MikroLab Interactive Topology Canvas Engine',
+    title: 'NetLab Interactive Topology Canvas Engine',
     desc: '60 FPS Canvas & SVG rendering engine supporting device nodes, interactive cable links, port indicators, grid snappers, selection boxes, and gesture pans/zooms.',
     deps: { '@mikrolab/shared': 'workspace:*', '@mikrolab/core': 'workspace:*', 'react': '^19.0.1' },
     code: `import { Point, ViewportState } from '@mikrolab/shared';
@@ -64,7 +64,7 @@ export class CanvasRenderer {
   },
   {
     name: 'terminal',
-    title: 'MikroLab Multi-Vendor Terminal Viewport',
+    title: 'NetLab Multi-Vendor Terminal Viewport',
     desc: 'Vendor-authentic interactive CLI viewport supporting prompt customization (MikroTik RouterOS, Cisco IOS, JunOS), command history, tab autocomplete, and speed control.',
     deps: { '@mikrolab/shared': 'workspace:*', '@mikrolab/cli': 'workspace:*', '@mikrolab/vendors': 'workspace:*' },
     code: `export interface TerminalTab {
@@ -85,7 +85,7 @@ export interface TerminalOutputLine {
   },
   {
     name: 'core',
-    title: 'MikroLab Core Topology & Simulation Engine',
+    title: 'NetLab Core Topology & Simulation Engine',
     desc: 'Vendor-agnostic state engine managing topology entities, link connectivity, device lifecycle, simulation ticks, and event bus dispatching.',
     deps: { '@mikrolab/shared': 'workspace:*' },
     code: `export interface DeviceEntity {
@@ -119,7 +119,7 @@ export class CoreTopologyEngine {
   },
   {
     name: 'cli',
-    title: 'MikroLab Lexer, Parser, & AST Command Engine',
+    title: 'NetLab Lexer, Parser, & AST Command Engine',
     desc: 'Grammar lexer, token stream generator, AST parser, and command object compiler converting vendor syntax strings into normalized engine actions.',
     deps: { '@mikrolab/shared': 'workspace:*' },
     code: `export interface Token {
@@ -143,7 +143,7 @@ export interface NormalizedCommand {
   },
   {
     name: 'packet',
-    title: 'MikroLab Packet Processing & Encapsulation Engine',
+    title: 'NetLab Packet Processing & Encapsulation Engine',
     desc: 'In-memory binary packet buffer management, frame encapsulation/decapsulation, checksum calculation, and packet trace events.',
     deps: { '@mikrolab/shared': 'workspace:*' },
     code: `export interface EthernetFrame {
@@ -164,7 +164,7 @@ export interface IPv4Packet {
   },
   {
     name: 'protocols',
-    title: 'MikroLab Networking Protocol Stack',
+    title: 'NetLab Networking Protocol Stack',
     desc: 'Vendor-agnostic implementations of Ethernet II, ARP, IPv4, IPv6, ICMP, static routing, OSPF, and BGP state machines.',
     deps: { '@mikrolab/shared': 'workspace:*', '@mikrolab/packet': 'workspace:*' },
     code: `export interface RoutingTableEntry {
@@ -184,7 +184,7 @@ export interface ARPCacheEntry {
   },
   {
     name: 'devices',
-    title: 'MikroLab Hardware & Virtual Device Definitions',
+    title: 'NetLab Hardware & Virtual Device Definitions',
     desc: 'Virtual hardware specifications including ethernet port count, MAC address generators, switch fabrics, and router memory buffers.',
     deps: { '@mikrolab/shared': 'workspace:*', '@mikrolab/core': 'workspace:*' },
     code: `export interface HardwareSpec {
@@ -211,7 +211,7 @@ export const ROUTERBOARD_3011_SPEC: HardwareSpec = {
   },
   {
     name: 'vendors',
-    title: 'MikroLab Vendor Syntax Adapters',
+    title: 'NetLab Vendor Syntax Adapters',
     desc: 'Vendor syntax adapters translating CLI syntax for MikroTik RouterOS, Cisco IOS, Cisco NX-OS, Juniper JunOS, Huawei VRP, Ubiquiti EdgeOS, VyOS, Fortinet, Aruba, and OpenWrt into normalized Command Objects.',
     deps: { '@mikrolab/shared': 'workspace:*', '@mikrolab/cli': 'workspace:*' },
     code: `import { NormalizedCommand } from '@mikrolab/cli';
@@ -244,7 +244,7 @@ export class MikroTikVendorAdapter implements IVendorAdapter {
   },
   {
     name: 'sdk',
-    title: 'MikroLab Plugin Extension SDK',
+    title: 'NetLab Plugin Extension SDK',
     desc: 'Public developer SDK enabling community developers to build custom vendor adapters, new network protocol handlers, and custom canvas overlays.',
     deps: { '@mikrolab/shared': 'workspace:*', '@mikrolab/core': 'workspace:*', '@mikrolab/vendors': 'workspace:*' },
     code: `import { IVendorAdapter } from '@mikrolab/vendors';
@@ -259,7 +259,7 @@ export interface MikroLabPlugin {
   },
   {
     name: 'shared',
-    title: 'MikroLab Universal Utilities & Math Models',
+    title: 'NetLab Universal Utilities & Math Models',
     desc: 'Shared geometry types, point calculations, pointer event abstractions, touch gesture recognizers, and serialization schema definitions.',
     deps: {},
     code: `export interface Point {

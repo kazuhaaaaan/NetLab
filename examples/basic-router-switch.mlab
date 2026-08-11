@@ -2,7 +2,7 @@
   "version": "1.0",
   "metadata": {
     "name": "Basic MikroTik Router & Switch Lab",
-    "author": "MikroLab Architect",
+    "author": "NetLab Architect",
     "description": "Simple 2-node lab featuring MikroTik RouterOS connected to a Cisco Switch."
   },
   "nodes": [

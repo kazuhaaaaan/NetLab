@@ -1,6 +1,6 @@
 # @mikrolab/packet
 
-> MikroLab Packet Processing & Encapsulation Engine
+> NetLab Packet Processing & Encapsulation Engine
 
 In-memory binary packet buffer management, frame encapsulation/decapsulation, checksum calculation, and packet trace events.
 

@@ -1,6 +1,6 @@
 # @mikrolab/sdk
 
-> MikroLab Plugin Extension SDK
+> NetLab Plugin Extension SDK
 
 Public developer SDK enabling community developers to build custom vendor adapters, new network protocol handlers, and custom canvas overlays.
 

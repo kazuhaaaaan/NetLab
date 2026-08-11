@@ -2,7 +2,7 @@
   "version": "1.0",
   "metadata": {
     "name": "Enterprise Multi-Vendor Core Lab",
-    "author": "MikroLab Architect",
+    "author": "NetLab Architect",
     "description": "Multi-vendor topology featuring MikroTik, Cisco, Juniper, and Huawei edge devices."
   },
   "nodes": [

@@ -1,6 +1,6 @@
 # @mikrolab/devices
 
-> MikroLab Hardware & Virtual Device Definitions
+> NetLab Hardware & Virtual Device Definitions
 
 Virtual hardware specifications including ethernet port count, MAC address generators, switch fabrics, and router memory buffers.
 

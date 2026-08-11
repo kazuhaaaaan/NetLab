@@ -20,6 +20,7 @@ import { useMediaQuery } from './hooks/useMediaQuery';
 import { PingPanel, PingResult } from './components/PingPanel';
 import { SplashScreen } from './components/SplashScreen';
 import { LandingPage } from './components/LandingPage';
+import NotFoundPage from './components/NotFoundPage';
 import { MobileWarning } from './components/MobileWarning';
 import { StorageEngine } from './storage/db';
 import { VENDOR_MAP } from './data/vendors';
@@ -85,13 +86,14 @@ export default function App() {
     setShowSplash(false);
   }, []);
 
-  // ── Public routes: /home → landing page, /canvas → simulator ──────
+  // ── Public routes: /home → landing page, /canvas → simulator, lain → 404 ──
   // The simulator itself is untouched; only the view↔URL mapping below
   // decides which UI the app renders. "/" stays landing for new visitors,
   // but keeps loading the simulator for sessions that already chose canvas.
-  function routeFromPathname(): 'landing' | 'canvas' {
+  function routeFromPathname(): 'landing' | 'canvas' | 'notfound' {
     const path = window.location.pathname.replace(/\/+$/, '');
     if (path === '/canvas') return 'canvas';
+    if (path === '/home' || path === '') return 'landing';
     if (path === '/') {
       try {
         return localStorage.getItem('netlab_view') === 'canvas' ? 'canvas' : 'landing';
@@ -99,19 +101,22 @@ export default function App() {
         return 'landing';
       }
     }
-    return 'landing';
+    // Pathname tak dikenal → halaman 404 (bukan diam-diam landing).
+    return 'notfound';
   }
 
   // Landing page vs Canvas simulator view — URL-driven, dengan fallback
   // localStorage agar reload tetap berada di view yang sama.
-  const [view, setView] = useState<'landing' | 'canvas'>(routeFromPathname);
+  const [view, setView] = useState<'landing' | 'canvas' | 'notfound'>(routeFromPathname);
 
   // Keep document title in sync with the public route (/home vs /canvas).
   useEffect(() => {
     document.title =
       view === 'canvas'
         ? 'NetLab (Networking Laboratory) | Network Simulator'
-        : 'NetLab (Networking Laboratory) — Multi-Vendor Network Simulator';
+        : view === 'notfound'
+          ? '404 — Halaman Tidak Ditemukan | NetLab'
+          : 'NetLab (Networking Laboratory) — Multi-Vendor Network Simulator';
   }, [view]);
 
   // Back/forward navigation across /home ↔ /canvas
@@ -1312,6 +1317,11 @@ export default function App() {
       showToast('Gagal membuat link — topologi terlalu besar', 'error');
     }
   }, [project, showToast]);
+
+  // ── 404 — halaman tidak ditemukan (pathname tak dikenal) ─────────────
+  if (view === 'notfound') {
+    return <NotFoundPage onGoHome={goToHome} />;
+  }
 
   // ── Landing page (pre-canvas) ──────────────────────────────────────────
   if (view === 'landing') {

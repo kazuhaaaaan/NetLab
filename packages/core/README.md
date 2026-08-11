@@ -1,6 +1,6 @@
 # @mikrolab/core
 
-> MikroLab Core Topology & Simulation Engine
+> NetLab Core Topology & Simulation Engine
 
 Vendor-agnostic state engine managing topology entities, link connectivity, device lifecycle, simulation ticks, and event bus dispatching.
 

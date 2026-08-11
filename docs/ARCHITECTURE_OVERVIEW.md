@@ -1,4 +1,4 @@
-# MikroLab Architecture Overview
+# NetLab Architecture Overview
 
 ## Clean Architecture Layers
 1. **Presentation Layer**: `@mikrolab/ui`, `@mikrolab/canvas`, `@mikrolab/terminal`

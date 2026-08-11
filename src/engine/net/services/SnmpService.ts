@@ -43,7 +43,7 @@ export function buildMib(dev: NetworkDevice): Map<string, MibEntry> {
   const mib = new Map<string, MibEntry>();
 
   // system
-  mib.set(`${SYS}.1.0`, { value: `MikroLab Network Simulator - ${dev.deviceType} ${dev.name} (${dev.vendor})`, type: TYPE_STRING });
+  mib.set(`${SYS}.1.0`, { value: `NetLab Network Simulator - ${dev.deviceType} ${dev.name} (${dev.vendor})`, type: TYPE_STRING });
   mib.set(`${SYS}.2.0`, { value: '1.3.6.1.4.1.999999.1', type: TYPE_STRING });
   mib.set(`${SYS}.3.0`, { value: `(${Math.floor((dev.snmpUptimeBase ?? 0) / 10)}) 0:0:0.00`, type: TYPE_TIMETICKS });
   mib.set(`${SYS}.4.0`, { value: dev.snmpAgent?.sysContact || '', type: TYPE_STRING });

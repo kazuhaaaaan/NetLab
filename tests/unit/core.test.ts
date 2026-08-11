@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * MikroLab Foundation Test Suite
+ * NetLab Foundation Test Suite
  */
 
 import { CoreTopologyEngine } from '../../packages/core/src/index';

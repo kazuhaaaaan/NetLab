@@ -1,6 +1,6 @@
 # @mikrolab/shared
 
-> MikroLab Universal Utilities & Math Models
+> NetLab Universal Utilities & Math Models
 
 Shared geometry types, point calculations, pointer event abstractions, touch gesture recognizers, and serialization schema definitions.
 

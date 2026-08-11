@@ -1,23 +1,26 @@
-# MikroLab Development Guidelines
+# NetLab Development Guidelines
 
-## Workspace Setup
+## Setup
 
 1. **Node.js**: Requires Node.js >= 20.0.0.
-2. **PNPM**: Requires PNPM >= 8.0.0.
+2. **npm**: package manager (npm >= 9), lockfile `package-lock.json`.
 3. **TypeScript**: Strict mode enabled across all packages (`tsconfig.json`).
 
 ```bash
-# Install workspace packages
-pnpm install
+# Install dependencies
+npm install
 
 # Run application dev server
-pnpm run dev
+npm run dev
 
-# Run lint checks across all workspace modules
-pnpm run lint
+# Run typecheck (lint)
+npm run lint
 
-# Build all packages with Turborepo
-pnpm run build
+# Run all tests (unit + scenario + cross-vendor interop)
+npm test
+
+# Production build
+npm run build
 ```
 
 ## Adding a New Package to `packages/`

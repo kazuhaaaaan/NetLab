@@ -36,7 +36,6 @@ const ORIGINS = ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : DEFAULT_ORIGINS;
 const MAX_QUESTION_LEN = 2000;
 const MAX_CONTEXT_LEN = 20000;
 const MAX_HISTORY_TURNS = 12;
-const MAX_PAYLOAD_BYTES = 100 * 1024;
 const UPSTREAM_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 30000);
 
 // Rate limiting: RATE_LIMIT_REQUESTS per RATE_LIMIT_WINDOW_MS per IP.
@@ -44,9 +43,15 @@ const RATE_LIMIT_REQUESTS = Number(process.env.RATE_LIMIT_REQUESTS || 20);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
 const rateBuckets = new Map();
 
+// trust proxy hanya bila diaktifkan eksplisit (TRUST_PROXY=1 di belakang reverse proxy
+// yang MENIMPA X-Forwarded-For). Tanpa itu, rate limit memakai socket address —
+// header X-Forwarded-For dari klien TIDAK dipercaya (anti-spoof bypass).
+const TRUST_PROXY = process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true';
+
 const app = express();
 app.use(express.json({ limit: '100kb', strict: true }));
 app.disable('x-powered-by');
+if (TRUST_PROXY) app.set('trust proxy', 1);
 
 // ── CORS terkendali (bukan *) ──────────────────────────────────────────
 app.use((req, res, next) => {
@@ -98,7 +103,7 @@ function sanitizeError(err) {
 }
 
 const SYSTEM_PROMPT = [
-  'Kamu adalah MikroAi, asisten AI untuk Mikrolab — simulator jaringan multi-vendor ',
+  'Kamu adalah MikroAi, asisten AI untuk NetLab — simulator jaringan multi-vendor ',
   '(MikroTik, Cisco IOS/NX-OS, Juniper, Huawei, Fortinet, VyOS/Ubiquiti, OpenWrt, Linux).',
   'Pengguna sedang belajar jaringan dan memakai terminal/chat simulator ini.',
   '',
@@ -141,11 +146,9 @@ app.post('/api/ai', async (req, res) => {
   }
   const { question, context, history } = body;
 
-  // 1. Rate limit — sebelum kerja apa pun.
-  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
-    .toString()
-    .split(',')[0]
-    .trim();
+  // 1. Rate limit — sebelum kerja apa pun. req.ip = socket address, atau IP dari
+  //    hop proxy tepercaya (TRUST_PROXY=1). Header klien tidak pernah dipercaya.
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
   if (rateLimited(ip)) {
     return res.status(429).json({ error: 'Too many requests, silakan tunggu sebentar', code: 'RATE_LIMITED' });
   }
@@ -212,10 +215,16 @@ app.use((err, _req, res, _next) => {
   if (err?.type === 'entity.too.large') {
     return res.status(413).json({ error: 'Payload too large', code: 'PAYLOAD_TOO_LARGE' });
   }
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON body', code: 'INVALID_JSON' });
+  }
   console.error('[mikroai] error:', err?.message || err);
   res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
 });
 
 app.listen(PORT, () => {
-  console.log(`[mikroai] AI server listening on http://localhost:${PORT} (llm=${Boolean(API_KEY)}, origins=${ORIGINS.join(',')})`);
+  console.log(`[mikroai] AI server listening on http://localhost:${PORT} (llm=${Boolean(API_KEY)}, origins=${ORIGINS.join(',')}, ${TRUST_PROXY ? 'trust-proxy=on' : 'trust-proxy=off'})`);
+  if (NODE_ENV === 'production' && !ALLOWED_ORIGINS.length) {
+    console.warn('[mikroai] PERINGATAN: NODE_ENV=production tanpa ALLOWED_ORIGINS — CORS memakai daftar dev (localhost). Set ALLOWED_ORIGINS=https://netlab.kazudev.my.id.');
+  }
 });

@@ -1,4 +1,4 @@
-# MikroLab Project Roadmap
+# NetLab Project Roadmap
 
 > Status: **v1.6** — seluruh inti engine & CLI selesai. Fase berikutnya adalah
 > penyempurnaan realisme protokol, pustaka skenario lab, dan performa canvas.
@@ -11,7 +11,7 @@
 - [x] Vendor CLI Terminal Viewport Foundation
 - [x] Project Export & Import (`.mlab` schema) with IndexedDB storage
 - [x] First-Time Experience Gesture & Mouse Tutorials
-- [x] Foundation ZIP Package Export (`MikroLab-Foundation-v1.zip`)
+- [x] Foundation ZIP Package Export (`NetLab-Foundation-v1.zip`)
 
 ## Phase 2: CLI Grammar & Lexer Engines (v1.1 - v1.3) — SELESAI
 - [x] AST parser di `@mikrolab/cli` (lexer → parser → AST → NormalizedCommand)

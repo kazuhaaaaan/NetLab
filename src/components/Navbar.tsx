@@ -252,7 +252,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                 <div className="space-y-0.5">
                   <div className="px-2 pt-1 pb-1 text-[10px] font-mono uppercase tracking-widest text-slate-600">Support</div>
-                  <MobileItem icon={<Download className="w-4 h-4 text-emerald-400" />} label="Download Foundation ZIP" href="/MikroLab-Foundation-v1.zip" onClick={closeMobile} />
+                  <MobileItem icon={<Download className="w-4 h-4 text-emerald-400" />} label="Download Foundation ZIP" href="/NetLab-Foundation-v1.zip" onClick={closeMobile} />
                   <MobileItem icon={<Heart className="w-4 h-4 text-rose-400" />} label="Donate (QRIS)" onClick={() => { onOpenDonate(); closeMobile(); }} />
                   <MobileItem icon={<HelpCircle className="w-4 h-4 text-cyan-400" />} label="Tutorial / Panduan" onClick={() => { onOpenTutorial(); closeMobile(); }} />
                 </div>
@@ -467,8 +467,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Download Foundation ZIP */}
         <a
-          href="/MikroLab-Foundation-v1.zip"
-          download="MikroLab-Foundation-v1.zip"
+          href="/NetLab-Foundation-v1.zip"
+          download="NetLab-Foundation-v1.zip"
           title="Download Complete Foundation Monorepo ZIP"
           className="flex-shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 shadow-sm transition"
         >

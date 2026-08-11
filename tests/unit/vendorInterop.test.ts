@@ -517,6 +517,39 @@ export function runVendorInteropTests(): Report {
     check(`V7 ${vid} print IP dari state`, ipOut.includes('192.168.50.1'), ipOut.slice(0, 100));
   }
 
+  // BGP peer print harus mencerminkan state engine, bukan Established palsu.
+  for (const [vid, cmds, printCmd, stateProvider] of [
+    ['mikrotik', ['/routing bgp instance add as=65001 router-id=1.1.1.1', '/routing bgp peer add remote-as=65002 remote-address=10.0.9.2'], '/routing bgp peer print', null],
+    ['huawei', ['bgp 65001', 'peer 10.0.9.2 as-number 65002'], 'display bgp peer', null],
+  ] as [string, string[], string, null][]) {
+    for (const [label, st, wantE] of [
+      ['Idle (tidak established)', 'Idle', false],
+      ['Established (engine reachable)', 'Established', true],
+    ] as [string, string, boolean][]) {
+      const dis = new VendorDispatcher();
+      const ctx = { ...mkCtx(vid, vid, ['ether1']), bgpNeighborProvider: () => [{ remoteAddr: '10.0.9.2', state: st, prefixes: 0, uptime: 'never' }] } as any;
+      for (const c of cmds) dis.dispatch(vid, c, ctx);
+      const out = String(dis.dispatch(vid, printCmd, ctx));
+      check(`V7 ${vid} bgp print ${label}`, wantE ? /Established| E /.test(out) : /Idle| X /.test(out) && !/Established/.test(out), out.slice(0, 120));
+      const estCount = (out.match(/established state : (\d+)/) || [])[1];
+      check(`V7 ${vid} bgp established count ${label}`, estCount === undefined || estCount === String(wantE ? 1 : 0), out.slice(0, 120));
+    }
+  }
+
+  // Cisco OSPF neighbor: state Down dari engine → Down, bukan FULL palsu.
+  {
+    const dis = new VendorDispatcher();
+    const ctx = { ...mkCtx('r1', 'r1', ['ether1']), ospfNeighborProvider: () => [{ routerId: '2.2.2.2', ip: '192.168.10.2', iface: 'ether1', state: 'Down' }] } as any;
+    dis.dispatch('cisco_ios', 'router ospf 1', ctx);
+    const down = String(dis.dispatch('cisco_ios', 'show ip ospf neighbor', ctx));
+    check('V7 cisco ospf neighbor Down dari engine', /Down/.test(down) && !/FULL/.test(down), down.slice(0, 120));
+    const ctxFull = { ...mkCtx('r1', 'r1', ['ether1']), ospfNeighborProvider: () => [{ routerId: '2.2.2.2', ip: '192.168.10.2', iface: 'ether1', state: 'Full' }] } as any;
+    const disFull = new VendorDispatcher();
+    disFull.dispatch('cisco_ios', 'router ospf 1', ctxFull);
+    const full = String(disFull.dispatch('cisco_ios', 'show ip ospf neighbor', ctxFull));
+    check('V7 cisco ospf neighbor Full dari engine', /FULL/.test(full), full.slice(0, 120));
+  }
+
   console.log('\n== V8. Validasi jaringan: network/broadcast, gateway, overlap, /31 /32 ==');
   // Network & broadcast ditolak sebagai host; /31 & /32 dikecualikan (p2p/host route).
   check('V8 network address reserved', isReservedAddress('192.168.1.0', 24) === true, '');

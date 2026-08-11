@@ -60,7 +60,7 @@ async function generateFoundationZip() {
   }
 
   const content = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-  const outputPath = path.join(publicDir, 'MikroLab-Foundation-v1.zip');
+  const outputPath = path.join(publicDir, 'NetLab-Foundation-v1.zip');
   fs.writeFileSync(outputPath, content);
 
   console.log(`Successfully generated ${outputPath} (${(content.length / 1024).toFixed(2)} KB)`);

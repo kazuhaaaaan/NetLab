@@ -1,16 +1,19 @@
 /**
- * Klien LLM Mikrolab — dua mode:
- *  1. Langsung (browser → Gemini REST): bila VITE_GEMINI_API_KEY tersedia,
- *     chat bekerja tanpa server Node sama sekali (CORS diizinkan Google).
- *  2. Proxy server (server/index.mjs → POST /api/ai): fallback bila mode
- *     langsung tidak ada / gagal; bila server juga mati → rule-based.
+ * Klien LLM NetLab — dua mode:
+ *  1. Langsung (browser → Gemini REST): HANYA di development (import.meta.env.DEV)
+ *     bila VITE_GEMINI_API_KEY tersedia. Key TIDAK PERNAH masuk bundle produksi:
+ *     guard DEV memastikan tukang bangun (build) tidak meng-inline key publik.
+ *  2. Proxy server (server/index.mjs → POST /api/ai): satu-satunya mode produksi;
+ *     key Gemini tinggal server-side (GEMINI_API_KEY). Bila server mati → rule-based.
  *
  * Konteks jaringan dari PromptBuilder + history percakapan multi-turn
  * dikirim sebagai system instruction / contents.
  */
 
 const env = (typeof import.meta !== 'undefined' ? (import.meta as any).env : {}) as Record<string, string | undefined>;
-const DIRECT_KEY = (env.VITE_GEMINI_API_KEY || '').trim();
+const IS_DEV = typeof import.meta !== 'undefined' && Boolean((import.meta as any).env?.DEV);
+// Mode langsung hanya diizinkan saat development; produksi selalu lewat proxy.
+const DIRECT_KEY = IS_DEV ? (env.VITE_GEMINI_API_KEY || '').trim() : '';
 const DIRECT_MODEL = (env.VITE_GEMINI_MODEL || 'gemini-3.5-flash').trim();
 const RAW_BASE_URL = env.VITE_APP_URL || '';
 const BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
@@ -27,7 +30,7 @@ export interface LlmResult {
   source: 'llm' | 'fallback' | 'error';
 }
 
-/** True bila mode langsung (browser → Gemini) aktif karena key VITE tersedia. */
+/** True bila mode langsung (browser → Gemini) aktif: hanya development. */
 export function isDirectLlmEnabled(): boolean {
   return Boolean(DIRECT_KEY);
 }
@@ -50,7 +53,7 @@ function systemPrompt(context?: string): string {
   ].join('\n');
 }
 
-/** Panggil Gemini langsung dari browser (tanpa server Node). */
+/** Panggil Gemini langsung dari browser (HANYA development; key lewat header, bukan URL). */
 async function askGeminiDirect(question: string, context?: string, history?: LlmHistoryItem[]): Promise<LlmResult> {
   const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [
     ...(Array.isArray(history) ? history.slice(-12) : []).map((h) => ({
@@ -64,10 +67,10 @@ async function askGeminiDirect(question: string, context?: string, history?: Llm
   const timer = window.setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(DIRECT_MODEL)}:generateContent?key=${encodeURIComponent(DIRECT_KEY)}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(DIRECT_MODEL)}:generateContent`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': DIRECT_KEY },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt(context) }] },
           contents,
@@ -115,7 +118,7 @@ async function askServerProxy(question: string, context?: string, history?: LlmH
   }
 }
 
-/** Pintu masuk: langsung (jika key VITE ada) → proxy server → gagal. */
+/** Pintu masuk: langsung (dev saja) → proxy server → gagal. */
 export async function askLlm(question: string, context?: string, history?: LlmHistoryItem[]): Promise<LlmResult> {
   if (DIRECT_KEY) {
     const direct = await askGeminiDirect(question, context, history);

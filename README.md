@@ -1,15 +1,17 @@
-# Netlab: Enterprise Browser-Based Networking Laboratory Foundation
+# NetLab: Enterprise Browser-Based Networking Laboratory
 
 > **Complete In-Browser Multi-Vendor Networking Simulation Platform**  
-> *Architected for browser execution with Clean Architecture, SOLID principles, and zero server dependencies.*
+> *Architected for browser execution with a real packet engine — ping, routing, VLAN, DHCP, NAT, OSPF, BGP results come from actual simulated state, never hard-coded.*
 
 ---
 
 ## 🌟 Overview
 
-**MikroLab** is a next-generation browser-based enterprise networking laboratory. It is **not** merely a router emulator; it is a full-fledged modular networking simulation ecosystem capable of simulating multi-vendor enterprise hardware entirely inside modern client web browsers (Chromium, Firefox, Safari).
+**NetLab** is a next-generation browser-based enterprise networking laboratory. It is **not** merely a router emulator; it is a full-fledged networking simulation ecosystem capable of simulating multi-vendor enterprise hardware entirely inside modern client web browsers (Chromium, Firefox, Safari) — with zero server dependencies for the simulation itself.
 
-### Supported Vendors (Roadmap & Vendor Adapters)
+**Live app:** <https://netlab.kazudev.my.id> · **Repository:** <https://github.com/kazuhaaaaan/NetLab>
+
+### Supported Vendors
 - **MikroTik RouterOS**
 - **Cisco IOS & Cisco NX-OS**
 - **Juniper JunOS**
@@ -20,86 +22,87 @@
 - **Aruba AOS**
 - **OpenWrt**
 
+Vendor CLI syntax is parsed into vendor-neutral commands, applied to one shared
+simulation state, and every `show`/`print`/`display` output reflects the **actual
+engine state** — link status, ARP cache, routing table, OSPF/BGP session state,
+DHCP leases, NAT translations. Unsupported features fail honestly instead of
+pretending to work.
+
 ---
 
 ## 🏛️ Application Architecture & Layers
 
-MikroLab follows a strict single-direction visual-to-engine pipeline. Vendor CLI syntax is strictly decoupled from core simulation logic using Vendor Adapters, AST Parsers, and Command Executors.
+NetLab follows a strict single-direction visual-to-engine pipeline. Vendor CLI syntax is strictly decoupled from core simulation logic using Vendor Adapters, AST Parsers, and Command Executors.
 
 ```
 Browser (React 19 + TypeScript 5)
   ↓
-React UI (@mikrolab/ui)
+UI Components (src/components)
   ↓
-Canvas Engine (@mikrolab/canvas)
+Canvas Editor & Gesture Interaction (src/components/Canvas.tsx)
   ↓
-Sidebar & Inspector Components
+Terminal / CLI Viewport (src/components/TerminalPanel.tsx)
   ↓
-Terminal / CLI Viewport (@mikrolab/terminal)
+Vendor CLI Adapters (packages/vendors)
   ↓
-CLI Grammar Engine (@mikrolab/cli)
+Command Executor & Normalized Commands
   ↓
-Vendor Adapter Layer (@mikrolab/vendors)
+Authoritative Network Simulator (src/engine/net/core/NetworkSimulator.ts)
+  ├─ Ethernet switching (MAC learning, flooding, VLAN, STP)
+  ├─ IPv4/IPv6 routing (LPM, TTL, ICMP errors, static/OSPF/BGP routes)
+  ├─ ARP / Neighbor Discovery (stateful cache)
+  ├─ DHCP (DISCOVER/OFFER/REQUEST/ACK + lease state)
+  ├─ NAT (translation session state)
+  └─ Protocol state (OSPF adjacency, BGP session, VRRP/FHRP)
   ↓
-Command Executor & AST Transformer
+Packet Events & Simulation Results
   ↓
-Core Simulation Engine (@mikrolab/core)
-  ↓
-Packet Processing Engine (@mikrolab/packet)
-  ↓
-Protocol Stack Pipeline (@mikrolab/protocols)
-  ↓
-Renderer & Topology State Synchronizer
+UI / CLI / Packet Inspector / Diagnostics / AI Mentor
 ```
 
----
-
-## 📦 Workspace Package Layout
-
-MikroLab is structured as a **PNPM Workspace** powered by **Turborepo** and **TypeScript Project References**.
-
-| Package Directory | Package Name | Responsibility |
-|---|---|---|
-| `packages/ui` | `@mikrolab/ui` | VS Code/Figma inspired UI design system, panels, modals, gesture toolbars |
-| `packages/canvas` | `@mikrolab/canvas` | 60 FPS gesture-enabled infinite canvas, SVG cable renderer, node selection |
-| `packages/terminal` | `@mikrolab/terminal` | Multi-tab vendor terminal viewport with authentic prompt styling & history |
-| `packages/core` | `@mikrolab/core` | Vendor-agnostic topology state engine, device lifecycle, event bus |
-| `packages/cli` | `@mikrolab/cli` | Lexer, Parser, AST generator, Command Object builder |
-| `packages/packet` | `@mikrolab/packet` | Binary packet buffers, frame encapsulation/decapsulation pipeline |
-| `packages/protocols` | `@mikrolab/protocols` | Ethernet, ARP, IPv4, IPv6, ICMP, OSPF, BGP protocol logic |
-| `packages/devices` | `@mikrolab/devices` | Virtual hardware definitions (interfaces, MAC tables, memory buffers) |
-| `packages/vendors` | `@mikrolab/vendors` | Vendor CLI adapters (MikroTik, Cisco, Juniper, etc.) translating syntax to Command Objects |
-| `packages/sdk` | `@mikrolab/sdk` | Plugin extension SDK for third-party vendor adapters & custom lab components |
-| `packages/shared` | `@mikrolab/shared` | Universal types, math utilities, geometric helpers, pointer gesture models |
+> **Source of truth:** the network engine. The UI, CLI, diagnostics, and AI
+> mentor all read from it — none of them fabricate network behavior.
 
 ---
 
-## 🎮 Unified Pointer Interaction Engine
+## 📦 Repository Layout
 
-MikroLab uses a single, unified **Pointer Events Interaction Engine** (`@mikrolab/canvas` & `@mikrolab/shared`), eliminating separate touch and mouse codepaths.
+The app is an **npm-based single application** (Vite + React); the `packages/`
+directories hold the reference layered architecture (vendor adapters, packet/
+protocol cores) used by the engine and tests.
+
+| Location | Responsibility |
+|---|---|
+| `src/components` | UI: canvas, sidebar, terminal, panels, modals, landing page |
+| `src/engine/net/core` | Authoritative simulation engine (L2/L3, protocols, services) |
+| `src/engine/sim` | Simulator integration & ping output formatting |
+| `src/engine/lab` | Lab scenario engine, grading & diagnostics |
+| `packages/vendors` | Vendor CLI adapters + normalized command pipeline |
+| `packages/protocols`, `packages/packet`, `packages/core` | Reference packet/protocol cores |
+| `server/index.mjs` | Optional AI Mentor proxy (Gemini) — key stays server-side |
+| `tests/` + `run_all_tests.mts` | Unit, scenario, round-trip & cross-vendor interoperability tests |
+
+---
+
+## 🎮 Interaction
 
 - **Tap / Click**: Select device or port.
 - **Double Tap / Double Click**: Open interactive CLI terminal.
 - **Long Press / Right Click**: Open contextual action menu.
-- **Pinch Zoom**: Smooth canvas scale adjustment using pointer touch deltas.
+- **Pinch Zoom / Scroll**: Smooth canvas scale adjustment.
 - **Two Finger Pan / Middle Drag**: Infinite viewport translation.
 - **Port-to-Port Tap / Drag**: Instant interactive cable creation.
-- **Hold & Drag**: Multi-device selection bounding box.
 
 ---
 
 ## 💾 Storage & File Format
 
-- **Format**: `.mlab` JSON Schema (supports compression & metadata).
+- **Format**: `.mlab` JSON (versioned `schemaVersion` + `engineVersion`, validated & migrated on import — unknown/newer schemas are rejected gracefully).
 - **In-Browser Persistence**: IndexedDB with LocalStorage fallback for auto-saving lab sessions.
-- **Export / Import**: Seamless single-click export and import of full lab topologies.
-- **Running-Config Export**: Right-click any device → *Export Running Config* —
-  full config in the vendor's own syntax (RouterOS `.rsc`, IOS/NX-OS, Junos,
-  VRP, EdgeOS, ArubaOS-CX, OpenWrt, Linux), preview, per-file download, or ZIP
-  for the whole lab — including everything configured via the CLI.
-- **Topology Validation**: Duplicate IP detection, same-subnet/prefix conflicts,
-  netmask mismatch on direct links, VLAN without a switch, and unconfigured ports.
-- **Physical Link State**: Deleting a cable marks the port "not connected" in
+- **Export / Import**: Single-click export/import of full lab topologies; imported files are treated as untrusted input.
+- **Running-Config Export**: Per-device config in the vendor's own syntax (RouterOS `.rsc`, IOS/NX-OS, Junos, VRP, EdgeOS, ArubaOS-CX, OpenWrt, Linux) with preview, per-file download, or ZIP for the whole lab.
+- **Topology Validation**: duplicate IP, subnet conflicts, netmask mismatch on direct links, VLAN without a switch, unconfigured ports, network/broadcast-as-host, gateway out-of-subnet, `/31`/`/32` handling.
+- **Physical Link State**: deleting a cable marks the port "not connected" in
   `show` output (config stays intact); `shutdown` shows "administratively down".
 
 ---
@@ -108,15 +111,36 @@ MikroLab uses a single, unified **Pointer Events Interaction Engine** (`@mikrola
 
 ```bash
 # Clone the repository
-git clone https://github.com/mikrolab/mikrolab.git
-cd mikrolab
+git clone https://github.com/kazuhaaaaan/NetLab.git
+cd NetLab
 
-# Install dependencies using PNPM
-pnpm install
+# Install dependencies (npm)
+npm install
 
-# Run dev server with Turbo
-pnpm run dev
+# Run the dev server (Vite on http://localhost:3000)
+npm run dev
 ```
+
+### Verify
+
+```bash
+npm run typecheck   # TypeScript (strict)
+npm test            # 800+ unit/scenario/interop tests
+npm run build       # production build
+```
+
+### AI Mentor (optional)
+
+The AI chat panel works with two modes:
+
+1. **Rule-based fallback (default, zero setup)** — selalu tersedia, lokal di browser.
+2. **Gemini via server proxy** — `GEMINI_API_KEY=... node server/index.mjs`
+   (atau `npm run dev:ai`), lalu buka aplikasi. Key **hanya** server-side
+   (`GEMINI_API_KEY`), dikirim via `ALLOWED_ORIGINS=https://netlab.kazudev.my.id`
+   untuk produksi. Lihat `.env.example` untuk semua opsi.
+
+> Mode langsung browser→Gemini dengan `VITE_GEMINI_API_KEY` hanya aktif saat
+> `npm run dev` dan **tidak pernah** masuk bundle produksi.
 
 ---
 

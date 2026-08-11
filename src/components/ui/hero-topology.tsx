@@ -204,7 +204,7 @@ export function HeroTopology({
   secondary,
   tertiary,
   footnote,
-  mediaTitle = 'Mikrolab — Enterprise Multi-Vendor Core Lab',
+  mediaTitle = 'NetLab — Enterprise Multi-Vendor Core Lab',
   mediaSubtitle = 'SIMULATING',
 }: HeroTopologyProps) {
   const [running, setRunning] = useState(true);
