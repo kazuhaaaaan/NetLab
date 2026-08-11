@@ -1240,9 +1240,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                 );
               })}
               
-              {/* Tombol aksi node — SEMBUNYI saat mode kabel/wizard aktif agar tidak
-                  menutupi titik port (z-40). Di luar mode kabel tampil di atas panel (z-50). */}
-              {!nodeInCableFlow && (
+              {/* Tombol aksi node — SEMBUNYI hanya saat node ini sedang jadi sumber/tujuan
+                  wizard kabel, agar tidak menutupi titik port. */}
+              {!(isWizardSource || isWizardTarget) && (
                 <>
               {/* Open CLI button — selalu terlihat agar tidak "hilang" */}
               <button

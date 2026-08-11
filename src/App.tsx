@@ -165,7 +165,12 @@ export default function App() {
   const [project, setProject] = useState<LabProject>(TEMPLATE_BASIC);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
-  const [activeTool, setActiveTool] = useState<ActiveTool>(() => loadUiState()?.activeTool ?? 'select');
+  const [activeTool, setActiveTool] = useState<ActiveTool>(() => {
+    const saved = loadUiState()?.activeTool ?? 'select';
+    // Normalisasi: tool sementara (cable/ping) tidak pernah dimuat ulang —
+    // kalau tersimpan dari sesi lama, kanvas desktop bakal terkunci di mode kabel.
+    return saved === 'select' || saved === 'pan' ? saved : 'select';
+  });
   const [cableStart, setCableStart] = useState<{ nodeId: string; portId: string } | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [viewPorts, setViewPorts] = useState(() => loadUiState()?.viewPorts ?? false);
@@ -509,7 +514,11 @@ export default function App() {
   // Auto-save UI state (theme, sidebar, tool, port visibility)
   useEffect(() => {
     try {
-      localStorage.setItem(UI_STATE_KEY, JSON.stringify({ theme, isSidebarOpen, activeTool, viewPorts }));
+      // Jangan persist tool sementara (cable/ping) — kalau tersimpan, lain waktu
+      // (mis. di desktop) kanvas akan terkunci di mode kabel dan tombol node hilang.
+      const persistedTool: ActiveTool =
+        activeTool === 'select' || activeTool === 'pan' ? activeTool : 'select';
+      localStorage.setItem(UI_STATE_KEY, JSON.stringify({ theme, isSidebarOpen, activeTool: persistedTool, viewPorts }));
     } catch {
       // storage penuh / tidak tersedia — abaikan
     }
