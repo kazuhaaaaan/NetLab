@@ -1,6 +1,7 @@
 {
   "functions": {
-    "api/ai.mjs": { "maxDuration": 60 }
+    "api/ai.mjs": { "maxDuration": 60 },
+    "api/health.mjs": { "maxDuration": 60 }
   },
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }

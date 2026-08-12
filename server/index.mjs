@@ -22,7 +22,7 @@ import { pathToFileURL } from 'url';
 
 const PORT = Number(process.env.AI_PORT || process.env.PORT || 8787);
 const API_KEY = process.env.GEMINI_API_KEY || '';
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // ── Konfigurasi keamanan (semua bisa dioverride lewat env) ─────────────
