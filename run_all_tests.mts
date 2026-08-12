@@ -21,6 +21,7 @@ import { runLab, findScenarios, formatLabResult } from './src/engine/lab';
 import { LAB_SCENARIOS } from './src/engine/lab/scenarios';
 import { buildNodeExports, validateConfigExport, portLinksOfNode } from './src/utils/configExport';
 import { runVendorInteropTests } from './tests/unit/vendorInterop.test';
+import { runCliFacadeTest } from './tests/unit/cliFacade.test';
 
 let passed = 0;
 let failed = 0;
@@ -2659,6 +2660,13 @@ const vrep = runVendorInteropTests();
 passed += vrep.passed;
 failed += vrep.failed;
 fails.push(...vrep.fails);
+
+// ── 23. Facade engine: lexer → parser → adapter → state → executor → resolver.
+//     Lapisan klasifikasi murni di atas engine nyata (tanpa mengubah perilaku).
+const frep = runCliFacadeTest();
+passed += frep.passed;
+failed += frep.failed;
+fails.push(...frep.fails);
 
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

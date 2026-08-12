@@ -33,6 +33,8 @@ import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/sha
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
+import { runCliCommand, createNetLabBridge } from './engine';
+import type { NetLabBridge } from './engine/state/bridge';
 import { ConfigExportModal } from './components/ConfigExportModal';
 import { VendorCapabilitiesModal } from './components/VendorCapabilitiesModal';
 import { portLinksOfNode } from './utils/configExport';
@@ -183,6 +185,11 @@ export default function App() {
 
   // Real network simulation engine (per-device routing, TTL, hop trace)
   const simEngineRef = useRef<SimulationEngine>(new SimulationEngine());
+
+  // Bridge facade → engine nyata (VendorDispatcher + NetworkSimulator).
+  // runCliCommand memakai ini supaya output terminal identik dengan
+  // pemanggilan dispatcher langsung.
+  const appBridgeRef = useRef<NetLabBridge>(createNetLabBridge(vendorDispatcher, simEngineRef.current));
 
   // AI Mentor — instantiate sekali dari engine yang sama (state dijamin sinkron)
   const aiMentorRef = useRef<MentorEngine | null>(null);
@@ -1199,7 +1206,12 @@ export default function App() {
       // Sync CLI-configured state into the simulation engine, then run.
       syncNodeToEngine(nodeId);
 
-      responseText = vendorDispatcher.dispatch(vendor, cmd, {
+      responseText = runCliCommand({
+        bridge: appBridgeRef.current,
+        vendor,
+        nodeId,
+        cmd,
+        context: {
         nodeId,
         name: node.name,
         ports: node.ports,
@@ -1268,7 +1280,8 @@ export default function App() {
           }
           return simEngineRef.current.simulateSnmpQuery(nodeId, target, community, oid, opts || {});
         },
-      });
+      },
+      }).output;
 
       // Pick up config changes made by this command (IP, routes, routing, ACL, NAT, VLAN)
       syncNodeToEngine(nodeId);
