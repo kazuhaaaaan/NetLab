@@ -1,5 +1,5 @@
 /**
- * MikroAi — server AI Mentor (Gemini proxy) — hardened.
+ * Aikari — server AI Mentor (Gemini proxy) — hardened.
  *
  * Satu-satunya endpoint publik: POST /api/ai
  *   body: { question: string, context?: string, history?: [{ role: 'user'|'ai', text: string }] }
@@ -105,7 +105,7 @@ function sanitizeError(err) {
 }
 
 const SYSTEM_PROMPT = [
-  'Kamu adalah MikroAi, asisten AI untuk NetLab — simulator jaringan multi-vendor ',
+  'Kamu adalah Aikari, asisten AI untuk NetLab — simulator jaringan multi-vendor ',
   '(MikroTik, Cisco IOS/NX-OS, Juniper, Huawei, Fortinet, VyOS/Ubiquiti, OpenWrt, Linux).',
   'Pengguna sedang belajar jaringan dan memakai terminal/chat simulator ini.',
   '',
@@ -127,7 +127,7 @@ function buildPrompt(question, context, history) {
     prompt += '\n\n=== PERCAKAPAN SEBELUMNYA ===\n';
     for (const turn of history.slice(-MAX_HISTORY_TURNS)) {
       if (!turn || typeof turn.text !== 'string' || !turn.text.trim()) continue;
-      const role = turn.role === 'ai' ? 'MikroAi' : 'Pengguna';
+      const role = turn.role === 'ai' ? 'Aikari' : 'Pengguna';
       prompt += `${role}: ${turn.text.trim()}\n`;
     }
     prompt += '=== AKHIR PERCAKAPAN ===\n';
@@ -206,7 +206,7 @@ app.post('/api/ai', async (req, res) => {
     if (!text) return res.status(502).json({ error: 'Empty response from AI', code: 'AI_EMPTY_RESPONSE' });
     res.json({ text });
   } catch (err) {
-    console.error('[mikroai] upstream error:', err?.message || err);
+    console.error('[aikari] upstream error:', err?.message || err);
     const safe = sanitizeError(err);
     res.status(502).json({ error: safe.msg, code: safe.code });
   }
@@ -220,7 +220,7 @@ app.use((err, _req, res, _next) => {
   if (err?.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON body', code: 'INVALID_JSON' });
   }
-  console.error('[mikroai] error:', err?.message || err);
+  console.error('[aikari] error:', err?.message || err);
   res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
 });
 
@@ -232,9 +232,9 @@ export default app;
 const isMain = Boolean(process.argv?.[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   app.listen(PORT, () => {
-    console.log(`[mikroai] AI server listening on http://localhost:${PORT} (llm=${Boolean(API_KEY)}, origins=${ORIGINS.join(',')}, ${TRUST_PROXY ? 'trust-proxy=on' : 'trust-proxy=off'})`);
+    console.log(`[aikari] AI server listening on http://localhost:${PORT} (llm=${Boolean(API_KEY)}, origins=${ORIGINS.join(',')}, ${TRUST_PROXY ? 'trust-proxy=on' : 'trust-proxy=off'})`);
     if (NODE_ENV === 'production' && !ALLOWED_ORIGINS.length) {
-      console.warn('[mikroai] PERINGATAN: NODE_ENV=production tanpa ALLOWED_ORIGINS — CORS memakai daftar dev (localhost). Set ALLOWED_ORIGINS=https://netlab.kazudev.my.id.');
+      console.warn('[aikari] PERINGATAN: NODE_ENV=production tanpa ALLOWED_ORIGINS — CORS memakai daftar dev (localhost). Set ALLOWED_ORIGINS=https://netlab.kazudev.my.id.');
     }
   });
 }

@@ -15,7 +15,7 @@ interface AiChatPanelProps {
 }
 
 const WELCOME =
-  'Halo! Saya AI Mentor MikroAi.\n' +
+  'Halo! Saya Aikari, AI Mentor NetLab.\n' +
   'Tanyakan apa saja tentang jaringan & konfigurasi — contoh:\n' +
   '"kenapa ping PC1 ke PC2 gagal?", "jelaskan DHCP",\n' +
   '"bagaimana cara routing bekerja?", "cara setting NAT di MikroTik?",\n' +

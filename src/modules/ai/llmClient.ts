@@ -37,7 +37,7 @@ export function isDirectLlmEnabled(): boolean {
 
 function systemPrompt(context?: string): string {
   return [
-    'Kamu adalah MikroAi, asisten AI untuk simulator jaringan multi-vendor',
+    'Kamu adalah Aikari, asisten AI untuk simulator jaringan multi-vendor',
     '(MikroTik, Cisco IOS/NX-OS, Juniper, Huawei, Fortinet, VyOS/Ubiquiti, OpenWrt, Linux).',
     'Pengguna sedang belajar jaringan dan memakai simulator ini.',
     '',
