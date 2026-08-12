@@ -294,6 +294,9 @@ export default function App() {
   const [llmOnline, setLlmOnline] = useState(false);
   // Riwayat percakapan panel chat (hanya untuk Gemini, multi-turn)
   const aiHistoryRef = useRef<LlmHistoryItem[]>([]);
+  // Riwayat chat Aikari di landing page (pre-canvas) — terpisah dari riwayat canvas.
+  const landingAiHistoryRef = useRef<LlmHistoryItem[]>([]);
+  const [isLandingAiChatOpen, setIsLandingAiChatOpen] = useState(false);
   // Checkbox "jangan tampilkan lagi" pada popup donasi (berlaku per sesi)
   const [donateSessionHidden, setDonateSessionHidden] = useState(() => {
     try {
@@ -1201,6 +1204,21 @@ export default function App() {
   // Dipisah dari terminal: panel chat menjawab bebas via Gemini dengan
   // konteks jaringan + riwayat percakapan (multi-turn). Terminal /ai tetap
   // memakai AI Mentor rule-based lokal (tryAiMentor) — tanpa Gemini.
+  // ── Panel chat Aikari di LANDING page (pre-canvas) ──────────────────
+  // Belum ada topologi → Gemini ditanya TANPA konteks jaringan (generic
+  // knowledge); bila Gemini tidak tersedia, fallback rule-based Mentor.
+  const handleLandingAiAsk = async (question: string): Promise<string> => {
+    const t = question.trim();
+    if (!t) return '';
+    const llm = await askLlm(t, '', landingAiHistoryRef.current);
+    if (llm.ok) {
+      landingAiHistoryRef.current = [...landingAiHistoryRef.current, { role: 'user', text: t }, { role: 'ai', text: llm.text }].slice(-20);
+      return llm.text;
+    }
+    const mentor = getAiMentor();
+    return renderResponse(mentor.ask(t));
+  };
+
   const handleAiAsk = async (question: string): Promise<string> => {
     const t = question.trim();
     if (!t) return '';
@@ -1411,9 +1429,22 @@ export default function App() {
   if (view === 'landing') {
     return (
       <>
-        <LandingPage onLaunch={goToCanvas} onOpenDonate={() => setIsDonateOpen(true)} />
+        <LandingPage
+          onLaunch={goToCanvas}
+          onOpenDonate={() => setIsDonateOpen(true)}
+          onOpenAiChat={() => setIsLandingAiChatOpen(true)}
+          llmOnline={llmOnline}
+        />
         <MobileWarning />
         {showSplash && <SplashScreen onDone={handleSplashDone} />}
+
+        {/* Aikari — AI Mentor juga bisa ditanya di landing, sebelum masuk canvas */}
+        <AiChatPanel
+          isOpen={isLandingAiChatOpen}
+          onClose={() => setIsLandingAiChatOpen(false)}
+          onAsk={handleLandingAiAsk}
+          llmOnline={llmOnline}
+        />
 
         {/* Donate Modal (QRIS) — tampil juga di homepage */}
         {isDonateOpen && (
