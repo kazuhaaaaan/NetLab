@@ -25,8 +25,12 @@ export { computeFhrp, DEFAULT_FHRP_PRIORITY } from './services/FhrpService';
 export type { FhrpGroup, FhrpState, FhrpResult } from './services/FhrpService';
 export { MacTable } from './layer2/MacTable';
 export { ArpCache } from './layer2/ArpCache';
+export { VlanTable, isValidVlanId, VLAN_ID_MIN, VLAN_ID_MAX } from './layer2/VlanTable';
+export type { VlanInput } from './layer2/VlanTable';
 export { RoutingTable } from './layer3/RoutingTable';
 export { NatTranslator } from './layer4/Nat';
 
-// Formatter CLI (vendor-flavored) — re-export dari legacy agar App.tsx tetap jalan.
-export { formatPingOutput, formatTracerouteOutput } from '../sim/formatPing';
+// Formatter CLI (vendor-flavored) — bagian PRODUKSI engine (tidak lagi
+// bergantung pada src/engine/sim; file legacy di sim/formatPing hanya
+// re-export untuk kompatibilitas import lama).
+export { formatPingOutput, formatTracerouteOutput } from './services/formatPing';

@@ -3,8 +3,13 @@
  * Jalankan: npx tsx run_all_tests.mts
  */
 import { VendorDispatcher } from './packages/vendors/src/index';
-import { SimulationEngine } from './src/engine/sim';
-import { formatPingOutput } from './src/engine/sim/formatPing';
+import { formatPingOutput } from './src/engine/net/services/formatPing';
+// Engine yang diuji = PRODUCTION engine (src/engine/net), sama dengan yang
+// dipakai aplikasi (App.tsx/GradingModal/PingPanel). Anggota API yang
+// diperlukan diuji satu-satu di bawah (syncTopology/applyNodeConfig/
+// simulatePing) sehingga nama alias tidak menutupi API yang hilang.
+import { NetworkSimulator as ProductionEngine } from './src/engine/net/core/NetworkSimulator';
+const SimulationEngine = ProductionEngine;
 import {
   getModelsForVendor,
   getDefaultModel,
@@ -25,6 +30,7 @@ import { runCliFacadeTest } from './tests/unit/cliFacade.test';
 import { runCommandTreeTests } from './tests/unit/commandTree.test';
 import { runPortInspectorTests } from './tests/unit/portInspector.test';
 import { runMentorTests } from './tests/unit/mentorCreator.test';
+import { runProductionEngineTests } from './tests/unit/productionEngine.test';
 
 let passed = 0;
 let failed = 0;
@@ -278,12 +284,17 @@ console.log('\n== 4. SimulationEngine ==');
     ...base,
     nodes: [
       { id: 'r1', name: 'R1', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 0, y: 0 }, ports: [{ id: 'ether1', name: 'ether1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:01', type: 'copper' }] },
-      { id: 'pc1', name: 'PC1', vendor: 'linux', model: 'Debian 12 (Bookworm)', deviceType: 'pc', position: { x: 0, y: 0 }, ports: [{ id: 'eth0', name: 'eth0', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:02', type: 'copper' }] },
+      // PC1 punya 2 NIC: eth0 → router, eth1 → PC2 (topologi lama memakai satu
+      // port eth0 untuk DUA kabel — ditolak engine produksi: satu port = satu kabel).
+      { id: 'pc1', name: 'PC1', vendor: 'linux', model: 'Debian 12 (Bookworm)', deviceType: 'pc', position: { x: 0, y: 0 }, ports: [
+        { id: 'eth0', name: 'eth0', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:02', type: 'copper' },
+        { id: 'eth1', name: 'eth1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:04', type: 'copper' },
+      ] },
       { id: 'pc2', name: 'PC2', vendor: 'linux', model: 'Debian 12 (Bookworm)', deviceType: 'pc', position: { x: 0, y: 0 }, ports: [{ id: 'eth0', name: 'eth0', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:03', type: 'copper' }] },
     ],
     edges: [
       { id: 'e1', sourceNodeId: 'r1', sourcePortId: 'ether1', targetNodeId: 'pc1', targetPortId: 'eth0', cableType: 'copper_straight' },
-      { id: 'e2', sourceNodeId: 'pc1', sourcePortId: 'eth0', targetNodeId: 'pc2', targetPortId: 'eth0', cableType: 'copper_cross' },
+      { id: 'e2', sourceNodeId: 'pc1', sourcePortId: 'eth1', targetNodeId: 'pc2', targetPortId: 'eth0', cableType: 'copper_cross' },
     ],
   };
   const sim = new SimulationEngine();
@@ -295,7 +306,9 @@ console.log('\n== 4. SimulationEngine ==');
   const pingOk = sim.simulatePing('pc1', '192.168.88.1');
   check('ping sukses ke router', pingOk.success, JSON.stringify(pingOk));
   check('ping path berisi R1', pingOk.path.includes('R1'), JSON.stringify(pingOk.path));
-  check('ttl di tujuan < 64', pingOk.ttlAtDestination > 0 && pingOk.ttlAtDestination < 64, String(pingOk.ttlAtDestination));
+  // TTL di TARGET router tidak dikurangi (router tidak men-decrement paket
+  // untuk dirinya sendiri — hanya paket yang diteruskan).
+  check('ttl di tujuan positif', pingOk.ttlAtDestination > 0, String(pingOk.ttlAtDestination));
 
   const pingUnreach = sim.simulatePing('pc1', '10.99.99.99');
   check('ping unreachable (no route)', !pingUnreach.success && pingUnreach.reason === 'unreachable', JSON.stringify(pingUnreach));
@@ -1014,6 +1027,7 @@ console.log('\n== 12. Integrasi CLI antar perangkat terhubung (alur App) ==');
     sim.setWebServer(nodeId, mem.webServer || undefined);
     sim.setPortVlans(nodeId, mem.portVlans || undefined);
     sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    sim.setVlans(nodeId, mem.vlans || undefined);
     sim.setStp(nodeId, mem.stp || undefined);
     sim.setWireless(nodeId, mem.wireless || mem.wirelessSecurityProfiles
       ? { interfaces: mem.wireless || {}, profiles: mem.wirelessSecurityProfiles || {} }
@@ -1485,6 +1499,7 @@ console.log('\n== 13. IPv6 & VRRP via CLI antar perangkat ==');
     sim.setWebServer(nodeId, mem.webServer || undefined);
     sim.setPortVlans(nodeId, mem.portVlans || undefined);
     sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    sim.setVlans(nodeId, mem.vlans || undefined);
     sim.setStp(nodeId, mem.stp || undefined);
     sim.setFhrp(nodeId, mem.fhrpGroups || undefined);
   };
@@ -1656,6 +1671,7 @@ console.log('\n== 13. IPv6 & VRRP via CLI antar perangkat ==');
     s.setShutdownIfaces(nodeId, mem.shutdownIfaces);
     s.setSubinterfaces(nodeId, mem.subinterfaces);
     s.setTrunkPorts(nodeId, mem.trunkPorts);
+    s.setVlans(nodeId, mem.vlans);
     s.setStp(nodeId, mem.stp);
     s.setFhrp(nodeId, mem.fhrpGroups);
     s.applyNodeConfig6(nodeId, mem.configuredIps6, mem.routes6);
@@ -2692,6 +2708,15 @@ const mrep = runMentorTests();
 passed += mrep.passed;
 failed += mrep.failed;
 fails.push(...mrep.fails);
+
+// ── 27. PRODUCTION ENGINE (src/engine/net): device creation, interface
+//     state, topology connection, VLAN otoritatif (kreasi/validasi/duplikat),
+//     trunk allowed/native, ARP, switching (MAC + isolasi), routing, format CLI.
+console.log('\n== 27. Production engine (src/engine/net) ==');
+const pep = runProductionEngineTests();
+passed += pep.passed;
+failed += pep.failed;
+fails.push(...pep.fails);
 
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

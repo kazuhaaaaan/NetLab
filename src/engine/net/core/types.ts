@@ -148,6 +148,21 @@ export interface DhcpPool {
   dnsServers?: string[];
 }
 
+/**
+ * VLAN — otoritatif network state. Satu database per perangkat (VlanTable);
+ * CLI vendor (Cisco `vlan 10` / `name X`, RouterOS `/interface vlan`, ...)
+ * hanya menulis NORMALIZED intent ke sini, dan SwitchProcessor membaca dari
+ * sini ketika mengklasifikasikan frame (access/trunk/native).
+ */
+export interface Vlan {
+  /** 1..4094 */
+  id: number;
+  /** Nama VLAN (default "VLAN<id>" seperti real IOS). */
+  name: string;
+  /** 'active' (pakai VLAN dengan id ini) | 'suspended' (tidak meneruskan). */
+  state: 'active' | 'suspended';
+}
+
 export interface DnsRecord {
   name: string;
   address: string;

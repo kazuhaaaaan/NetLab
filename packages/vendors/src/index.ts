@@ -479,9 +479,13 @@ export class CiscoVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'show_vlan') {
       const vlans = cmdResult.vlans || [];
+      const portLabel = (v: any) => {
+        const p = (v.ports || []).map(String);
+        return p.length > 0 ? p.join(', ') : '(none)';
+      };
       const rows = vlans.length > 0
-        ? vlans.map((v: any) => `${String(v.id).padEnd(4)} ${(v.name || `VLAN${v.id}`).padEnd(33)}active    Gi0/1, Gi0/2, Gi0/3`).join('\n')
-        : '1    default                          active    Gi0/1, Gi0/2, Gi0/3';
+        ? vlans.map((v: any) => `${String(v.id).padEnd(4)} ${(v.name || `VLAN${v.id}`).padEnd(33)}active    ${portLabel(v)}`).join('\n')
+        : '1    default                          active    (none)';
       return ['VLAN Name                             Status    Ports',
         '---- -------------------------------- --------- -------------------------------',
         rows,
@@ -601,9 +605,13 @@ export class CiscoNxosVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'show_vlan') {
       const vlans = cmdResult.vlans || [];
+      const portLabel = (v: any) => {
+        const p = (v.ports || []).map(String);
+        return p.length > 0 ? p.join(', ') : '(none)';
+      };
       const rows = vlans.length > 0
-        ? vlans.map((v: any) => `${String(v.id).padEnd(4)} ${(v.name || `VLAN${v.id}`).padEnd(33)}active    Eth1/1, Eth1/2, Eth1/3`).join('\n')
-        : '1    default                          active    Eth1/1, Eth1/2, Eth1/3';
+        ? vlans.map((v: any) => `${String(v.id).padEnd(4)} ${(v.name || `VLAN${v.id}`).padEnd(33)}active    ${portLabel(v)}`).join('\n')
+        : '1    default                          active    (none)';
       return ['VLAN Name                             Status    Ports',
         '---- -------------------------------- --------- -------------------------------',
         rows,
@@ -1687,6 +1695,10 @@ export class VendorDispatcher {
       shutdownIfaces: [],
       subinterfaces: [],
       trunkPorts: [],
+      /** iface → daftar VLAN yang diizinkan lewat trunk (switchport trunk allowed vlan). */
+      trunkAllowed: {},
+      /** iface → VLAN native trunk (switchport trunk native vlan). */
+      trunkNative: {},
       queues: [],
       mangleRules: [],
       wireless: {},
@@ -1696,6 +1708,10 @@ export class VendorDispatcher {
       currentStaticDst: '',
       currentDhcpPool: '',
       currentProto: '',
+      /** VLAN config view (Cisco IOS/NX-OS/Aruba/Huawei): id VLAN yang sedang
+       *  dikonfigurasi setelah `vlan <id>` — `name <x>` berikutnya mengubah
+       *  VLAN ini, bukan yang lain. Transient: tidak dipersist. */
+      currentVlan: '',
       natInsideIfaces: [],
       natOutsideIfaces: [],
       natAcls: {},
@@ -1816,6 +1832,8 @@ export class VendorDispatcher {
       if (Array.isArray(mem.shutdownIfaces)) target.shutdownIfaces = mem.shutdownIfaces;
       if (Array.isArray(mem.subinterfaces)) target.subinterfaces = mem.subinterfaces;
       if (Array.isArray(mem.trunkPorts)) target.trunkPorts = mem.trunkPorts;
+      if (mem.trunkAllowed && typeof mem.trunkAllowed === 'object') target.trunkAllowed = { ...mem.trunkAllowed };
+      if (mem.trunkNative && typeof mem.trunkNative === 'object') target.trunkNative = { ...mem.trunkNative };
       if (Array.isArray(mem.queues)) target.queues = mem.queues;
       if (Array.isArray(mem.mangleRules)) target.mangleRules = mem.mangleRules;
       if (mem.wireless && typeof mem.wireless === 'object') target.wireless = { ...target.wireless, ...mem.wireless };
@@ -1981,6 +1999,7 @@ export class VendorDispatcher {
         }
         mem.subinterfaces = (mem.subinterfaces || []).filter((s: any) => String(s.vlanId) !== String(id));
         if (mem.vlans.length === before) return err(`% VLAN ${id} does not exist`);
+        if (String(mem.currentVlan) === String(id)) mem.currentVlan = '';
         return { raw: '' };
       }
       // no ip dhcp pool <name>
@@ -2039,6 +2058,27 @@ export class VendorDispatcher {
       // no ip name-server [<ip>]
       if (/^no\s+ip\s+name-server\s*$/i.test(input)) {
         mem.dnsServers = [];
+        return { raw: '' };
+      }
+      // no switchport access vlan — kembalikan port ke mode access tanpa VLAN
+      if (/^no\s+switchport\s+access\s+vlan\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected (enter interface config first)');
+        if (!(mem.portVlans || {})[mem.currentIface]) return err(`% No access VLAN configured on ${mem.currentIface}`);
+        delete mem.portVlans[mem.currentIface];
+        return { raw: '' };
+      }
+      // no switchport trunk allowed vlan — trunk kembali membawa SEMUA VLAN
+      if (/^no\s+switchport\s+trunk\s+allowed\s+vlan\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected (enter interface config first)');
+        if (!(mem.trunkAllowed || {})[mem.currentIface]) return err(`% No trunk allowed list configured on ${mem.currentIface}`);
+        delete mem.trunkAllowed[mem.currentIface];
+        return { raw: '' };
+      }
+      // no switchport trunk native vlan — hapus VLAN native trunk
+      if (/^no\s+switchport\s+trunk\s+native\s+vlan\s*$/i.test(input)) {
+        if (!mem.currentIface) return err('% Error: no interface selected (enter interface config first)');
+        if (!(mem.trunkNative || {})[mem.currentIface]) return err(`% No trunk native VLAN configured on ${mem.currentIface}`);
+        delete mem.trunkNative[mem.currentIface];
         return { raw: '' };
       }
       const nsMatch = input.match(/^no\s+ip\s+name-server\s+(\S+)\s*$/i);
@@ -2611,6 +2651,8 @@ export class VendorDispatcher {
         ifaceRaw.includes('.') &&
         !(context?.ports || []).some((p: any) => p.name.toLowerCase() === ifaceRaw.toLowerCase()) &&
         (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei');
+      // Keluar dari VLAN config view — `name <x>` tidak boleh lagi menyentuh VLAN.
+      mem.currentVlan = '';
       if (isSubinterface) {
         // VLAN subinterface (router-on-a-stick): "interface Gi0/0.10"
         const dot = ifaceRaw.lastIndexOf('.');
@@ -3030,9 +3072,19 @@ export class VendorDispatcher {
         if (!(id >= 1 && id <= 4094)) {
           cmdResult = { raw: `% failure: vlan-id must be in range 1..4094 (got ${idRaw})` };
         } else {
-          mem.vlans.push({ id: String(id), name, iface: resolveIfaceName(context?.ports, iface) || iface });
+          const resolvedIface = resolveIfaceName(context?.ports, iface) || iface;
+          // VLAN yang sama tidak boleh dibuat dua kali (id = identitas).
+          // Pengulangan /interface vlan add dengan vlan-id sama hanya
+          // memperbarui nama/interface, tidak membuat entri duplikat.
+          const existing = mem.vlans.find((v: any) => String(v.id) === String(id));
+          if (existing) {
+            existing.name = name;
+            existing.iface = resolvedIface;
+          } else {
+            mem.vlans.push({ id: String(id), name, iface: resolvedIface });
+          }
           // VLAN interfaces act as subinterfaces on their parent port (router-on-a-stick)
-          upsertSubinterface(mem, name, resolveIfaceName(context?.ports, iface) || iface, id);
+          upsertSubinterface(mem, name, resolvedIface, id);
           cmdResult = { raw: '' };
         }
       } else {
@@ -3040,6 +3092,7 @@ export class VendorDispatcher {
       }
     } else if (/^vlan\s+(\d+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco IOS / NX-OS / Aruba: "vlan <id>" (+ optional "name <x>")
+      // Masuk ke VLAN config view: `name <x>` berikutnya mengubah VLAN ini.
       const m = rawInput.trim().match(/^vlan\s+(\d+)/i);
       if (m) {
         const idRaw = m[1];
@@ -3052,6 +3105,7 @@ export class VendorDispatcher {
           const existing = mem.vlans.find((v: any) => v.id === id);
           if (existing) existing.name = nameMatch?.[1] || existing.name;
           else mem.vlans.push({ id, name: nameMatch?.[1] || `VLAN${id}` });
+          mem.currentVlan = id;
           cmdResult = { raw: '' };
         }
       }
@@ -3065,9 +3119,34 @@ export class VendorDispatcher {
           cmdResult = { raw: '% Error: Invalid VLAN ID, it should be 1 to 4094.' };
         } else if (!mem.vlans.find((v: any) => v.id === idRaw)) {
           mem.vlans.push({ id: idRaw, name: `VLAN${idRaw}` });
+          mem.currentVlan = idRaw;
           cmdResult = { raw: '' };
         } else {
+          mem.currentVlan = idRaw;
           cmdResult = { raw: '' };
+        }
+      }
+    } else if (/^name\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+      // Cisco / Huawei: "name <x>" — nama VLAN dalam VLAN config view
+      // (`vlan <id>` dulu). Tanpa view → error jujur (name bukan perintah
+      // global config). Tidak pernah membuat VLAN baru / menyentuh interface.
+      const m = rawInput.trim().match(/^name\s+(\S+)/i);
+      if (m) {
+        if (!mem.currentVlan) {
+          cmdResult = {
+            raw: vendorId === 'huawei'
+              ? '% Error: Unrecognized command found at \'^\' position.'
+              : `% Invalid input detected at '^' marker.\n% name is valid only inside a VLAN configuration view (vlan <id> first)`,
+          };
+        } else {
+          const v = mem.vlans.find((v: any) => String(v.id) === String(mem.currentVlan));
+          if (!v) {
+            mem.currentVlan = '';
+            cmdResult = { raw: '% Error: VLAN no longer exists (vlan <id> again to recreate it)' };
+          } else {
+            v.name = m[1];
+            cmdResult = { raw: '' };
+          }
         }
       }
     } else if (/^set\s+vlans\s+(\S+)\s+vlan-id\s+(\d+)/i.test(rawInput.trim()) && (vendorId === 'juniper' || vendorId === 'ubiquiti' || vendorId === 'vyos')) {
@@ -3078,16 +3157,36 @@ export class VendorDispatcher {
         if (!(idNum >= 1 && idNum <= 4094)) {
           cmdResult = { raw: 'error: vlan-id out of range (1..4094)' };
         } else {
-          mem.vlans.push({ id: m[2], name: m[1] });
-          cmdResult = { raw: '' };
+          // Set semantics (last-wins) + tidak pernah membuat duplikat:
+          // - nama sudah ada → perbarui id-nya.
+          // - id sudah dipakai nama lain → konflik nyata, tolak (bukan fake success).
+          // - baru → buat.
+          const byName = mem.vlans.find((v: any) => v.name === m![1]);
+          const byId = mem.vlans.find((v: any) => String(v.id) === m![2]);
+          if (byId && byId.name !== m![1]) {
+            cmdResult = { raw: `error: vlan-id ${m![2]} already in use by vlan '${byId.name}'` };
+          } else if (byName) {
+            byName.id = m![2];
+            cmdResult = { raw: '' };
+          } else {
+            mem.vlans.push({ id: m![2], name: m![1] });
+            cmdResult = { raw: '' };
+          }
         }
       }
     } else if (/^uci\s+set\s+network\.(\S+)\.vlan=(\d+)/i.test(rawInput.trim()) && vendorId === 'openwrt') {
       // OpenWrt: "uci set network.vlan10.vlan=10"
       const m = rawInput.trim().match(/^uci\s+set\s+network\.(\S+)\.vlan=(\d+)/i);
       if (m) {
-        mem.vlans.push({ id: m[2], name: m[1] });
-        cmdResult = { raw: '' };
+        const idNum = parseInt(m[2], 10);
+        if (!(idNum >= 1 && idNum <= 4094)) {
+          cmdResult = { raw: 'error: vlan-id out of range (1..4094)' };
+        } else {
+          const existing = mem.vlans.find((v: any) => String(v.id) === m![2]);
+          if (existing) existing.name = m![1];
+          else mem.vlans.push({ id: m![2], name: m![1] });
+          cmdResult = { raw: '' };
+        }
       }
     } else if (/^\/ip\s+dns\s+set\s+servers=(\S+)/i.test(rawInput.trim()) && vendorId === 'mikrotik') {
       const m = rawInput.trim().match(/^\/ip\s+dns\s+set\s+servers=(\S+)/i);
@@ -3495,6 +3594,7 @@ export class VendorDispatcher {
       cmdResult = { raw: '' };
     } else if (/^(?:quit|return)\b/i.test(rawInput.trim()) && vendorId === 'huawei') {
       // Huawei: "quit" / "return" — keluar dari view; dari area OSPF kembali ke view OSPF
+      mem.currentVlan = '';
       if (mem.currentOspfAreaView) {
         mem.currentOspfAreaView = false;
         mem.currentOspfArea = -1;
@@ -3506,10 +3606,11 @@ export class VendorDispatcher {
       }
       cmdResult = { raw: '' };
     } else if (/^(?:exit|end)\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
-      // Cisco: "exit" / "end" — keluar dari interface/protocol view; konfigurasi sudah tersimpan
+      // Cisco: "exit" / "end" — keluar dari interface/protocol/vlan view; konfigurasi sudah tersimpan
       mem.currentProto = '';
       mem.currentDhcpSection = '';
       mem.currentAclId = '';
+      mem.currentVlan = '';
       cmdResult = { raw: '' };
     } else if (/^quit\b/i.test(rawInput.trim()) && (vendorId === 'mikrotik')) {
       cmdResult = { raw: '' };
@@ -3700,6 +3801,67 @@ export class VendorDispatcher {
       } else {
         mem.trunkPorts = (mem.trunkPorts || []).filter((t: string) => t !== mem.currentIface);
         cmdResult = { raw: '' };
+      }
+    } else if (/^switchport\s+trunk\s+(allowed\s+vlan|native\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
+      // Cisco switch: "switchport trunk allowed vlan <list>" / "switchport trunk native vlan <id>"
+      // List: "10,20-25", "all", "none" (IOS). Nilai disimpan ke mem.trunkAllowed /
+      // mem.trunkNative dan disinkronkan ke engine (setTrunkAllowed/setTrunkNative)
+      // sehingga SwitchProcessor benar-benar menegakkannya (bukan fake success).
+      const raw = rawInput.trim();
+      const allowed = raw.match(/^switchport\s+trunk\s+allowed\s+vlan\s+(.+)/i)?.[1];
+      if (allowed !== undefined) {
+        // Validasi DAHULU, mutasi setelahnya — perintah gagal tidak boleh
+        // mengubah state (port tidak jadi trunk, memori tidak tercemar).
+        if (/^all$/i.test(allowed.trim()) || /^none$/i.test(allowed.trim())) {
+          pushTrunk(mem, mem.currentIface);
+          if (/^all$/i.test(allowed.trim())) {
+            delete (mem.trunkAllowed || {})[mem.currentIface];
+          } else {
+            mem.trunkAllowed = mem.trunkAllowed || {};
+            mem.trunkAllowed[mem.currentIface] = [];
+          }
+          cmdResult = { raw: '' };
+        } else {
+          const ids: number[] = [];
+          let invalid = false;
+          for (const part of allowed.split(',')) {
+            const range = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+            if (!range) {
+              invalid = true;
+              break;
+            }
+            const lo = parseInt(range[1], 10);
+            const hi = range[2] !== undefined ? parseInt(range[2], 10) : lo;
+            if (lo < 1 || hi > 4094 || lo > hi) {
+              invalid = true;
+              break;
+            }
+            for (let v = lo; v <= hi; v++) if (!ids.includes(v)) ids.push(v);
+          }
+          if (invalid || ids.some((v) => v < 1 || v > 4094)) {
+            cmdResult = { raw: `% Invalid input detected at '^' marker.\n% VLAN IDs must be in range 1..4094` };
+          } else {
+            pushTrunk(mem, mem.currentIface);
+            mem.trunkAllowed = mem.trunkAllowed || {};
+            mem.trunkAllowed[mem.currentIface] = ids;
+            cmdResult = { raw: '' };
+          }
+        }
+      } else {
+        const native = raw.match(/^switchport\s+trunk\s+native\s+vlan\s+(\d+)/i)?.[1];
+        if (native) {
+          const v = parseInt(native, 10);
+          if (!(v >= 1 && v <= 4094)) {
+            cmdResult = { raw: `% Invalid input detected at '^' marker.\n% VLAN ID must be in range 1..4094` };
+          } else {
+            if (!mem.trunkPorts || !mem.trunkPorts.includes(mem.currentIface)) pushTrunk(mem, mem.currentIface);
+            mem.trunkNative = mem.trunkNative || {};
+            mem.trunkNative[mem.currentIface] = v;
+            cmdResult = { raw: '' };
+          }
+        } else {
+          cmdResult = { raw: '% Usage: switchport trunk allowed vlan <list> | switchport trunk native vlan <id>' };
+        }
       }
     } else if (/^switchport\s+(mode\s+trunk|trunk\s+allowed\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco switch: "switchport mode trunk" — port carries every VLAN
@@ -4079,7 +4241,26 @@ export class VendorDispatcher {
       this.saveStartupConfig(nodeId);
       cmdResult = { type: normalized.action };
     } else if (normalized.action === 'show_vlan' || (normalized.target === 'interface_vlan' && normalized.action === 'print')) {
-      cmdResult = { type: 'show_vlan', vlans: mem.vlans };
+      // show vlan — dari state OTORITATIF (mem.vlans), nama asli. Port per VLAN
+      // diturunkan dari konfigurasi nyata (access + trunk allowed/native),
+      // bukan hardcode "Gi0/1, Gi0/2, Gi0/3".
+      const accessByVlan: Record<string, string[]> = {};
+      for (const [iface, v] of Object.entries(mem.portVlans || {})) {
+        const key = String(v);
+        (accessByVlan[key] = accessByVlan[key] || []).push(iface);
+      }
+      const trunkList = mem.trunkPorts || [];
+      const withPorts = (mem.vlans || []).map((v: any) => {
+        const id = String(v.id);
+        const ports = [...(accessByVlan[id] || [])];
+        for (const t of trunkList) {
+          const allowed = mem.trunkAllowed && mem.trunkAllowed[t] !== undefined ? mem.trunkAllowed[t] as number[] : undefined;
+          const native = mem.trunkNative && mem.trunkNative[t] !== undefined ? String(mem.trunkNative[t]) : undefined;
+          if (native === id || allowed === undefined || allowed.map(String).includes(id)) ports.push(`${t}*`);
+        }
+        return { ...v, ports };
+      });
+      cmdResult = { type: 'show_vlan', vlans: withPorts };
     } else if (normalized.action === 'show_stp') {
       const info = typeof context.stpProvider === 'function' ? context.stpProvider() : null;
       cmdResult = info && info.enabled !== undefined
@@ -6527,6 +6708,20 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     (mem.trunkPorts || []).forEach((name: string) => {
       lines.push(`interface ${name}`);
       lines.push(` switchport mode trunk`);
+      if (mem.trunkAllowed && mem.trunkAllowed[name] !== undefined) {
+        const ids = mem.trunkAllowed[name] as number[];
+        lines.push(` switchport trunk allowed vlan ${ids.length > 0 ? ids.join(',') : 'none'}`);
+      }
+      if (mem.trunkNative && mem.trunkNative[name] !== undefined) {
+        lines.push(` switchport trunk native vlan ${mem.trunkNative[name]}`);
+      }
+    });
+    // Access VLAN (switchport access vlan) — port non-trunk
+    const trunkSet = new Set(mem.trunkPorts || []);
+    Object.entries(mem.portVlans || {}).forEach(([name, vlan]: [string, any]) => {
+      if (trunkSet.has(name)) return;
+      lines.push(`interface ${name}`);
+      lines.push(` switchport access vlan ${vlan}`);
     });
     mem.routes.forEach((r: any) => {
       lines.push(`ip route ${maskedPair(r.dst)} ${r.gateway}`);

@@ -6,6 +6,7 @@
 import { NetworkInterfaceModel } from '../interfaces/NetworkInterface';
 import { ArpCache } from '../layer2/ArpCache';
 import { MacTable } from '../layer2/MacTable';
+import { VlanTable } from '../layer2/VlanTable';
 import { RoutingTable } from '../layer3/RoutingTable';
 import { Ipv6RoutingTable } from '../layer3/Ipv6RoutingTable';
 import { NatTranslator } from '../layer4/Nat';
@@ -67,6 +68,8 @@ export class NetworkDevice {
   /** Neighbor cache IPv6 (NDP) — ipv6 → mac. */
   readonly ipv6Neighbors = new ArpCache();
   readonly macTable = new MacTable();
+  /** Database VLAN otoritatif perangkat (diisi dari konfigurasi CLI via engine). */
+  readonly vlanTable = new VlanTable();
   readonly routing = new RoutingTable();
   readonly ipv6Routing = new Ipv6RoutingTable();
   readonly nat = new NatTranslator();
@@ -81,6 +84,14 @@ export class NetworkDevice {
   shutdownIfaces = new Set<string>();
   portVlans = new Map<string, number>();
   trunkPorts = new Set<string>();
+  /**
+   * ifaceName → daftar VLAN yang diizinkan lewat trunk. Map tidak berisi
+   * interface = trunk membawa SEMUA VLAN (default IOS). Map berisi daftar
+   * kosong = trunk dilarang membawa VLAN apa pun (nontrivial tapi valid).
+   */
+  trunkAllowedVlans = new Map<string, number[]>();
+  /** ifaceName → VLAN native trunk (frame tak-bertag di interface ini). */
+  trunkNativeVlans = new Map<string, number>();
   subinterfaces = new Map<string, { parentPort: string; vlanId: number }>();
 
   dhcpPools: DhcpPool[] = [];

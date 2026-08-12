@@ -28,7 +28,8 @@ import { NetworkInterface, Packet, RunResult, SimEvent, SimEventType } from './t
 import { isValidIp, inSameSubnet, isValidHostIp, parseCidr } from './ip';
 import { isIpv6Address, inSameIpv6Subnet, ipv6NetworkString, macToIpv6 } from './ipv6';
 import { buildTcpSegment, TCP_SYN } from '../layer4/Tcp';
-import { AclRule, DnsRecord, NatRule } from './types';
+import { AclRule, DnsRecord, NatRule, Vlan } from './types';
+import { VlanInput, VlanTable, isValidVlanId } from '../layer2/VlanTable';
 import {
   BgpConfig,
   BgpNeighborStateInfo,
@@ -101,6 +102,14 @@ export class NetworkSimulator implements SimulatorCore {
   private shutIfaces = new Map<string, Set<string>>();
   private subinterfaces = new Map<string, Map<string, { parentPort: string; vlanId: number }>>();
   private trunkPorts = new Map<string, Set<string>>();
+  /** VLAN database otoritatif per node: nodeId → daftar intent (id boleh string,
+   *  mis. '10' dari memori vendor). Dinormalisasi ke VlanTable device saat
+   *  diterapkan (replace) — id invalid dibuang, duplikat disatukan. */
+  private vlans = new Map<string, VlanInput[]>();
+  /** allowed-list trunk per node: nodeId → iface → VLAN diizinkan. */
+  private trunkAllowed = new Map<string, Map<string, number[]>>();
+  /** native VLAN trunk per node: nodeId → iface → native id. */
+  private trunkNative = new Map<string, Map<string, number>>();
   private poweredOff = new Set<string>();
   private dnsRecords = new Map<string, DnsRecord[]>();
   private dnsServers = new Map<string, string[]>();
@@ -407,11 +416,22 @@ export class NetworkSimulator implements SimulatorCore {
       if (cfg6) this.applyConfig6ToDevice(dev, cfg6);
       if (this.poweredOff.has(dev.id)) dev.powered = false;
       const shut = this.shutIfaces.get(dev.id);
-      if (shut) for (const n of shut) dev.setIfaceUp(n, false);
+      if (shut) {
+        dev.shutdownIfaces = new Set(shut);
+        for (const n of shut) dev.setIfaceUp(n, false);
+      } else {
+        dev.shutdownIfaces = new Set();
+      }
       const pv = this.portVlans.get(dev.id);
       if (pv) dev.portVlans = new Map(pv);
       const tr = this.trunkPorts.get(dev.id);
       if (tr) dev.trunkPorts = new Set(tr);
+      const vl = this.vlans.get(dev.id);
+      if (vl) dev.vlanTable.replace(vl);
+      const ta = this.trunkAllowed.get(dev.id);
+      if (ta) dev.trunkAllowedVlans = new Map([...ta.entries()].map(([k, v]) => [k, [...v]]));
+      const tn = this.trunkNative.get(dev.id);
+      if (tn) dev.trunkNativeVlans = new Map(tn);
       const subs = this.subinterfaces.get(dev.id);
       if (subs) for (const [name, s] of subs) dev.addVirtualIface(name, s.parentPort, s.vlanId, '');
       const pools = this.dhcpPools.get(dev.id);
@@ -946,6 +966,10 @@ export class NetworkSimulator implements SimulatorCore {
     else this.shutIfaces.delete(nodeId);
     const dev = this.nodes.get(nodeId);
     if (!dev) return;
+    // Cermin di device: getDeviceStats membaca dev.shutdownIfaces (bukan
+    // map simulator) — tanpa ini state divergen (operational selalu 'down',
+    // bukan 'admin-down').
+    dev.shutdownIfaces = next;
     // Interface yang baru masuk daftar shutdown → turunkan.
     for (const n of next) dev.setIfaceUp(n, false);
     // Interface yang keluar dari daftar (no shutdown) → hidupkan kembali.
@@ -974,6 +998,100 @@ export class NetworkSimulator implements SimulatorCore {
     else this.trunkPorts.delete(nodeId);
     const dev = this.nodes.get(nodeId);
     if (dev) dev.trunkPorts = names ? new Set(names) : new Set();
+  }
+
+  /**
+   * VLAN database otoritatif perangkat (dari CLI: `vlan 10` + `name X`,
+   * `/interface vlan add`, `set vlans …`). Masuk ke VlanTable perangkat —
+   * sumber kebenaran pengklasifikasian VLAN. Id berupa string (representasi
+   * memori vendor, mis. '10') dinormalisasi; id invalid dibuang; duplikat
+   * disatukan (VlanTable.replace, entri terakhir menang).
+   */
+  setVlans(nodeId: string, vlans: VlanInput[] | undefined): void {
+    if (vlans && vlans.length > 0) this.vlans.set(nodeId, vlans);
+    else this.vlans.delete(nodeId);
+    const dev = this.nodes.get(nodeId);
+    if (dev) dev.vlanTable.replace(vlans || []);
+  }
+
+  /** Snapshot VLAN database node (provider CLI `show vlan` / `/interface vlan print`).
+   *  Device ada → lihat VlanTable-nya (otoritatif, ternormalisasi). Device belum
+   *  ada → normalisasi dari memori yang tersimpan agar id string ('10') menjadi
+   *  angka dan id invalid tidak pernah tampil (bukan fake success). */
+  getNodeVlans(nodeId: string): Vlan[] {
+    const dev = this.nodes.get(nodeId);
+    if (dev) return dev.vlanTable.list();
+    const stored = this.vlans.get(nodeId);
+    if (!stored || stored.length === 0) return [];
+    const tmp = new VlanTable();
+    tmp.replace(stored);
+    return tmp.list();
+  }
+
+  /** Allowed-list trunk: iface → VLAN yang boleh lewat (undefined = semua;
+   *  daftar KOSONG dipertahankan = `switchport trunk allowed vlan none`,
+   *  trunk tidak membawa VLAN apa pun). Id di luar 1..4094 dibuang —
+   *  konfigurasi invalid tidak diterima diam-diam. */
+  setTrunkAllowed(nodeId: string, allowedByIface: Record<string, number[]> | undefined): void {
+    if (allowedByIface && Object.keys(allowedByIface).length > 0) {
+      const cleaned = new Map<string, number[]>();
+      for (const [iface, ids] of Object.entries(allowedByIface)) {
+        if (!Array.isArray(ids)) continue;
+        const ok = ids.filter((id) => isValidVlanId(id));
+        // Daftar kosong ("none") TETAP disimpan — membedakannya dari "tidak
+        // dikonfigurasi" (semua VLAN) wajib untuk enforcement yang jujur.
+        cleaned.set(iface, ok);
+      }
+      if (cleaned.size > 0) this.trunkAllowed.set(nodeId, cleaned);
+      else this.trunkAllowed.delete(nodeId);
+    } else {
+      this.trunkAllowed.delete(nodeId);
+    }
+    const dev = this.nodes.get(nodeId);
+    if (dev) {
+      const m = new Map<string, number[]>();
+      const src = allowedByIface || {};
+      for (const [iface, ids] of Object.entries(src)) {
+        if (!Array.isArray(ids)) continue;
+        m.set(iface, ids.filter((id) => isValidVlanId(id)));
+      }
+      dev.trunkAllowedVlans = m;
+    }
+  }
+
+  /** Native VLAN trunk: iface → native id. Id invalid (di luar 1..4094) dibuang. */
+  setTrunkNative(nodeId: string, nativeByIface: Record<string, number> | undefined): void {
+    if (nativeByIface && Object.keys(nativeByIface).length > 0) {
+      const cleaned = new Map<string, number>();
+      for (const [iface, id] of Object.entries(nativeByIface)) {
+        if (isValidVlanId(id)) cleaned.set(iface, id);
+      }
+      if (cleaned.size > 0) this.trunkNative.set(nodeId, cleaned);
+      else this.trunkNative.delete(nodeId);
+    } else {
+      this.trunkNative.delete(nodeId);
+    }
+    const dev = this.nodes.get(nodeId);
+    if (dev) {
+      const m = new Map<string, number>();
+      const src = nativeByIface || {};
+      for (const [iface, id] of Object.entries(src)) {
+        if (isValidVlanId(id)) m.set(iface, id);
+      }
+      dev.trunkNativeVlans = m;
+    }
+  }
+
+  getNodeTrunkAllowed(nodeId: string): Map<string, number[]> {
+    const dev = this.nodes.get(nodeId);
+    if (dev) return dev.trunkAllowedVlans;
+    return this.trunkAllowed.get(nodeId) || new Map();
+  }
+
+  getNodeTrunkNative(nodeId: string): Map<string, number> {
+    const dev = this.nodes.get(nodeId);
+    if (dev) return dev.trunkNativeVlans;
+    return this.trunkNative.get(nodeId) || new Map();
   }
 
   computeDynamicRoutes(): void {
@@ -1012,7 +1130,7 @@ export class NetworkSimulator implements SimulatorCore {
       }),
       arp: dev.arpCache.entriesList().map((e) => ({ ip: e.ip, mac: e.mac })),
       macTable: dev.macTable.entriesList().map((e) => ({ mac: e.mac, port: e.port, vlan: e.vlan ?? undefined })),
-      routes: dev.getRoutes().map((r) => ({ dst: r.dst, gateway: r.gateway || '', iface: r.iface || '', kind: r.kind })),
+      routes: dev.getRoutes().map((r) => ({ dst: r.dst, gateway: r.gateway || '', iface: r.iface || '', kind: r.kind, active: r.active })),
       stp: stp
         ? {
             rootId: stp.rootId,
@@ -1671,6 +1789,14 @@ export class NetworkSimulator implements SimulatorCore {
 
   getNodeTrunkPorts(nodeId: string): Set<string> {
     return this.trunkPorts.get(nodeId) || new Set();
+  }
+
+  getNodeVlanConfig(nodeId: string): { vlans: Vlan[]; allowed: Map<string, number[]>; native: Map<string, number> } {
+    return {
+      vlans: this.getNodeVlans(nodeId),
+      allowed: this.getNodeTrunkAllowed(nodeId),
+      native: this.getNodeTrunkNative(nodeId),
+    };
   }
 
   getNodeShutdownIfaces(nodeId: string): Set<string> {

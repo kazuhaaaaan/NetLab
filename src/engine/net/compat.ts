@@ -67,7 +67,7 @@ export interface DeviceStatsSnapshot {
   }[];
   arp: { ip: string; mac: string }[];
   macTable: { mac: string; port: string }[];
-  routes: { dst: string; gateway: string; iface: string; kind: string }[];
+  routes: { dst: string; gateway: string; iface: string; kind: string; active?: boolean }[];
   /** status spanning-tree per port (switch saja) */
   stp?: {
     rootId: string;

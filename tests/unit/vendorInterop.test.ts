@@ -67,6 +67,7 @@ const syncCli = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string) =
   sim.setFhrp(nodeId, mem.fhrpGroups || undefined);
   sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
   sim.setPortVlans(nodeId, mem.portVlans || undefined);
+  sim.setVlans(nodeId, mem.vlans || undefined);
   sim.setStp(nodeId, mem.stp || undefined);
   sim.setWebServer(nodeId, mem.webServer || undefined);
 };

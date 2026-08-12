@@ -94,7 +94,7 @@ export class WirelessProcessor implements DeviceProcessor {
       }
       return;
     }
-    const entry = dev.macTable.lookup(pkt.dstMac);
+    const entry = dev.macTable.lookup(pkt.dstMac, pkt.vlan ?? 1);
     if (entry && entry.port && entry.port !== inIface.portId) {
       core.transmit(dev, pkt, entry.port, traceId);
       return;
@@ -142,7 +142,7 @@ export class WirelessProcessor implements DeviceProcessor {
         return;
       }
     }
-    const entry = dev.macTable.lookup(pkt.dstMac);
+    const entry = dev.macTable.lookup(pkt.dstMac, pkt.vlan ?? 1);
     if (entry && entry.port && entry.port !== inIface.portId) {
       core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstMac: pkt.dstMac }, dev.id, entry.port);
       core.transmit(dev, pkt, entry.port, traceId);

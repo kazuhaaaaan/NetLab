@@ -403,6 +403,14 @@ export default function App() {
     simEngineRef.current.setWebServer(nodeId, mem.webServer || undefined);
     simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
     simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
+    // Allowed/native VLAN trunk (switchport trunk allowed/native vlan) — disinkronkan
+    // ke engine supaya SwitchProcessor benar-benar menegakkannya.
+    simEngineRef.current.setTrunkAllowed(nodeId, mem.trunkAllowed || undefined);
+    simEngineRef.current.setTrunkNative(nodeId, mem.trunkNative || undefined);
+    // Database VLAN otoritatif (vlan 10 / /interface vlan add / set vlans …)
+    // disinkronkan ke VlanTable engine — memori vendor tidak boleh menjadi
+    // satu-satunya tempat "VLAN dikonfigurasi" (state divergence).
+    simEngineRef.current.setVlans(nodeId, mem.vlans || undefined);
     simEngineRef.current.setDhcpRelays(nodeId, mem.dhcpRelays || undefined);
     simEngineRef.current.setPortSecurity(nodeId, mem.portSecurity || undefined);
     setShutdownPortsByNode((prev) => {
