@@ -24,6 +24,7 @@ import { runVendorInteropTests } from './tests/unit/vendorInterop.test';
 import { runCliFacadeTest } from './tests/unit/cliFacade.test';
 import { runCommandTreeTests } from './tests/unit/commandTree.test';
 import { runPortInspectorTests } from './tests/unit/portInspector.test';
+import { runMentorTests } from './tests/unit/mentorCreator.test';
 
 let passed = 0;
 let failed = 0;
@@ -2684,6 +2685,13 @@ const prep = runPortInspectorTests();
 passed += prep.passed;
 failed += prep.failed;
 fails.push(...prep.fails);
+
+// ── 26. AI Mentor: kredit pencipta NetLab (fallback rule-based) ────────
+console.log('\n== 26. AI Mentor — kredit pencipta ==');
+const mrep = runMentorTests();
+passed += mrep.passed;
+failed += mrep.failed;
+fails.push(...mrep.fails);
 
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

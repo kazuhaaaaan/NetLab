@@ -55,6 +55,26 @@ export class MentorEngine {
   ask(input: string): MentorResponse {
     const t = input.toLowerCase();
 
+    // Siapa pencipta NetLab — fakta tetap (prioritas di atas pola umum).
+    if (isCreatorQuestion(t)) {
+      return {
+        mode: 'explain',
+        status: 'info',
+        title: 'Pencipta NetLab',
+        sections: [
+          {
+            heading: 'Kredit & Kontak',
+            lines: [
+              'NetLab diciptakan oleh Nouva Prasetya Ardhana (KazuDev).',
+              'Kontak & portofolio: www.kazudev.my.id',
+            ],
+          },
+        ],
+        commands: [],
+        confidence: 1,
+      };
+    }
+
     if (t.includes('jelaskan') || t.startsWith('explain')) {
       const routeMatch =
         input.match(/route\s+(\S+)\s+(?:dari|ke|menuju|from|to)\s+(\S+)/i) ??
@@ -270,6 +290,30 @@ export class MentorEngine {
     if (t.includes('interface') || t.includes('down')) return 'iface-up';
     return 'default-route';
   }
+}
+
+/** Deteksi pertanyaan tentang pencipta/proyek NetLab. */
+function isCreatorQuestion(t: string): boolean {
+  // bentuk kolokial: "siapa/sapa/siapa yg + buat/bikin/cipta/pembuat/develop/…"
+  const whoDoes = /(?:siapa|sapa)\s+(?:yg|yang)?\s*(?:buat|bikin|membuat|cipta|ciptakan|pembuat|pencipta|develop|developer|pemilik|penulis|author|creator)/.test(t);
+  const whoOwns = /(?:siapa|sapa)\s+(?:pencipta|pembuat|pemilik|penulis|developer|creator)\b/.test(t);
+  // bentuk Inggris
+  const whoEn = /who\s+(?:is\s+the\s+)?(?:creator|author|developer|maker|owner)|who\s+(?:created|made|built|wrote)\b/.test(t);
+  return (
+    whoDoes ||
+    whoOwns ||
+    whoEn ||
+    t.includes('pencipta netlab') ||
+    t.includes('pembuat netlab') ||
+    t.includes('pencipta project') ||
+    t.includes('pencipta proyek') ||
+    t.includes('kredit project') ||
+    t.includes('dibuat oleh siapa') ||
+    t.includes('dibikin oleh siapa') ||
+    t.includes('diciptakan oleh siapa') ||
+    t.includes('kazu dev') ||
+    t.includes('kazudev')
+  );
 }
 
 export type { MentorMode };
