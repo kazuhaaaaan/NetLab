@@ -104,6 +104,18 @@ export function connectionLabel(conn: PortConnection): string {
 }
 
 /**
+ * ID VLAN access sebuah port dari state engine (`mem.portVlans` — di-set
+ * lewat `set port vlan` / `switchport access vlan`/`port default vlan`).
+ * Key map = nama interface (ether1, Gi0/0, …). Mengembalikan null bila
+ * port tidak punya VLAN access (state default access tanpa VLAN).
+ */
+export function accessVlanFor(portName: string, vlanMap?: Record<string, number>): number | null {
+  if (!vlanMap) return null;
+  const v = vlanMap[portName];
+  return typeof v === 'number' && v > 0 ? v : null;
+}
+
+/**
  * Sisi port dalam node (kiri/kanan) — diambil dari metadata port.
  * Fallback ke posisi array agar kompatibel dengan data lama.
  */

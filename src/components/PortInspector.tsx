@@ -4,6 +4,7 @@ import { LabNode, LabEdge } from '../types';
 import {
   portConnection,
   portHealth,
+  accessVlanFor,
   PORT_HEALTH_LABEL,
   connectionLabel,
   PortHealth,
@@ -63,6 +64,8 @@ interface PortInspectorProps {
   trunkPortsByNode?: Record<string, string[]>;
   /** port NAMES/IDs yang di-shutdown via CLI (state engine) — status ADMIN DOWN. */
   shutdownPortsByNode?: Record<string, string[]>;
+  /** VLAN access per NAMA port (state engine `portVlans`) — kolom VLAN menunjukkan ID nyata. */
+  accessVlansByNode?: Record<string, Record<string, number>>;
   /** Klik baris terhubung → highlight kedua ujung + pusatkan remote. */
   onInspect?: (edgeId: string, remoteNodeId: string) => void;
   onClose: () => void;
@@ -80,6 +83,7 @@ export const PortInspector: React.FC<PortInspectorProps> = ({
   edges,
   trunkPortsByNode = {},
   shutdownPortsByNode = {},
+  accessVlansByNode = {},
   onInspect,
   onClose,
 }) => {
@@ -88,6 +92,7 @@ export const PortInspector: React.FC<PortInspectorProps> = ({
 
   const trunkPorts = useMemo(() => trunkPortsByNode[node.id] || [], [trunkPortsByNode, node.id]);
   const shutdownPorts = useMemo(() => shutdownPortsByNode[node.id] || [], [shutdownPortsByNode, node.id]);
+  const accessVlans = useMemo(() => accessVlansByNode[node.id] || {}, [accessVlansByNode, node.id]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -95,7 +100,8 @@ export const PortInspector: React.FC<PortInspectorProps> = ({
       const conn = portConnection(nodes, edges, node.id, port.id);
       const health = portHealth(port, conn, shutdownPorts);
       const isTrunk = conn?.edge ? trunkPorts.includes(port.name) : false;
-      return { port, conn, health, isTrunk };
+      const accessVlan = conn ? accessVlanFor(port.name, accessVlans) : null;
+      return { port, conn, health, isTrunk, accessVlan };
     });
     return list.filter((r) => {
       if (healthFilter !== 'all' && r.health !== healthFilter) return false;
@@ -105,7 +111,7 @@ export const PortInspector: React.FC<PortInspectorProps> = ({
         (r.conn && (r.conn.remoteNodeName.toLowerCase().includes(q) || r.conn.remotePortName.toLowerCase().includes(q)))
       );
     });
-  }, [node.ports, nodes, edges, query, healthFilter, trunkPorts, shutdownPorts]);
+  }, [node.ports, nodes, edges, query, healthFilter, trunkPorts, shutdownPorts, accessVlans]);
 
   const counts = useMemo(() => {
     const connected = node.ports.filter((p) => portConnection(nodes, edges, node.id, p.id)).length;
@@ -206,7 +212,7 @@ export const PortInspector: React.FC<PortInspectorProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {rows.map(({ port, conn, health, isTrunk }) => {
+                {rows.map(({ port, conn, health, isTrunk, accessVlan }) => {
                   const style = HEALTH_STYLE[health];
                   const interactive = conn && onInspect;
                   return (
@@ -269,6 +275,10 @@ export const PortInspector: React.FC<PortInspectorProps> = ({
                           isTrunk ? (
                             <span className="text-[10px] font-mono text-orange-300/90 bg-orange-500/10 border border-orange-500/30 rounded px-1.5 py-0.5">
                               TRUNK
+                            </span>
+                          ) : accessVlan !== null ? (
+                            <span className="text-[10px] font-mono text-cyan-300/90 bg-cyan-500/10 border border-cyan-500/30 rounded px-1.5 py-0.5">
+                              VLAN {accessVlan}
                             </span>
                           ) : (
                             <span className="text-slate-600 text-[10px]">access</span>

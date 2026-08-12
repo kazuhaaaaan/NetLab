@@ -327,6 +327,8 @@ export default function App() {
   const [trunkPortsByNode, setTrunkPortsByNode] = useState<Record<string, string[]>>({});
   // Port yang di-shutdown via CLI per node (state engine) → Port Inspector ADMIN DOWN
   const [shutdownPortsByNode, setShutdownPortsByNode] = useState<Record<string, string[]>>({});
+  // VLAN access per port per node (state engine `portVlans`) → Port Inspector kolom VLAN
+  const [accessVlansByNode, setAccessVlansByNode] = useState<Record<string, Record<string, number>>>({});
   // Perangkat yang terlibat dalam animasi ping berjalan (badge kuning di canvas)
   const pingingNodeIds = useMemo(() => {
     const ids = new Set<string>();
@@ -419,6 +421,16 @@ export default function App() {
         return next;
       }
       return { ...prev, [nodeId]: ports };
+    });
+    setAccessVlansByNode((prev) => {
+      const vlans = mem.portVlans && Object.keys(mem.portVlans).length > 0 ? { ...mem.portVlans } : undefined;
+      if (!vlans) {
+        if (!(nodeId in prev)) return prev;
+        const next = { ...prev };
+        delete next[nodeId];
+        return next;
+      }
+      return { ...prev, [nodeId]: vlans };
     });
     simEngineRef.current.setStp(nodeId, mem.stp || undefined);
     simEngineRef.current.setFhrp(nodeId, mem.fhrpGroups || undefined);
@@ -1805,6 +1817,7 @@ onOpenTerminal={handleOpenTerminal}
             edges={project.edges}
             trunkPortsByNode={trunkPortsByNode}
             shutdownPortsByNode={shutdownPortsByNode}
+            accessVlansByNode={accessVlansByNode}
             onInspect={handleInspectPort}
             onClose={() => {
               setInspectorNodeId(null);

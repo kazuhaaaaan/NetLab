@@ -10,6 +10,7 @@ import {
   edgeForPort,
   portConnection,
   portHealth,
+  accessVlanFor,
   connectionLabel,
   PORT_HEALTH_LABEL,
   CABLE_TYPE_LABEL,
@@ -139,6 +140,38 @@ export function runPortInspectorTests(): Report {
     const edgesDown2 = edges.map((e) => (e.id === 'e1' ? { ...e, down: true } : e));
     const c4 = portConnection(nodes, edgesDown2, 'r1', 'ether1')!;
     check('Q4 shutdown + link down → ADMIN DOWN (prioritas engine)', portHealth(r1.ports[0], c4, ['ether1']) === 'admin-down');
+  }
+
+  // ── 5. VLAN access dari state ENGINE (portVlans) → kolom VLAN inspector ─
+  {
+    const vlanMap = { ether1: 10, ether2: 20 };
+    check('R1 accessVlanFor ether1 → 10', accessVlanFor('ether1', vlanMap) === 10);
+    check('R2 accessVlanFor nama tak dikenal → null', accessVlanFor('ether9', vlanMap) === null);
+    check('R3 tanpa state → null (jujur, bukan asumsi)', accessVlanFor('ether1', undefined) === null);
+    check('R4 vlan 0 / nilai rusak → null', accessVlanFor('ether1', { ether1: 0 }) === null);
+    // Konsistensi label: trunk STATE engine (trunkPorts) tetap TRUNK walau ada access vlan.
+    const c = portConnection(nodes, edges, 'r1', 'ether1')!;
+    check('R5 access vlan tidak mengganggu status port', portHealth(r1.ports[0], c) === 'up');
+  }
+
+  // ── 6. Wireless: Laptop1 wlan0 → AP1 wlan0 (radio port) ─────────────
+  {
+    const ap = mkNode('ap1', 'AP1', [
+      { id: 'wlan0', name: 'wlan0' },
+      { id: 'wlan1', name: 'wlan1' },
+      { id: 'eth0', name: 'eth0' },
+    ]);
+    const laptop = mkNode('laptop1', 'Laptop1', [{ id: 'wlan0', name: 'wlan0' }]);
+    const wkNodes = [...nodes, ap, laptop];
+    const wkEdges = [...edges, mkEdge('wl1', 'laptop1', 'wlan0', 'ap1', 'wlan0', { cableType: 'copper_straight' })];
+    const c = portConnection(wkNodes, wkEdges, 'laptop1', 'wlan0');
+    check('W1 laptop wlan0 → AP1 / wlan0', c?.remoteNodeName === 'AP1' && c?.remotePortName === 'wlan0', JSON.stringify(c));
+    check('W2 arah balik AP1 wlan0 → Laptop1 / wlan0', portConnection(wkNodes, wkEdges, 'ap1', 'wlan0')?.remoteNodeName === 'Laptop1');
+    const c2 = portConnection(wkNodes, wkEdges, 'ap1', 'wlan1');
+    check('W3 AP1 wlan1 idle → null', c2 === null && portHealth(ap.ports[1], c2) === 'not-connected');
+    check('W4 status radio terhubung UP', c !== null && portHealth(laptop.ports[0], c) === 'up');
+    const wlDown = wkEdges.map((e) => (e.id === 'wl1' ? { ...e, down: true } : e));
+    check('W5 wireless link down → status DOWN', portHealth(laptop.ports[0], portConnection(wkNodes, wlDown, 'laptop1', 'wlan0')!) === 'down');
   }
 
   // ── 5. Event packet lifecycle (PACKET_QUEUED/FORWARDED/DELIVERED) ────

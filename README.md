@@ -181,6 +181,21 @@ The AI chat panel works with two modes:
 > Mode langsung browser→Gemini dengan `VITE_GEMINI_API_KEY` hanya aktif saat
 > `npm run dev` dan **tidak pernah** masuk bundle produksi.
 
+### Deploy di Vercel (disarankan)
+
+Repo di-import ke Vercel → semua (frontend + proxy AI) satu origin, tanpa CORS:
+
+1. Vercel → **Add New → Project** → pilih repo NetLab (framework: Vite).
+2. Tambahkan environment variable di **Settings → Environment Variables**:
+   - `GEMINI_API_KEY` — key Gemini (hanya server-side, tidak pernah ke browser)
+   - `TRUST_PROXY=1` — agar rate limit memakai IP asli pengunjung
+3. Pasang domain (`netlab.kazudev.my.id`) di **Settings → Domains**.
+4. Deploy. Panel chat otomatis mendeteksi `/api/health` → badge "Gemini aktif".
+
+> Tidak perlu `APP_URL`/`ALLOWED_ORIGINS` (same-origin). Bila frontend dipisah
+> dari API (mis. Pages + Vercel), set `APP_URL=https://<proyek>.vercel.app` dan
+> `ALLOWED_ORIGINS=https://<domain-frontend>` di server.
+
 ---
 
 ## 📜 License & Open Source

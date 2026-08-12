@@ -13,14 +13,16 @@
  * - Error upstream TIDAK pernah bocor ke klien (dikode ulang).
  *
  * Jalankan: node server/index.mjs  (atau npm run dev:ai)
+ * Serverless: file ini mengekspor app Express — dipakai api/ai.mjs (Vercel).
  */
 import 'dotenv/config';
 import express from 'express';
 import { GoogleGenAI } from '@google/genai';
+import { pathToFileURL } from 'url';
 
 const PORT = Number(process.env.AI_PORT || process.env.PORT || 8787);
 const API_KEY = process.env.GEMINI_API_KEY || '';
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // ── Konfigurasi keamanan (semua bisa dioverride lewat env) ─────────────
@@ -222,9 +224,17 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
 });
 
-app.listen(PORT, () => {
-  console.log(`[mikroai] AI server listening on http://localhost:${PORT} (llm=${Boolean(API_KEY)}, origins=${ORIGINS.join(',')}, ${TRUST_PROXY ? 'trust-proxy=on' : 'trust-proxy=off'})`);
-  if (NODE_ENV === 'production' && !ALLOWED_ORIGINS.length) {
-    console.warn('[mikroai] PERINGATAN: NODE_ENV=production tanpa ALLOWED_ORIGINS — CORS memakai daftar dev (localhost). Set ALLOWED_ORIGINS=https://netlab.kazudev.my.id.');
-  }
-});
+// ── Export untuk serverless (Vercel): api/ai.mjs re-export app ini ──────
+// Pada Vercel jangan app.listen() — handler Express diekspor langsung.
+export default app;
+
+// Jalan langsung (node server/index.mjs / npm run dev:ai), bukan di serverless.
+const isMain = Boolean(process.argv?.[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  app.listen(PORT, () => {
+    console.log(`[mikroai] AI server listening on http://localhost:${PORT} (llm=${Boolean(API_KEY)}, origins=${ORIGINS.join(',')}, ${TRUST_PROXY ? 'trust-proxy=on' : 'trust-proxy=off'})`);
+    if (NODE_ENV === 'production' && !ALLOWED_ORIGINS.length) {
+      console.warn('[mikroai] PERINGATAN: NODE_ENV=production tanpa ALLOWED_ORIGINS — CORS memakai daftar dev (localhost). Set ALLOWED_ORIGINS=https://netlab.kazudev.my.id.');
+    }
+  });
+}
