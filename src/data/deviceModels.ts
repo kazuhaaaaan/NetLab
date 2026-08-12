@@ -73,7 +73,10 @@ export function getPortsForModel(vendorId: string, modelLabel: string): PortSpec
         id: name,
         name,
         speedMbps: d.speedMbps,
-        status: i === 0 ? ('up' as const) : ('down' as const),
+        // status = admin state (default UP untuk semua port). Status operasional
+        // (kabel ada/tidak, link down, admin shutdown via CLI) TIDAK disimpan di
+        // sini — diturunkan Port Inspector dari edges + state CLI (shutdownIfaces).
+        status: 'up' as const,
         type: d.type || 'copper',
         macAddress: mac,
       };

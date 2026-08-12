@@ -5,6 +5,7 @@ import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
 import { TerminalPanel } from './components/TerminalPanel';
+import { PortInspector } from './components/PortInspector';
 import { AiChatPanel } from './components/AiChatPanel';
 import { TutorialModal } from './components/TutorialModal';
 import { GradingModal } from './components/GradingModal';
@@ -34,6 +35,7 @@ import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
 import { runCliCommand, createNetLabBridge } from './engine';
+import type { CliMode } from './engine/cli/commandTree';
 import type { NetLabBridge } from './engine/state/bridge';
 import { ConfigExportModal } from './components/ConfigExportModal';
 import { VendorCapabilitiesModal } from './components/VendorCapabilitiesModal';
@@ -308,6 +310,9 @@ export default function App() {
   const isMobile = useMediaQuery('(max-width: 767px)');
   // Mobile: sheet aktif — 'add' | 'device' | 'inspector'
   const [mobileSheet, setMobileSheet] = useState<null | 'add' | 'device' | 'inspector'>(null);
+  // Port Inspector — device yang sedang diinspeksi + highlight kabel/perangkat remote
+  const [inspectorNodeId, setInspectorNodeId] = useState<string | null>(null);
+  const [inspectorHighlight, setInspectorHighlight] = useState<{ edgeId: string; nodeId: string } | null>(null);
 
   // Ping PDU simulation state
   const [pingResults, setPingResults] = useState<PingResult[]>([]);
@@ -320,6 +325,8 @@ export default function App() {
   const [canvasLocked, setCanvasLocked] = useState(false);
   // Interface trunk per node (dari konfigurasi CLI) → warna kabel oranye di canvas
   const [trunkPortsByNode, setTrunkPortsByNode] = useState<Record<string, string[]>>({});
+  // Port yang di-shutdown via CLI per node (state engine) → Port Inspector ADMIN DOWN
+  const [shutdownPortsByNode, setShutdownPortsByNode] = useState<Record<string, string[]>>({});
   // Perangkat yang terlibat dalam animasi ping berjalan (badge kuning di canvas)
   const pingingNodeIds = useMemo(() => {
     const ids = new Set<string>();
@@ -393,6 +400,16 @@ export default function App() {
     simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
     simEngineRef.current.setDhcpRelays(nodeId, mem.dhcpRelays || undefined);
     simEngineRef.current.setPortSecurity(nodeId, mem.portSecurity || undefined);
+    setShutdownPortsByNode((prev) => {
+      const ports = mem.shutdownIfaces && mem.shutdownIfaces.length > 0 ? [...mem.shutdownIfaces] : undefined;
+      if (!ports) {
+        if (!(nodeId in prev)) return prev;
+        const next = { ...prev };
+        delete next[nodeId];
+        return next;
+      }
+      return { ...prev, [nodeId]: ports };
+    });
     setTrunkPortsByNode((prev) => {
       const ports = mem.trunkPorts && mem.trunkPorts.length > 0 ? [...mem.trunkPorts] : undefined;
       if (!ports) {
@@ -701,6 +718,47 @@ export default function App() {
       ...prev,
       edges: prev.edges.filter((e) => e.sourceNodeId !== nodeId && e.targetNodeId !== nodeId)
     }));
+  };
+
+  // Highligh Port Inspector selalu valid: edge/nod dihapus → highlight ikut hilang.
+  useEffect(() => {
+    if (!inspectorHighlight) return;
+    const keep =
+      project.edges.some((e) => e.id === inspectorHighlight.edgeId) &&
+      project.nodes.some((n) => n.id === inspectorHighlight.nodeId);
+    if (!keep) setInspectorHighlight(null);
+  }, [project.edges, project.nodes, inspectorHighlight]);
+
+  /** Buka Port Inspector untuk sebuah device (tombol Ports / aksi mobile). */
+  const handleOpenPorts = (nodeId: string) => {
+    setMobileSheet(null);
+    setInspectorNodeId(nodeId);
+  };
+
+  /** Klik koneksi di Port Inspector → highlight kabel & remote, pusatkan viewport. */
+  const handleInspectPort = (edgeId: string, remoteNodeId: string) => {
+    setInspectorHighlight({ edgeId, nodeId: remoteNodeId });
+    // Remote device off-screen → pusatkan topologi padanya.
+    const remote = project.nodes.find((n) => n.id === remoteNodeId);
+    if (remote) {
+      const vp = project.viewport;
+      const cx = typeof window !== 'undefined' ? window.innerWidth / 2 : 400;
+      const cy = typeof window !== 'undefined' ? window.innerHeight / 2 : 300;
+      const sx = remote.position.x * vp.zoom + vp.x;
+      const sy = remote.position.y * vp.zoom + vp.y;
+      const offX = sx < -50 || sx > cx + 50;
+      const offY = sy < -50 || sy > cy + 50;
+      if (offX || offY) {
+        setProject((prev) => ({
+          ...prev,
+          viewport: {
+            ...prev.viewport,
+            x: cx - remote.position.x * prev.viewport.zoom - 48,
+            y: cy - remote.position.y * prev.viewport.zoom - 44,
+          },
+        }));
+      }
+    }
   };
 
   // Keyboard shortcut: Delete / Backspace to remove selected edge or node
@@ -1152,7 +1210,7 @@ export default function App() {
     return renderResponse(mentor.ask(t));
   };
 
-  const handleSendTerminalCommand = (nodeId: string, cmd: string) => {
+  const handleSendTerminalCommand = (nodeId: string, cmd: string, mode?: CliMode) => {
     const node = project.nodes.find((n) => n.id === nodeId);
     const vendor = node?.vendor || 'mikrotik';
 
@@ -1211,6 +1269,7 @@ export default function App() {
         vendor,
         nodeId,
         cmd,
+        mode: mode || 'exec',
         context: {
         nodeId,
         name: node.name,
@@ -1526,6 +1585,9 @@ export default function App() {
             trunkPortsByNode={trunkPortsByNode}
             locked={canvasLocked}
             onToggleLock={() => setCanvasLocked((v) => !v)}
+            onOpenPorts={handleOpenPorts}
+            highlightEdgeId={inspectorHighlight?.edgeId ?? null}
+            highlightNodeId={inspectorHighlight?.nodeId ?? null}
             pingingNodeIds={pingingNodeIds}
             failedPingNodeIds={failedPingNodeIds}
             isMobile={isMobile}
@@ -1712,11 +1774,14 @@ onOpenTerminal={handleOpenTerminal}
             onTogglePower={handleTogglePower}
             onDelete={handleDeleteNode}
             onInspect={() => setMobileSheet('inspector')}
+            onOpenPortInspector={handleOpenPorts}
           />
           <MobileInspectorSheet
             open={mobileSheet === 'inspector'}
             onClose={() => setMobileSheet(null)}
             node={selectedNode}
+            nodes={project.nodes}
+            edges={project.edges}
             onUpdateNodeName={handleUpdateNodeName}
             onUpdateNodeModel={handleUpdateNodeModel}
             onTogglePower={handleTogglePower}
@@ -1728,6 +1793,26 @@ onOpenTerminal={handleOpenTerminal}
 
       {/* Monorepo Package Explorer Modal */}
       <MonorepoExplorerModal isOpen={isMonorepoOpen} onClose={() => setIsMonorepoOpen(false)} />
+
+      {/* Port Inspector — drawer desktop / layar penuh mobile */}
+      {(() => {
+        const inspectNode = inspectorNodeId ? project.nodes.find((n) => n.id === inspectorNodeId) : null;
+        if (!inspectNode) return null;
+        return (
+          <PortInspector
+            node={inspectNode}
+            nodes={project.nodes}
+            edges={project.edges}
+            trunkPortsByNode={trunkPortsByNode}
+            shutdownPortsByNode={shutdownPortsByNode}
+            onInspect={handleInspectPort}
+            onClose={() => {
+              setInspectorNodeId(null);
+              setInspectorHighlight(null);
+            }}
+          />
+        );
+      })()}
 
       {/* Connection / Feedback Toast */}
       {toast && (

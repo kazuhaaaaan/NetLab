@@ -1,9 +1,12 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Terminal, X, Minimize2, Maximize2, Send, BookOpen, ClipboardPaste, Copy, Check } from 'lucide-react';
 import { LabNode, TerminalLog } from '../types';
 import { VENDOR_MAP } from '../data/vendors';
 import { getHints, getTabCompletion, CliHint } from '../data/cliHints';
 import { getBeginnerGuide, VendorGuide } from '../data/beginnerGuide';
+import { completionFor, nextCliMode, sequenceModes } from '../engine/cli/commandTree';
+import type { CliMode } from '../engine/cli/commandTree';
+import { hasFinePointer } from '../utils/inputCapability';
 
 interface TerminalPanelProps {
   openNodes: LabNode[];
@@ -11,9 +14,57 @@ interface TerminalPanelProps {
   onSelectTab: (nodeId: string) => void;
   onCloseTab: (nodeId: string) => void;
   logs: Record<string, TerminalLog[]>;
-  onSendCommand: (nodeId: string, cmd: string) => void;
+  onSendCommand: (nodeId: string, cmd: string, mode?: CliMode) => void;
   isOpen: boolean;
   onClose: () => void;
+}
+
+/** Vendor yang memakai command tree facade (abbreviation/completion context-aware). */
+function usesCommandTree(vendor: string): boolean {
+  return (
+    vendor === 'cisco_ios' ||
+    vendor === 'cisco_nxos' ||
+    vendor === 'cisco' ||
+    vendor === 'mikrotik' ||
+    vendor === 'juniper' ||
+    vendor === 'huawei' ||
+    vendor === 'aruba' ||
+    vendor === 'vyos' ||
+    vendor === 'ubiquiti' ||
+    vendor === 'fortinet'
+  );
+}
+
+/**
+ * Prompt mode-aware per vendor:
+ * Cisco/Aruba: Router# → Router(config)# → Router(config-if)#
+ * Juniper:     admin@JunOS> → admin@JunOS#  (operational vs configuration)
+ * Huawei:      <R> → [R] → [R-GigabitEthernet0/0/0]
+ * VyOS/EdgeOS: vyos@router:~$ → vyos@router#
+ * Fortinet:    satu level (tidak ada global config mode)
+ */
+function promptFor(vendor: string, name: string, mode: CliMode, iface?: string): string {
+  const base = VENDOR_MAP[vendor as keyof typeof VENDOR_MAP]?.defaultPrompt || `${name}#`;
+  if (vendor === 'cisco_ios' || vendor === 'cisco_nxos' || vendor === 'cisco' || vendor === 'aruba') {
+    if (mode === 'exec') return base.replace(/#$/, '#');
+    if (mode === 'config') return base.replace(/#$/, '(config)#');
+    return base.replace(/#$/, '(config-if)#');
+  }
+  if (vendor === 'juniper') {
+    if (mode === 'config') return base.replace(/>$/, '#');
+    return base;
+  }
+  if (vendor === 'vyos' || vendor === 'ubiquiti') {
+    if (mode === 'config') return base.replace(/:~\$$/, '#');
+    return base;
+  }
+  if (vendor === 'huawei') {
+    if (mode === 'exec') return base;
+    if (mode === 'config') return base.replace(/^</, '[').replace(/>$/, ']');
+    const shown = iface || 'GigabitEthernet0/0/0';
+    return `[${base.replace(/^<|>$/g, '')}-${shown}]`;
+  }
+  return base;
 }
 
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
@@ -31,19 +82,29 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [hints, setHints] = useState<CliHint[]>([]);
   const [showHints, setShowHints] = useState(false);
   const [hintIndex, setHintIndex] = useState(0);
-  const [history, setHistory] = useState<string[]>([]);
+  /** Riwayat per-perangkat (tidak bocor antar device). */
+  const [historyByNode, setHistoryByNode] = useState<Record<string, string[]>>({});
   const [historyIdx, setHistoryIdx] = useState(-1);
+  /** Mode CLI (context) per-perangkat: exec / config / config-if (Cisco). */
+  const [modes, setModes] = useState<Record<string, CliMode>>({});
+  /** Nama interface aktif di config-if (Cisco/Huawei) — untuk prompt. */
+  const [ifaceByNode, setIfaceByNode] = useState<Record<string, string>>({});
   const [showGuide, setShowGuide] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [copiedLogs, setCopiedLogs] = useState(false);
+  /** Kandidat TAB completion (context-aware, desktop). */
+  const [completionCandidates, setCompletionCandidates] = useState<string[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const desktopCapable = useRef(hasFinePointer());
 
   const activeNode = openNodes.find((n) => n.id === activeNodeId) || openNodes[0];
   const activeLogs = activeNode ? logs[activeNode.id] || [] : [];
   const vendorInfo = activeNode ? VENDOR_MAP[activeNode.vendor] : null;
   const vendor = activeNode?.vendor || 'cisco_ios';
+  const mode: CliMode = (activeNode && modes[activeNode.id]) || 'exec';
+  const history = (activeNode && historyByNode[activeNode.id]) || [];
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -54,6 +115,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     setShowHints(false);
     setInputVal('');
     setHistoryIdx(-1);
+    setCompletionCandidates([]);
   }, [activeNodeId]);
 
   const activeGuide: VendorGuide = activeNode ? getBeginnerGuide(activeNode.vendor) : getBeginnerGuide('mikrotik');
@@ -63,6 +125,28 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const dismissHints = () => {
     setShowHints(false);
     setHints([]);
+    setCompletionCandidates([]);
+  };
+
+  /** '?' help — context-aware per (vendor, mode) untuk vendor tree, fallback hints lama. */
+  const showHelpFor = (prefix: string) => {
+    if (usesCommandTree(vendor)) {
+      const res = completionFor(vendor, mode, prefix);
+      setHints(
+        res.candidates.map((c) => ({
+          id: c,
+          command: c,
+          description: '',
+        }))
+      );
+      setHintIndex(0);
+      setShowHints(res.candidates.length > 0);
+    } else {
+      const results = getHints(vendor, prefix || '');
+      setHints(results);
+      setHintIndex(0);
+      setShowHints(results.length > 0);
+    }
   };
 
   const applyHint = (cmd: string) => {
@@ -78,14 +162,36 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     // Trigger ? help popup when input ends with ?
     if (val.endsWith('?')) {
-      const prefix = val.slice(0, -1).trim();
-      const results = getHints(vendor, prefix || '');
-      setHints(results);
-      setHintIndex(0);
-      setShowHints(results.length > 0);
+      showHelpFor(val.slice(0, -1).trim());
     } else {
       dismissHints();
     }
+  };
+
+  /** Jalankan perintah dari jalur mana pun (submit/TAB/quiz/guide), dengan
+   *  update mode CLI & riwayat per-perangkat agar abbreviation & completion
+   *  selalu context-aware. */
+  const execute = (nodeId: string, raw: string) => {
+    const cmd = raw.replace(/\?$/, '').trim();
+    if (!cmd || !activeNode) return;
+    const curMode: CliMode = modes[nodeId] || 'exec';
+    setHistoryByNode((prev) => ({ ...prev, [nodeId]: [...(prev[nodeId] || []), cmd] }));
+    setHistoryIdx(-1);
+    const nx = nextCliMode(vendor, curMode, cmd);
+    if (nx !== curMode) setModes((prev) => ({ ...prev, [nodeId]: nx }));
+    // Pelacakan interface aktif (Cisco/Huawei interface view) untuk prompt.
+    const c = cmd.toLowerCase();
+    const ifaceMatch = c.startsWith('interface ') || c.startsWith('int ')
+      ? cmd.slice(c.indexOf(' ') + 1).trim().split(/\s+/)[0]
+      : null;
+    if (ifaceMatch) {
+      setIfaceByNode((prev) => ({ ...prev, [nodeId]: ifaceMatch }));
+    } else if (curMode === 'config-if' && nx !== 'config-if') {
+      setIfaceByNode((prev) => ({ ...prev, [nodeId]: '' }));
+    }
+    onSendCommand(nodeId, cmd, curMode);
+    setInputVal('');
+    dismissHints();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -107,16 +213,42 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       return;
     }
 
-    // Tab → autocomplete
+    // Tab → autocomplete (DESKTOP only — jangan mencuri TAB perangkat sentuh)
     if (e.key === 'Tab') {
+      if (!desktopCapable.current) return;
       e.preventDefault();
-      const completion = getTabCompletion(vendor, inputVal.replace(/\?$/, '').trim());
-      if (completion) {
-        setInputVal(completion + ' ');
+      const val = inputVal.replace(/\?$/, '').trim();
+      const res = completionFor(vendor, mode, val);
+      if (res.candidates.length === 1 && res.commonPrefix && res.commonPrefix !== val) {
+        setInputVal(res.commonPrefix + ' ');
         dismissHints();
-      } else if (hints.length > 0) {
-        setInputVal(hints[0].command + ' ');
-        dismissHints();
+      } else if (res.candidates.length > 1) {
+        // common prefix bila ada kemajuan, selainnya tampilkan kandidat
+        if (res.commonPrefix && res.commonPrefix.length > val.length) {
+          setInputVal(res.commonPrefix + ' ');
+          setCompletionCandidates(res.candidates);
+        } else {
+          setCompletionCandidates(res.candidates);
+          setHints(
+            res.candidates.map((c) => ({
+              id: c,
+              command: c,
+              description: '',
+            }))
+          );
+          setHintIndex(0);
+          setShowHints(true);
+        }
+      } else {
+        // fallback ke engine hints lama (vendor non-tree)
+        const completion = getTabCompletion(vendor, val);
+        if (completion) {
+          setInputVal(completion + ' ');
+          dismissHints();
+        } else if (hints.length > 0) {
+          setInputVal(hints[0].command + ' ');
+          dismissHints();
+        }
       }
       return;
     }
@@ -144,7 +276,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       }
     }
 
-    // Command history navigation with ArrowUp / ArrowDown
+    // Command history navigation with ArrowUp / ArrowDown (per perangkat)
     if (!showHints) {
       if (e.key === 'ArrowUp') {
         e.preventDefault();
@@ -165,13 +297,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const cmd = inputVal.replace(/\?$/, '').trim();
-    if (!cmd || !activeNode) return;
-    dismissHints();
-    setHistory((prev) => [...prev, cmd]);
-    setHistoryIdx(-1);
-    onSendCommand(activeNode.id, cmd);
-    setInputVal('');
+    if (!activeNode) return;
+    execute(activeNode.id, inputVal);
   };
 
   const quickCommands: Record<string, string[]> = {
@@ -203,16 +330,34 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const runPastedCommands = () => {
     if (!activeNode) return;
+    const nodeId = activeNode.id;
     const lines = pasteText
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith('#') && !l.startsWith('!'));
     if (lines.length === 0) return;
     dismissHints();
-    setHistory((prev) => [...prev, ...lines]);
+    setHistoryByNode((prev) => ({ ...prev, [nodeId]: [...(prev[nodeId] || []), ...lines] }));
     setShowPasteModal(false);
+    // Mode tiap perintah dihitung SEKALIGUS dan memakai mode SEBELUM eksekusi
+    // (konsisten dengan execute() per satu perintah) — bukan mode hasil transisi.
+    // Menghindari bug lama: 'conf t' ikut dikirim sebagai mode 'config'.
+    const modeSeq = sequenceModes(vendor, modes[nodeId] || 'exec', lines);
     lines.forEach((cmd, i) => {
-      setTimeout(() => onSendCommand(activeNode.id, cmd), i * 350);
+      setTimeout(() => {
+        onSendCommand(nodeId, cmd, modeSeq[i]);
+        const next = modeSeq[i + 1] ?? modeSeq[i];
+        setModes((prev) => ({ ...prev, [nodeId]: next }));
+        const cc = cmd.toLowerCase();
+        const im = cc.startsWith('interface ') || cc.startsWith('int ')
+          ? cmd.slice(cc.indexOf(' ') + 1).trim().split(/\s+/)[0]
+          : null;
+        if (im) {
+          setIfaceByNode((prev) => ({ ...prev, [nodeId]: im }));
+        } else if (next === 'exec' && modeSeq[i] !== 'exec') {
+          setIfaceByNode((prev) => ({ ...prev, [nodeId]: '' }));
+        }
+      }, i * 350);
     });
     setPasteText('');
   };
@@ -223,6 +368,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     setShowPasteModal(false);
     inputRef.current?.focus();
   };
+
+  const prompt = activeNode
+    ? promptFor(activeNode.vendor, activeNode.name, mode, ifaceByNode[activeNode.id])
+    : vendorInfo?.defaultPrompt || '> ';
 
   return (
     <div
@@ -310,7 +459,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               <button
                 key={step.command}
                 onClick={() => {
-                  if (activeNode) onSendCommand(activeNode.id, step.command);
+                  if (activeNode) execute(activeNode.id, step.command);
                 }}
                 className="w-full text-left flex items-start gap-2 px-2 py-1 rounded hover:bg-emerald-950/40 transition group"
               >
@@ -332,7 +481,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <button
             key={cmd}
             onClick={() => {
-              if (activeNode) onSendCommand(activeNode.id, cmd);
+              if (activeNode) execute(activeNode.id, cmd);
             }}
             className="px-2 py-0.5 rounded bg-slate-800 hover:bg-blue-900/50 hover:border-blue-500 border border-slate-700 text-slate-300 transition shrink-0"
           >
@@ -347,7 +496,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           [NetLab Multi-Vendor Terminal Engine connected to {activeNode?.name} ({vendorInfo?.name})]
         </div>
         <div className="text-slate-600 text-[11px]">
-          Type <span className="text-yellow-400 font-bold">?</span> or append <span className="text-yellow-400 font-bold">?</span> after a word for help. Press <span className="text-cyan-400 font-bold">Tab</span> to autocomplete.
+          Type <span className="text-yellow-400 font-bold">?</span> for help · {desktopCapable.current ? <span><span className="text-cyan-400 font-bold">Tab</span> to complete</span> : 'touch device: ketuk tombol quick CLI di atas'}
+        </div>
+        <div className="text-slate-600 text-[11px]">
+          Abbreviation: <span className="text-slate-300">sh run</span>, <span className="text-slate-300">conf t</span>, <span className="text-slate-300">/ip a p</span> (unik saja; ambigu ditolak)
         </div>
         <div className="text-slate-600 text-[11px]">
           AI Mentor: <span className="text-violet-400 font-bold">/ai kenapa ping gagal</span>, <span className="text-violet-400 font-bold">/ai hint routing</span>, <span className="text-violet-400 font-bold">/ai learn DHCP</span>, <span className="text-violet-400 font-bold">/ai diagnose</span>, <span className="text-violet-400 font-bold">/ai fix missing-route</span>, <span className="text-violet-400 font-bold">/ai</span> untuk bantuan.
@@ -357,7 +509,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <div key={log.id} className="whitespace-pre-wrap">
             {log.type === 'input' && (
               <div className="text-emerald-400 font-bold">
-                {vendorInfo?.defaultPrompt}
+                {prompt}
                 <span className="text-slate-100">{log.text}</span>
               </div>
             )}
@@ -373,7 +525,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       {showHints && hints.length > 0 && (
         <div className="mx-2 mb-0 border border-slate-700 rounded-t-md bg-slate-900 overflow-hidden shadow-xl max-h-56 overflow-y-auto">
           <div className="px-3 py-1 bg-slate-800 border-b border-slate-700 text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
-            <span>⌨  Context Help — <span className="text-yellow-400">↑↓</span> navigate · <span className="text-cyan-400">Enter</span> apply · <span className="text-slate-400">Esc</span> close</span>
+            <span>⌨  Context Help ({mode}) — <span className="text-yellow-400">↑↓</span> navigate · <span className="text-cyan-400">Enter</span> apply · <span className="text-slate-400">Esc</span> close</span>
             <span className="text-slate-500">{hints.length} matches</span>
           </div>
           {hints.map((hint, i) => (
@@ -390,15 +542,38 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               }`}
             >
               <span className="font-mono text-emerald-400 shrink-0 text-[11px]">{hint.command}</span>
-              <span className="text-slate-500 text-[10px] truncate">{hint.description}</span>
+              {hint.description && <span className="text-slate-500 text-[10px] truncate">{hint.description}</span>}
             </button>
           ))}
         </div>
       )}
 
+      {/* TAB completion candidates popup */}
+      {!showHints && completionCandidates.length > 0 && (
+        <div className="mx-2 mb-0 border border-cyan-700/50 rounded-t-md bg-slate-900 overflow-hidden shadow-xl max-h-40 overflow-y-auto">
+          <div className="px-3 py-1 bg-slate-800/80 border-b border-slate-800 text-[10px] text-slate-400 font-bold uppercase">
+            <span className="text-cyan-400">TAB</span> — {completionCandidates.length} candidates
+          </div>
+          <div className="flex flex-wrap gap-1 p-2">
+            {completionCandidates.map((c) => (
+              <button
+                key={c}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  applyHint(c);
+                }}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-cyan-900/50 text-[10px] font-mono text-cyan-200 border border-slate-700 hover:border-cyan-500/50"
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Input Field */}
       <form onSubmit={handleSubmit} className="p-2.5 bg-slate-900 border-t border-slate-800 flex items-center space-x-2">
-        <span className="text-xs font-bold text-emerald-400 shrink-0">{vendorInfo?.defaultPrompt}</span>
+        <span className="text-xs font-bold text-emerald-400 shrink-0">{prompt}</span>
         <input
           ref={inputRef}
           type="text"
@@ -408,7 +583,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           onBlur={() => setTimeout(dismissHints, 150)}
           autoComplete="off"
           spellCheck={false}
-          placeholder={`Type command or append ? for help (Tab to complete)...`}
+          placeholder={`${prompt.replace(/\s*$/, '')} — ketik perintah, ?, atau Tab (desktop)...`}
           className="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-mono"
         />
         <button
@@ -439,7 +614,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             className="w-full max-w-xl bg-slate-900 border border-slate-700 rounded-lg shadow-2xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-2.5 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
+            <div className="px-4 py-2.5 bg-slate-800 border-b border-slate-800 flex items-center justify-between">
               <span className="text-xs font-bold text-emerald-400 uppercase tracking-wide">
                 <ClipboardPaste className="w-3.5 h-3.5 inline mr-1.5" />
                 Tempel Teks yang Sudah Disiapkan

@@ -99,6 +99,7 @@ export class SwitchProcessor implements DeviceProcessor {
         return;
       }
       // forwarded unicast
+      core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstMac: pkt.dstMac, vlan: pkt.vlan ?? null }, dev.id, entry.port);
       core.transmit(dev, pkt, entry.port, traceId);
       return;
     }
@@ -121,6 +122,7 @@ export class SwitchProcessor implements DeviceProcessor {
       if (port === inPort || iface.name === inName) continue;
       if (!isPortForwarding(dev, port)) continue;
       if (!this.vlanAllows(vlan, iface, trunkIn, dev)) continue;
+      core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstMac: pkt.dstMac, vlan: pkt.vlan ?? null, flood: true }, dev.id, port);
       if (core.transmit(dev, pkt, port, traceId)) sent++;
     }
     if (sent === 0) core.drop(dev, pkt, 'flood-empty', traceId);

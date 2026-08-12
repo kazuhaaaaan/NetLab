@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Terminal,
   SlidersHorizontal,
+  ListChecks,
   Cable,
   Activity,
   Power,
@@ -22,6 +23,7 @@ interface MobileDeviceActionsProps {
   onTogglePower: (nodeId: string) => void;
   onDelete: (nodeId: string) => void;
   onInspect: () => void;
+  onOpenPortInspector: (nodeId: string) => void;
 }
 
 export const MobileDeviceActions: React.FC<MobileDeviceActionsProps> = ({
@@ -34,6 +36,7 @@ export const MobileDeviceActions: React.FC<MobileDeviceActionsProps> = ({
   onTogglePower,
   onDelete,
   onInspect,
+  onOpenPortInspector,
 }) => {
   if (!node) return null;
 
@@ -47,6 +50,10 @@ export const MobileDeviceActions: React.FC<MobileDeviceActionsProps> = ({
     { label: 'Inspeksi', icon: SlidersHorizontal, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30', onClick: () => {
       onClose();
       onInspect();
+    }},
+    { label: 'Ports', icon: ListChecks, color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30', onClick: () => {
+      onClose();
+      onOpenPortInspector(node.id);
     }},
     { label: 'Kabel', icon: Cable, color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30', onClick: () => {
       onStartCable();

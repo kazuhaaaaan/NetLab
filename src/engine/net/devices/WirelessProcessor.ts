@@ -137,12 +137,14 @@ export class WirelessProcessor implements DeviceProcessor {
     if (dstAssoc) {
       const egress = dev.getIfaceByName(dstAssoc.iface);
       if (egress) {
+        core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstMac: pkt.dstMac, wireless: true }, dev.id, egress.portId);
         core.transmit(dev, pkt, egress.name, traceId);
         return;
       }
     }
     const entry = dev.macTable.lookup(pkt.dstMac);
     if (entry && entry.port && entry.port !== inIface.portId) {
+      core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstMac: pkt.dstMac }, dev.id, entry.port);
       core.transmit(dev, pkt, entry.port, traceId);
       return;
     }
@@ -162,6 +164,7 @@ export class WirelessProcessor implements DeviceProcessor {
       if (iface.portId === inPort || iface.name === inName) continue;
       if (isWlanIfaceName(iface.name)) continue;
       if (!isPortForwarding(dev, iface.portId)) continue;
+      core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstMac: pkt.dstMac, wireless: true, flood: true }, dev.id, iface.portId);
       if (core.transmit(dev, pkt, iface.name, traceId)) sent++;
     }
     if (sent === 0) core.drop(dev, pkt, 'flood-empty', traceId);
@@ -175,6 +178,7 @@ export class WirelessProcessor implements DeviceProcessor {
       if (iface.type === 'vlan') continue;
       if (iface.portId === inPort || iface.name === inName) continue;
       if (!isPortForwarding(dev, iface.portId)) continue;
+      core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstMac: pkt.dstMac, wireless: true, flood: true }, dev.id, iface.portId);
       if (core.transmit(dev, pkt, iface.name, traceId)) sent++;
     }
     if (sent === 0) core.drop(dev, pkt, 'flood-empty', traceId);

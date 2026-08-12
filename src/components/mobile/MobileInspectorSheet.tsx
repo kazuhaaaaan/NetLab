@@ -13,12 +13,16 @@ import {
 import { MobileSheet } from './MobileSheet';
 import { VENDOR_MAP } from '../../data/vendors';
 import { getModelsForVendor } from '../../data/deviceModels';
-import { LabNode, VendorType } from '../../types';
+import { LabNode, VendorType, LabEdge } from '../../types';
+import { portConnection, portHealth, PORT_HEALTH_LABEL } from '../../connection';
 
 interface MobileInspectorSheetProps {
   open: boolean;
   onClose: () => void;
   node: LabNode | null;
+  /** Semua node & edges — status/relasi port diturunkan, bukan diduplikasi. */
+  nodes: LabNode[];
+  edges: LabEdge[];
   onUpdateNodeName: (nodeId: string, name: string) => void;
   onUpdateNodeModel: (nodeId: string, model: string) => void;
   onTogglePower: (nodeId: string) => void;
@@ -32,6 +36,8 @@ export const MobileInspectorSheet: React.FC<MobileInspectorSheetProps> = ({
   open,
   onClose,
   node,
+  nodes,
+  edges,
   onUpdateNodeName,
   onUpdateNodeModel,
   onTogglePower,
@@ -118,23 +124,48 @@ export const MobileInspectorSheet: React.FC<MobileInspectorSheetProps> = ({
           <SectionHeader id="interfaces" label={`Antarmuka (${node.ports.length})`} />
           {openSections.includes('interfaces') && (
             <div className="pb-4 space-y-1">
-              {node.ports.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-900/60"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span
-                      className={`w-2 h-2 rounded-full flex-shrink-0 ${p.status === 'up' ? 'bg-emerald-400' : 'bg-rose-500'}`}
-                    />
-                    <span className="text-xs font-medium text-slate-200">{p.name}</span>
+              {node.ports.map((p) => {
+                const conn = portConnection(nodes, edges, node.id, p.id);
+                const health = portHealth(p, conn);
+                return (
+                  <div
+                    key={p.id}
+                    className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-900/60"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        aria-label={`${PORT_HEALTH_LABEL[health]}`}
+                        title={PORT_HEALTH_LABEL[health]}
+                        className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          health === 'up'
+                            ? 'bg-emerald-400'
+                            : health === 'down' || health === 'admin-down'
+                              ? 'bg-amber-400'
+                              : 'bg-slate-600'
+                        }`}
+                      />
+                      <span className="text-xs font-medium text-slate-200">{p.name}</span>
+                      <span
+                        className={`text-[9px] font-bold uppercase ${
+                          health === 'up'
+                            ? 'text-emerald-400'
+                            : health === 'down' || health === 'admin-down'
+                              ? 'text-amber-400'
+                              : 'text-slate-500'
+                        }`}
+                      >
+                        {PORT_HEALTH_LABEL[health]}
+                      </span>
+                    </div>
+                    <div className="text-right min-w-0">
+                      <span className="text-[11px] text-slate-400 block truncate">
+                        {conn ? `${conn.remoteNodeName} / ${conn.remotePortName}` : p.ipAddress || '—'}
+                      </span>
+                      <span className="text-[10px] text-slate-600 block">{p.speedMbps} Mbps</span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[11px] text-slate-400">{p.ipAddress || '—'}</span>
-                    <span className="text-[10px] text-slate-600 block">{p.speedMbps} Mbps</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -54,5 +54,5 @@ export function deviceLabel(device: NetworkDevice): string {
 }
 
 export function isEventInfo(evt: SimEvent): boolean {
-  return ['PACKET_CREATED', 'PACKET_SEND', 'PACKET_FORWARDED', 'PACKET_DROPPED'].includes(evt.type);
+  return ['PACKET_CREATED', 'PACKET_QUEUED', 'PACKET_SEND', 'PACKET_TRANSMITTED', 'PACKET_RECEIVED', 'PACKET_FORWARDED', 'PACKET_DELIVERED', 'PACKET_DROPPED'].includes(evt.type);
 }

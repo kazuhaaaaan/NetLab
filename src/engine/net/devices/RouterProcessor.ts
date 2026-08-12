@@ -276,6 +276,7 @@ export class RouterProcessor implements DeviceProcessor {
     }
 
     // ARP untuk next hop → rewrite MAC, baru transmit
+    core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstIp: pkt.dstIp, egress: egress.name }, dev.id, egress.name);
     arpResolveAndSend(dev, pkt, egress.name, nextHopIp, core, traceId);
   }
 
@@ -333,6 +334,7 @@ export class RouterProcessor implements DeviceProcessor {
     const myIface = dev.hasIpv6(pkt.dstIp);
     if (myIface) {
       const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+      core.emit('PACKET_DELIVERED', traceId, { packetId: pkt.id, srcIp: pkt.srcIp, dstIp: pkt.dstIp, protocol: pkt.protocol, v6: true }, dev.id, (inIface || myIface).name);
       if (pkt.protocol === 'icmp' && p.type === ICMPV6_ECHO_REQUEST) {
         pkt.flags['ttlAtDst'] = pkt.ttl;
         const reply = core.createPacket({
@@ -406,6 +408,7 @@ export class RouterProcessor implements DeviceProcessor {
       return;
     }
     const nextHopIp = nh.gateway || pkt.dstIp;
+    core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstIp: pkt.dstIp, v6: true, egress: egress.name }, dev.id, egress.name);
     ndpResolveAndSend(dev, pkt, egress.name, nextHopIp, core, traceId);
   }
 
@@ -434,6 +437,7 @@ export class RouterProcessor implements DeviceProcessor {
     const dev = this.device;
     const iface = dev.getIfaceByName(ifaceName);
     if (!iface) return;
+    core.emit('PACKET_DELIVERED', traceId, { packetId: pkt.id, srcIp: pkt.srcIp, dstIp: pkt.dstIp, protocol: pkt.protocol }, dev.id, ifaceName);
 
     if (pkt.protocol === 'icmp') {
       const p = (pkt.payload ?? {}) as unknown as IcmpPayload;

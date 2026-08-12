@@ -22,6 +22,8 @@ import { LAB_SCENARIOS } from './src/engine/lab/scenarios';
 import { buildNodeExports, validateConfigExport, portLinksOfNode } from './src/utils/configExport';
 import { runVendorInteropTests } from './tests/unit/vendorInterop.test';
 import { runCliFacadeTest } from './tests/unit/cliFacade.test';
+import { runCommandTreeTests } from './tests/unit/commandTree.test';
+import { runPortInspectorTests } from './tests/unit/portInspector.test';
 
 let passed = 0;
 let failed = 0;
@@ -2667,6 +2669,21 @@ const frep = runCliFacadeTest();
 passed += frep.passed;
 failed += frep.failed;
 fails.push(...frep.fails);
+
+// ── 24. Command tree: abbreviation, ambiguitas, TAB completion context-aware,
+//     mode CLI (exec/config/config-if), fasilitasi runCliCommand.
+console.log('\n== 24. Command tree (abbreviation & completion) ==');
+const trep = runCommandTreeTests();
+passed += trep.passed;
+failed += trep.failed;
+fails.push(...trep.fails);
+
+// ── 25. Port Inspector: derivasi koneksi dari topologi + lifecycle paket.
+console.log('\n== 25. Port Inspector & packet lifecycle ==');
+const prep = runPortInspectorTests();
+passed += prep.passed;
+failed += prep.failed;
+fails.push(...prep.fails);
 
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

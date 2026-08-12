@@ -43,6 +43,8 @@ Canvas Editor & Gesture Interaction (src/components/Canvas.tsx)
   ↓
 Terminal / CLI Viewport (src/components/TerminalPanel.tsx)
   ↓
+Command Tree (src/engine/cli/commandTree.ts — abbreviation, TAB, help, mode)
+  ↓
 Vendor CLI Adapters (packages/vendors)
   ↓
 Command Executor & Normalized Commands
@@ -92,6 +94,43 @@ protocol cores) used by the engine and tests.
 - **Pinch Zoom / Scroll**: Smooth canvas scale adjustment.
 - **Two Finger Pan / Middle Drag**: Infinite viewport translation.
 - **Port-to-Port Tap / Drag**: Instant interactive cable creation.
+- **Ports button (setiap perangkat)**: Buka **Port Inspector** — jawab
+  *"port ini terhubung ke perangkat mana, menuju port berapa, statusnya apa?"*
+  dengan pencarian & filter (UP / DOWN / ADMIN DOWN / Not Connected), status
+  ikon+teks (aksesibel), kolom Link/Speed/VLAN, serta klik koneksi untuk
+  menyorot kabel & perangkat remote di topologi (viewport otomatis
+  dipusatkan bila remote di luar layar). Desktop memakai drawer; mobile
+  memakai sheet layar penuh. Semua data diturunkan langsung dari topologi
+  (edges) dan status interface engine — tidak ada duplikasi state.
+
+## ⌨️ Terminal & CLI
+
+- **Command abbreviation (singkatan perintah)** — Cisco IOS / MikroTik /
+  Juniper JunOS / Huawei VRP / Aruba OS-CX / VyOS / EdgeOS / Fortinet:
+  `sh run` → `show running-config`, `conf t` → `configure terminal`,
+  `/ip addr pr` → `/ip address print`, `dis ip int br` →
+  `display ip interface brief`, `show r` → `show route`,
+  `set sys h R1` → `set system host-name R1`, `g s s` → `get system status`
+  (nilai slot dipertahankan apa adanya). Prefix matching terhadap **command
+  tree** per vendor — setiap perintah di tree terverifikasi didukung engine
+  (tidak ada kanonik palsu: `router bgp` Aruba, `save`/`exit` VyOS, dsb.
+  sengaja tidak masuk tree karena engine menolaknya). Singkatan **ambigu
+  ditolak** (mis. `sh i` → cisco `% Ambiguous command`, mikrotik
+  `bad command name … (12)`, huawei `Error: Ambiguous command.`, juniper
+  `error: '…' is ambiguous.`) dan **tidak pernah mengubah state**.
+- **TAB completion (desktop)** — context-aware per mode (EXEC / config /
+  config-if): menyelesaikan common prefix, menampilkan kandidat bila ambigu.
+  Diaktifkan lewat deteksi kapabilitas pointer (hover+fine), **bukan** lebar
+  layar — TAB tidak pernah mencuri perilaku sentuh di mobile.
+- **`?` help** — kandidat per posisi & mode (mis. `show ?`, atau `?` pada
+  prompt config menunjukkan perintah config saja).
+- **Command history** — ↑/↓ per-perangkat (tidak bocor antar device).
+- **Prompt mode-aware** — Cisco/Aruba: `Router#` → `Router(config)#` →
+  `Router(config-if)#`; Juniper: `admin@JunOS>` → `admin@JunOS#`;
+  Huawei: `<Huawei-VRP>` → `[Huawei-VRP]` → `[Huawei-VRP-ether1]`;
+  VyOS/EdgeOS: `vyos@router:~$` → `vyos@router#`.
+- Perintah invalid tidak memutasi state (parse → validate → execute →
+  commit).
 
 ---
 
@@ -125,7 +164,7 @@ npm run dev
 
 ```bash
 npm run typecheck   # TypeScript (strict)
-npm test            # 800+ unit/scenario/interop tests
+npm test            # 1000+ unit/scenario/interop tests
 npm run build       # production build
 ```
 

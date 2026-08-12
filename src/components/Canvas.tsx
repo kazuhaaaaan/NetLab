@@ -17,8 +17,9 @@ import {
   EyeOff,
   Lock,
   Unlock,
+  ListChecks,
 } from "lucide-react";
-import { cableMatchesPort, inferCableType, portSide, portSlot } from "../connection";
+import { cableMatchesPort, inferCableType, portSide, portSlot, portConnection, portHealth, PORT_HEALTH_LABEL } from "../connection";
 
 const LockFilled = () => <Lock className="w-4 h-4" />;
 const LockOpen = () => <Unlock className="w-4 h-4" />;
@@ -197,6 +198,11 @@ interface CanvasProps {
   /** true = kanvas terkunci (gesture pan/zoom/drag nonaktif; tombol tetap jalan). */
   locked?: boolean;
   onToggleLock?: () => void;
+  /** Buka Port Inspector untuk sebuah device (tombol "Ports" di node). */
+  onOpenPorts?: (nodeId: string) => void;
+  /** Highlight dari Port Inspector: edge & node yang sedang disorot. */
+  highlightEdgeId?: string | null;
+  highlightNodeId?: string | null;
   /** true = viewport mobile (menampilkan floating action bar + tidak menampilkan tombol desktop). */
   isMobile?: boolean;
   /** Id perangkat yang sedang diuji ping (badge kuning). */
@@ -262,6 +268,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   trunkPortsByNode = {},
   locked = false,
   onToggleLock,
+  onOpenPorts,
+  highlightEdgeId = null,
+  highlightNodeId = null,
   isMobile = false,
   pingingNodeIds = [],
   failedPingNodeIds = [],
@@ -597,19 +606,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  /** Informasi koneksi sebuah port: nama remote "Node:port" atau null bila kosong. */
+  /** Informasi koneksi sebuah port: nama remote "Node:port" atau null bila kosong.
+   *  Diturunkan dari grafik topologi via src/connection.ts (single source of truth). */
   const getPortConnection = (nodeId: string, portId: string): string | null => {
-    const edge = edges.find(
-      (e) =>
-        (e.sourceNodeId === nodeId && e.sourcePortId === portId) ||
-        (e.targetNodeId === nodeId && e.targetPortId === portId)
-    );
-    if (!edge) return null;
-    const isSource = edge.sourceNodeId === nodeId;
-    const remote = nodes.find((n) => n.id === (isSource ? edge.targetNodeId : edge.sourceNodeId));
-    const port = remote?.ports.find((p) => p.id === (isSource ? edge.targetPortId : edge.sourcePortId));
-    if (!remote) return null;
-    return `${remote.name}:${port?.name ?? (isSource ? edge.targetPortId : edge.sourcePortId)}`;
+    const conn = portConnection(nodes, edges, nodeId, portId);
+    if (!conn) return null;
+    return `${conn.remoteNodeName}:${conn.remotePortName}`;
   };
 
   /** Warna garis sesuai tipe kabel (sama dengan rendering edge). */
@@ -754,6 +756,13 @@ export const Canvas: React.FC<CanvasProps> = ({
           const isHoverConnected =
             hoverNodeId !== null &&
             (edge.sourceNodeId === hoverNodeId || edge.targetNodeId === hoverNodeId);
+          const isSelectedEdge = isSelected || (highlightEdgeId !== null && highlightEdgeId === edge.id);
+          const edgeStrokeColor = isSelectedEdge
+            ? highlightEdgeId === edge.id && !isSelected
+              ? "#22d3ee"
+              : cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected)
+            : cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected);
+          const edgeStrokeWidth = isSelectedEdge ? "5.5" : isHoveredEdge || isHoverConnected ? "4.5" : "3";
           const isWireless =
             sourceNode.deviceType === 'wireless' ||
             targetNode.deviceType === 'wireless';
@@ -764,7 +773,13 @@ export const Canvas: React.FC<CanvasProps> = ({
 
           if (isWireless) {
             // Draw animated dashed Bezier curve with Wifi icon at center
-            const arcColor = isSelected ? '#ef4444' : isHoveredEdge ? '#fbbf24' : '#22d3ee';
+            const arcColor = isSelectedEdge
+              ? highlightEdgeId === edge.id && !isSelected
+                ? '#22d3ee'
+                : '#ef4444'
+              : isHoveredEdge
+                ? '#fbbf24'
+                : '#22d3ee';
             // Calculate bezier midpoint (t = 0.5)
             const t = 0.5;
             const mt1 = 1 - t;
@@ -852,11 +867,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                 data-edge-id={edge.id}
                 d={`M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`}
                 fill="none"
-                stroke={cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected)}
-                strokeWidth={isSelected ? "5" : isHoveredEdge || isHoverConnected ? "4.5" : "3"}
+                stroke={edgeStrokeColor}
+                strokeWidth={edgeStrokeWidth}
                 strokeDasharray={cableDash(edge)}
                 className="transition-all hover:stroke-[4px]"
-                style={isHoveredEdge || (isHoverConnected && !isSelected) ? { filter: "drop-shadow(0 0 5px currentColor)" } : undefined}
+                style={isHoveredEdge || isSelectedEdge || (isHoverConnected && !isSelected) ? { filter: "drop-shadow(0 0 5px currentColor)" } : undefined}
               />
               <path
                 data-edge-id={edge.id}
@@ -865,8 +880,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 stroke="transparent"
                 strokeWidth="20"
               />
-              <circle cx={x1} cy={y1} r="4" fill={cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected)} />
-              <circle cx={x2} cy={y2} r="4" fill={cableStroke(edge, isSelected, isHoveredEdge, isHoverConnected)} />
+              <circle cx={x1} cy={y1} r="4" fill={edgeStrokeColor} />
+              <circle cx={x2} cy={y2} r="4" fill={edgeStrokeColor} />
 
               {/* Label interface di ujung kabel (kabel terpilih) */}
               {isSelected && (
@@ -1221,7 +1236,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                     : theme === 'dark'
                       ? "hover:bg-white/[0.02] border border-transparent"
                       : "hover:bg-slate-900/5 border border-transparent"
-              } ${cableWizard?.targetNodeId === node.id ? "border border-cyan-400/60 bg-cyan-500/10" : ""}`}
+              } ${cableWizard?.targetNodeId === node.id ? "border border-cyan-400/60 bg-cyan-500/10" : ""} ${
+                highlightNodeId === node.id
+                  ? "ring-2 ring-cyan-300/80 shadow-[0_0_18px_rgba(34,211,238,0.35)]"
+                  : ""
+              }`}
             >
               <div className="pointer-events-none flex items-center justify-center w-12 h-12 bg-[#1A1D24] border border-[#2B2D31] rounded-lg shadow-sm mb-2 group-hover:border-[#4B4D51] transition-colors relative">
                 {getNodeIcon(node.deviceType)}
@@ -1307,6 +1326,19 @@ export const Canvas: React.FC<CanvasProps> = ({
                 <Plus className="w-3 h-3" />
               </button>
 
+              {/* Ports button — buka Port Inspector (desktop: drawer, mobile: sheet penuh) */}
+              <button
+                className="absolute -right-8 top-[calc(50%-18px)] -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenPorts?.(node.id);
+                }}
+                title={`Port Connections — ${node.name}`}
+                aria-label={`Lihat port ${node.name}`}
+              >
+                <ListChecks className="w-3 h-3" />
+              </button>
+
               {/* Hapus semua kabel node ini — hanya muncul jika node punya kabel */}
               {nodeCableCount > 0 && (
                 <button
@@ -1352,7 +1384,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                       <div className="px-2 py-2 text-[9px] text-slate-500 text-center">No ports available</div>
                     )}
                     {node.ports.map((port) => {
-                      const conn = getPortConnection(node.id, port.id);
+                      const connInfo = portConnection(nodes, edges, node.id, port.id);
+                      const conn = connInfo
+                        ? `${connInfo.remoteNodeName}:${connInfo.remotePortName}`
+                        : null;
+                      const health = portHealth(port, connInfo);
+                      const healthLabel =
+                        health === 'up' ? 'UP' : health === 'down' ? 'DOWN' : health === 'admin-down' ? 'ADMIN DOWN' : 'NC';
                       return (
                         <div
                           key={port.id}
@@ -1360,11 +1398,31 @@ export const Canvas: React.FC<CanvasProps> = ({
                         >
                           <span className="flex items-center gap-1.5 min-w-0">
                             <span
+                              title={PORT_HEALTH_LABEL[health]}
                               className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${
-                                port.status === 'up' ? 'bg-emerald-500' : 'bg-slate-600'
+                                health === 'up'
+                                  ? 'bg-emerald-500'
+                                  : health === 'down'
+                                    ? 'bg-rose-500'
+                                    : health === 'admin-down'
+                                      ? 'bg-amber-500'
+                                      : 'bg-slate-600'
                               }`}
                             />
                             <span className="text-slate-300 truncate">{port.name}</span>
+                            <span
+                              className={`text-[8.5px] font-bold ${
+                                health === 'up'
+                                  ? 'text-emerald-400'
+                                  : health === 'down'
+                                    ? 'text-rose-400'
+                                    : health === 'admin-down'
+                                      ? 'text-amber-400'
+                                      : 'text-slate-600'
+                              }`}
+                            >
+                              {healthLabel}
+                            </span>
                           </span>
                           <span
                             className={`truncate text-right ${

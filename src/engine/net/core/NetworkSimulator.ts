@@ -217,7 +217,9 @@ export class NetworkSimulator implements SimulatorCore {
       { type: 'PACKET_SEND', traceId, nodeId: neighbor.nodeId, port: neighbor.port, data: { pkt: frame, traceId } },
       this.time.now() + delay
     );
+    this.emit('PACKET_QUEUED', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, delay, outPort }, device.id, outPort);
     this.emit('PACKET_SEND', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, delay }, device.id, outPort);
+    this.emit('PACKET_TRANSMITTED', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, linkId: neighbor.linkId }, device.id, outPort);
     return true;
   }
 

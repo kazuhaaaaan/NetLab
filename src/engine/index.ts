@@ -12,6 +12,20 @@ import type { NetLabBridge, BridgePingResult, BridgeDeviceStats } from './state/
 import type { DeviceState } from './state/DeviceState';
 import type { TopologyState } from './state/TopologyState';
 import { executeCommand } from './state/executor';
+import { resolveAbbreviation, abbreviationError } from './cli/commandTree';
+import type { CliMode } from './cli/commandTree';
+
+/** Peta vendor UI → vendor tree (facade). */
+export function treeVendor(vendor: string): string | null {
+  if (vendor === 'cisco_ios' || vendor === 'cisco_nxos' || vendor === 'cisco') return 'cisco';
+  if (vendor === 'mikrotik') return 'mikrotik';
+  if (vendor === 'juniper') return 'juniper';
+  if (vendor === 'huawei') return 'huawei';
+  if (vendor === 'aruba') return 'aruba';
+  if (vendor === 'vyos' || vendor === 'ubiquiti') return vendor;
+  if (vendor === 'fortinet') return 'fortinet';
+  return null;
+}
 
 /** Implementasi bridge untuk engine nyata (VendorDispatcher + NetworkSimulator). */
 export function createNetLabBridge(
@@ -35,6 +49,8 @@ export interface RunCliCommandOptions {
   vendor: string;
   nodeId: string;
   cmd: string;
+  /** Mode CLI saat ini (context) — untuk resolusi abbreviation yang mode-aware. */
+  mode?: CliMode;
   /** Konteks dispatch engine nyata (ports, provider, dst.) — diteruskan apa adanya. */
   context: unknown;
   /** DeviceState cermin saat ini (opsional) — bila ada, cermin dihitung. */
@@ -54,9 +70,31 @@ export interface RunCliCommandResult {
 
 /**
  * Menjalankan satu perintah CLI lewat pipeline facade.
+ *
+ * Sebelum dispatch ke engine, resolusi abbreviation dijalankan:
+ * - input ambigu (prefix match >1 perintah) → error vendor-autentik, TIDAK ada
+ *   dispatch → state tidak berubah;
+ * - input unik & disingkat → perintah kanonis yang dikirim ke engine;
+ * - selainnya → input apa adanya (perilaku lama dipertahankan).
  */
 export function runCliCommand(opts: RunCliCommandOptions): RunCliCommandResult {
   const command = parseCommand(opts.cmd, opts.vendor);
+
+  const tv = treeVendor(opts.vendor);
+  let dispatchInput = opts.cmd;
+  if (tv) {
+    const resolution = resolveAbbreviation(tv, opts.mode || 'exec', opts.cmd);
+    if (resolution.kind === 'ambiguous') {
+      return {
+        output: abbreviationError(tv, resolution.input, resolution.candidates),
+        command,
+        changed: false,
+      };
+    }
+    if (resolution.kind === 'expanded' && resolution.command !== opts.cmd.trim()) {
+      dispatchInput = resolution.command;
+    }
+  }
 
   let changed = false;
   if (opts.currentDevice) {
@@ -70,6 +108,6 @@ export function runCliCommand(opts: RunCliCommandOptions): RunCliCommandResult {
     if (next && changed && opts.onStateChange) opts.onStateChange(next);
   }
 
-  const output = opts.bridge.dispatch(opts.vendor, opts.cmd, opts.context);
+  const output = opts.bridge.dispatch(opts.vendor, dispatchInput, opts.context);
   return { output, command, changed };
 }
