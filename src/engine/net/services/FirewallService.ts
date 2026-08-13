@@ -3,8 +3,15 @@
 // ============================================================
 
 import { NetworkDevice } from '../devices/NetworkDevice';
-import { Packet } from '../core/types';
+import { Packet, AclRule } from '../core/types';
+import { SimulatorCore } from '../devices/DeviceProcessor';
 import { parseCidr, networkOf } from '../core/ip';
+
+/** Hasil evaluasi rule: deny/allow + asal rule (ACL vendor vs firewall filter). */
+export interface AclVerdict {
+  deny: boolean;
+  kind: 'acl' | 'firewall';
+}
 
 /**
  * True ketika paket DIBLOKIR (ada rule deny yang cocok). First-match wins.
@@ -13,10 +20,14 @@ import { parseCidr, networkOf } from '../core/ip';
  * outInterface hanya dipertimbangkan saat outName tersedia & cocok, agar
  * rule "deny out-interface=wan" tidak memblokir trafik yang keluar lewat
  * interface lain.
+ *
+ * Asal rule ditentukan dari bentuknya: rule ACL vendor (Cisco/Huawei/H3C)
+ * membawa `aclId`, sisanya (MikroTik filter, Fortinet policy, VyOS, ...)
+ * diperlakukan sebagai firewall filter.
  */
-export function aclBlocks(device: NetworkDevice, pkt: Packet, inPort?: string, outName?: string): boolean {
+export function aclBlocks(device: NetworkDevice, pkt: Packet, inPort?: string, outName?: string): AclVerdict {
   const rules = device.aclRules;
-  if (!rules || rules.length === 0) return false;
+  if (!rules || rules.length === 0) return { deny: false, kind: 'firewall' };
   const inIface = inPort ? device.getIfaceByPortId(inPort) || device.getIfaceByName(inPort) : null;
   const inName = inIface?.name || inPort || '';
   for (const rule of rules) {
@@ -42,9 +53,44 @@ export function aclBlocks(device: NetworkDevice, pkt: Packet, inPort?: string, o
       if (!portMatches(rule.srcPort, pkt.srcPort)) continue;
       if (!portMatches(rule.dstPort, pkt.dstPort)) continue;
     }
-    return rule.action === 'deny';
+    if (rule.action === 'deny') {
+      return { deny: true, kind: (rule as AclRule & { aclId?: unknown }).aclId != null ? 'acl' : 'firewall' };
+    }
+    // Rule permit pertama yang cocok menang — first-match-wins, evaluasi berhenti.
+    return { deny: false, kind: 'firewall' };
   }
-  return false;
+  // Tidak ada rule yang cocok → default permit.
+  return { deny: false, kind: 'firewall' };
+}
+
+/**
+ * Evaluasi ACL/firewall untuk sebuah paket; bila deny → emit FIREWALL_BLOCK,
+ * gagalkan run (reason 'blocked') dan drop paket dengan alasan deterministik
+ * ('acl-deny' → ACL_DENY, 'firewall' → FIREWALL_DENY). Return true bila
+ * diblokir. Dipakai router (ingress + forward pass) DAN switch/wireless
+ * (ACL pada lalu lintas L2 — rule harus memengaruhi forwarding, bukan hanya
+ * tampil di print CLI).
+ */
+export function applyAclDeny(
+  core: SimulatorCore,
+  device: NetworkDevice,
+  pkt: Packet,
+  traceId: string,
+  inPort: string,
+  outName?: string
+): boolean {
+  const verdict = aclBlocks(device, pkt, inPort, outName);
+  if (!verdict.deny) return false;
+  const reason = verdict.kind === 'acl' ? 'acl-deny' : 'firewall';
+  core.emit('FIREWALL_BLOCK', traceId, { dstIp: pkt.dstIp, srcIp: pkt.srcIp, outInterface: outName }, device.id, inPort);
+  const run = core.getRun(traceId);
+  if (run && run.status === 'running') {
+    run.blocked = true;
+    run.status = 'fail';
+    run.reason = 'blocked';
+  }
+  core.drop(device, pkt, reason, traceId);
+  return true;
 }
 
 function addrMatches(pattern: string | undefined, ip: string): boolean {

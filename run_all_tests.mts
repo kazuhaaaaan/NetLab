@@ -2174,6 +2174,116 @@ console.log('\n== 15. Engine correctness (host IP, traceroute, power, DHCP, NAT/
     const res2 = sim.simulatePing('pc1', '10.0.1.3');
     check('15g loop tidak mengunci state (ping kedua jalan)', typeof res2.success === 'boolean', JSON.stringify(res2));
   }
+
+  // 15h. ACL switch memblokir forwarding L2 sungguhan (bukan sekadar print CLI)
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, 'h1'), eNode('sw1', 'SW1', 'switch', 4, 'h2'),
+        eNode('pc2', 'PC2', 'pc', 1, 'h3'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'sw1', 'port1'), eEdge('e2', 'pc2', 'port1', 'sw1', 'port2'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.9.2/24' }, []);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.9.3/24' }, []);
+    const before = sim.simulatePing('pc1', '10.0.9.3');
+    check('15h ping L2 normal (tanpa ACL)', before.success === true, JSON.stringify(before));
+    sim.setAcls('sw1', [{ aclId: 100, src: '10.0.9.2', dst: 'any', action: 'deny' }]);
+    const denied = sim.simulatePing('pc1', '10.0.9.3');
+    check('15h ping diblokir ACL switch (reason blocked)', denied.success === false && denied.reason === 'blocked', JSON.stringify(denied));
+    const drops = sim.eventHistory.filter((e) => e.type === 'PACKET_DROPPED');
+    check('15h drop alasan acl-deny', drops.some((d) => d.data?.reason === 'acl-deny'), JSON.stringify(drops.slice(-3).map((d) => d.data?.reason)));
+    // Arah terbalik tetap bisa REQUEST (rule mencocokkan src 10.0.9.2)
+    const rev = sim.simulatePing('pc2', '10.0.9.2');
+    check('15h ping balik: request lolos (stateless; reply-nya kena deny)', rev.success === false && rev.reason === 'blocked', JSON.stringify(rev));
+  }
+
+  // 15i. Firewall first-match: rule permit duluan MENANG, deny berikutnya tak terpakai
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pcA', 'PCA', 'pc', 1, 'i1'), eNode('rA', 'RA', 'router', 3, 'i2'),
+        eNode('pcB', 'PCB', 'pc', 1, 'i3'),
+      ],
+      edges: [
+        eEdge('e1', 'pcA', 'port1', 'rA', 'port1'), eEdge('e2', 'rA', 'port2', 'pcB', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('rA', { ether1: '10.0.1.1/24', ether2: '10.0.2.1/24' }, []);
+    sim.applyNodeConfig('pcA', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    sim.applyNodeConfig('pcB', { ether1: '10.0.2.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.2.1' }]);
+    // permit duluan → deny setelahnya TIDAK boleh membatalkan (first-match-wins)
+    sim.setAcls('rA', [
+      { action: 'permit', src: '10.0.1.0/24', dst: '10.0.2.0/24' },
+      { action: 'deny', src: '10.0.1.0/24', dst: '10.0.2.0/24' },
+    ]);
+    const ok = sim.simulatePing('pcA', '10.0.2.2');
+    check('15i permit-first menang (first-match)', ok.success === true, JSON.stringify(ok));
+    sim.setAcls('rA', [
+      { action: 'deny', src: '10.0.1.0/24', dst: '10.0.2.0/24' },
+      { action: 'permit', src: '10.0.1.0/24', dst: '10.0.2.0/24' },
+    ]);
+    const denied = sim.simulatePing('pcA', '10.0.2.2');
+    check('15i deny-first memblokir (first-match)', denied.success === false && denied.reason === 'blocked', JSON.stringify(denied));
+  }
+
+  // 15j. DHCP server di subinterface VLAN (router-on-a-stick): pool per-VLAN terlayani
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, 'j1'), eNode('pc3', 'PC3', 'pc', 1, 'j2'),
+        eNode('sw1', 'SW1', 'switch', 4, 'j3'), eNode('r1', 'R1', 'router', 3, 'j4'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'sw1', 'port1'), eEdge('e2', 'sw1', 'port3', 'pc3', 'port1'),
+        eEdge('e3', 'sw1', 'port4', 'r1', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.setPortVlans('sw1', { ether1: 10, ether3: 10 });
+    sim.setTrunkPorts('sw1', ['ether4']);
+    sim.setSubinterfaces('r1', [{ name: 'ether1.10', parentPort: 'ether1', vlanId: 10 }, { name: 'ether1.20', parentPort: 'ether1', vlanId: 20 }]);
+    sim.applyNodeConfig('r1', { 'ether1.10': '10.0.1.1/24', 'ether1.20': '10.0.2.1/24' }, []);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    sim.setDhcpPools({ r1: [{ name: 'pool10', range: '10.0.1.100 - 10.0.1.199', iface: 'ether1.10', gateway: '10.0.1.1' }] });
+
+    const lease = sim.grantDhcpLease('pc3', 'ether1');
+    check('15j lease DHCP dari pool subinterface VLAN 10', !!lease && lease.ip === '10.0.1.100', JSON.stringify(lease));
+    const pingGw = sim.simulatePing('pc3', '10.0.1.1');
+    check('15j klien DHCP bisa ping gateway VLAN 10', pingGw.success === true, JSON.stringify(pingGw));
+    const used = [...sim.usedIps()];
+    check('15j IP lease tercatat di usedIps', used.includes('10.0.1.100'), JSON.stringify(used));
+  }
+
+  // 15k. ARP tak terjawab dibersihkan (tidak ada buffer pending yang bocor)
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('pc1', 'PC1', 'pc', 1, 'k1'), eNode('sw1', 'SW1', 'switch', 4, 'k2'),
+        eNode('pc2', 'PC2', 'pc', 1, 'k3'),
+      ],
+      edges: [
+        eEdge('e1', 'pc1', 'port1', 'sw1', 'port1'), eEdge('e2', 'pc2', 'port1', 'sw1', 'port2'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.8.2/24' }, []);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.8.3/24' }, []);
+    sim.simulatePing('pc1', '10.0.8.99');
+    const buffered = (sim as any).arpBuffers;
+    const pending = buffered instanceof Map ? buffered.size : Object.keys(buffered || {}).length;
+    check('15k buffer ARR pending kosong setelah ARP timeout', pending === 0, JSON.stringify(pending));
+    const pingOk = sim.simulatePing('pc1', '10.0.8.3');
+    check('15k ping normal tetap jalan setelah ARP timeout', pingOk.success === true, JSON.stringify(pingOk));
+  }
 }
 
 // ── 16. Lab scenarios (/test) ─────────────────────────────────────────────

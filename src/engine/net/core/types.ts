@@ -170,6 +170,8 @@ export interface DnsRecord {
 
 export interface AclRule {
   action: 'permit' | 'deny';
+  /** Nomor/nama rule vendor (mis. ACL number Cisco 100) — pembeda ACL vs firewall. */
+  aclId?: number | string;
   proto?: string;
   src?: string;
   dst?: string;

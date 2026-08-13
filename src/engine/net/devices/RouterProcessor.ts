@@ -8,7 +8,7 @@ import { DeviceProcessor, SimulatorCore } from './DeviceProcessor';
 import { arpResolveAndSend } from './sendUtils';
 import { Packet, IP_BROADCAST } from '../core/types';
 import { isBroadcastMac } from '../layer2/EthernetFrame';
-import { aclBlocks } from '../services/FirewallService';
+import { applyAclDeny } from '../services/FirewallService';
 import { NatTranslator } from '../layer4/Nat';
 import { allocateIp, findServingPool, LeaseGrant } from '../services/DhcpService';
 import { staticRecord } from '../services/DnsService';
@@ -124,15 +124,7 @@ export class RouterProcessor implements DeviceProcessor {
     // dikecualikan: klien harus tetap bisa memperoleh alamat dari router
     // meski ada aturan deny-all (input chain tidak memblokir DHCP).
     const isDhcpBootstrap = pkt.protocol === 'udp' && (pkt.dstPort === UDP_BOOTPS || pkt.dstPort === UDP_BOOTPC);
-    if (!isDhcpBootstrap && aclBlocks(dev, pkt, inPort)) {
-      core.emit('FIREWALL_BLOCK', traceId, { dstIp: pkt.dstIp, srcIp: pkt.srcIp }, dev.id, inPort);
-      const run = core.getRun(traceId);
-      if (run && run.status === 'running') {
-        run.blocked = true;
-        run.status = 'fail';
-        run.reason = 'blocked';
-      }
-      core.drop(dev, pkt, 'firewall', traceId);
+    if (!isDhcpBootstrap && applyAclDeny(core, dev, pkt, traceId, inPort)) {
       return;
     }
 
@@ -140,8 +132,8 @@ export class RouterProcessor implements DeviceProcessor {
     // Relay menang duluan agar perangkat campuran (pool + helper-address) tetap
     // meneruskan trafik klien dari segmen yang di-relay.
     if (pkt.protocol === 'udp' && pkt.dstPort === UDP_BOOTPS) {
-      const inIfaceRelay = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
-      const relayServer = inIfaceRelay ? dev.dhcpRelays[inIfaceRelay.name] : null;
+      const serving = this.servingIface(inPort, pkt.vlan);
+      const relayServer = serving ? dev.dhcpRelays[serving.name] : null;
       if (relayServer) {
         this.handleDhcpRelay(pkt, inPort, relayServer, core, traceId);
         return;
@@ -250,15 +242,7 @@ export class RouterProcessor implements DeviceProcessor {
     // Firewall pass kedua (forward): rule dengan out-interface dinilai
     // sekarang setelah interface keluar diketahui (mis. deny out-interface=wan).
     const outIfaceName = egress.name;
-    if (!isDhcpBootstrap && aclBlocks(dev, pkt, inPort, outIfaceName)) {
-      core.emit('FIREWALL_BLOCK', traceId, { dstIp: pkt.dstIp, srcIp: pkt.srcIp, outInterface: outIfaceName }, dev.id, inPort);
-      const run = core.getRun(traceId);
-      if (run && run.status === 'running') {
-        run.blocked = true;
-        run.status = 'fail';
-        run.reason = 'blocked';
-      }
-      core.drop(dev, pkt, 'firewall', traceId);
+    if (!isDhcpBootstrap && applyAclDeny(core, dev, pkt, traceId, inPort, outIfaceName)) {
       return;
     }
 
@@ -754,10 +738,14 @@ export class RouterProcessor implements DeviceProcessor {
     // Permintaan datang via relay (ip helper-address) → balasan harus
     // membawa penanda relayed agar relay bisa meneruskannya ke klien asli.
     const relayed = (pkt.payload as Record<string, unknown> | undefined)?.relayed;
+    // Interface yang melayani: frame bertag (VLAN) yang masuk port fisik
+    // dilayani oleh subinterface VLAN-nya — pool per-VLAN baru cocok.
+    const serving = this.servingIface(inPort, pkt.vlan);
+    const serverIface = serving || dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
 
     if (p.type === 'discover') {
       core.emit('DHCP_DISCOVER', traceId, { xid: p.xid, mac: pkt.srcMac }, dev.id, inPort);
-      const pool = findServingPool(dev, inPort);
+      const pool = findServingPool(dev, serverIface?.name || inPort);
       const grant = pool ? this.grantFromPool(dev, pool, core) : null;
       if (!grant) {
         core.drop(dev, pkt, 'dhcp-no-pool', traceId);
@@ -765,9 +753,9 @@ export class RouterProcessor implements DeviceProcessor {
       }
       const offer = core.createPacket({
         protocol: 'udp',
-        srcMac: (dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort))?.mac || pkt.dstMac,
+        srcMac: serverIface?.mac || pkt.dstMac,
         dstMac: pkt.srcMac,
-        srcIp: (dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort))?.ip?.address || '0.0.0.0',
+        srcIp: serverIface?.ip?.address || '0.0.0.0',
         dstIp: pkt.srcIp === '0.0.0.0' ? '255.255.255.255' : pkt.srcIp,
         srcPort: UDP_BOOTPS,
         dstPort: UDP_BOOTPC,
@@ -781,7 +769,7 @@ export class RouterProcessor implements DeviceProcessor {
       core.drop(dev, pkt, 'dhcp-consumed', traceId);
     } else if (p.type === 'request') {
       core.emit('DHCP_REQUEST', traceId, { xid: p.xid }, dev.id, inPort);
-      const pool = findServingPool(dev, inPort);
+      const pool = findServingPool(dev, serverIface?.name || inPort);
       if (!pool) {
         core.drop(dev, pkt, 'dhcp-no-pool', traceId);
         return;
@@ -792,7 +780,6 @@ export class RouterProcessor implements DeviceProcessor {
       const ownedByClient = core.isIpLeasedTo?.(requestedIp, pkt.srcMac) ?? false;
       // IP diminta sudah dipakai klien lain → NAK (cegah double-allocation).
       if (inPool && used.has(requestedIp) && !ownedByClient) {
-        const serverIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
         const nak = core.createPacket({
           protocol: 'udp',
           srcMac: serverIface?.mac || pkt.dstMac,
@@ -821,9 +808,9 @@ export class RouterProcessor implements DeviceProcessor {
       }
       const ack = core.createPacket({
         protocol: 'udp',
-        srcMac: (dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort))?.mac || pkt.dstMac,
+        srcMac: serverIface?.mac || pkt.dstMac,
         dstMac: pkt.srcMac,
-        srcIp: (dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort))?.ip?.address || '0.0.0.0',
+        srcIp: serverIface?.ip?.address || '0.0.0.0',
         dstIp: pkt.srcIp === '0.0.0.0' ? '255.255.255.255' : pkt.srcIp,
         srcPort: UDP_BOOTPS,
         dstPort: UDP_BOOTPC,
@@ -838,6 +825,23 @@ export class RouterProcessor implements DeviceProcessor {
     } else {
       core.drop(dev, pkt, 'dhcp-unknown', traceId);
     }
+  }
+
+  /**
+   * Interface efektif untuk paket yang masuk lewat port fisik:
+   * frame bertag (pkt.vlan) → subinterface VLAN dengan parentPort fisik
+   * tsb (mis. tag 10 di ether1 → ether1.10). Tanpa tag / tanpa subinterface
+   * cocok → interface fisik. Dipakai DHCP (pool per-VLAN, srcIp/srcMac
+   * reply) dan DHCP relay (helper-address per subinterface).
+   */
+  private servingIface(inPort: string, vlan: number | null): ReturnType<NetworkDevice['getInterfaces']>[number] | null {
+    const dev = this.device;
+    const phys = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+    if (!phys || vlan == null || phys.type !== 'ethernet') return phys;
+    for (const iface of dev.getInterfaces()) {
+      if (iface.type === 'vlan' && iface.parentPort === phys.name && iface.vlanId === vlan) return iface;
+    }
+    return phys;
   }
 
   private grantFromPool(dev: NetworkDevice, pool: NonNullable<ReturnType<typeof findServingPool>>, core: SimulatorCore): LeaseGrant | null {
@@ -861,7 +865,7 @@ export class RouterProcessor implements DeviceProcessor {
       core.drop(dev, pkt, 'dhcp-unknown', traceId);
       return;
     }
-    const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+    const inIface = this.servingIface(inPort, pkt.vlan) || dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
     if (!inIface || !inIface.ip) {
       core.drop(dev, pkt, 'dhcp-relay-no-ip', traceId);
       return;

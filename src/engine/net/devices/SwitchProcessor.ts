@@ -9,6 +9,7 @@ import { DeviceProcessor, SimulatorCore } from './DeviceProcessor';
 import { MAC_BROADCAST, Packet } from '../core/types';
 import { isBroadcastMac } from '../layer2/EthernetFrame';
 import { isPortForwarding } from '../services/StpService';
+import { applyAclDeny } from '../services/FirewallService';
 
 type NetIface = ReturnType<NetworkDevice['getInterfaces']>[number];
 
@@ -43,6 +44,13 @@ export class SwitchProcessor implements DeviceProcessor {
     if (!isPortForwarding(dev, inIface.portId)) {
       core.emit('PACKET_DROPPED', traceId, { reason: 'stp' }, dev.id, inPort);
       core.drop(dev, pkt, 'stp', traceId);
+      return;
+    }
+
+    // ACL/firewall pada lalu lintas L2: rule (access-list vendor / filter
+    // rule) dievaluasi per frame — deny memblokir forwarding, bukan hanya
+    // tampil di print CLI. DHCP (udp 67/68) tidak dikecualikan di switch.
+    if (applyAclDeny(core, dev, pkt, traceId, inPort)) {
       return;
     }
 

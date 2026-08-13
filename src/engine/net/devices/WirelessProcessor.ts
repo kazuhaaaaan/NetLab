@@ -12,6 +12,7 @@ import { Packet } from '../core/types';
 import { isBroadcastMac } from '../layer2/EthernetFrame';
 import { isPortForwarding } from '../services/StpService';
 import { isWlanIfaceName, isStationMode, WirelessState } from '../services/WirelessService';
+import { applyAclDeny } from '../services/FirewallService';
 
 type NetIface = ReturnType<NetworkDevice['getInterfaces']>[number];
 
@@ -34,6 +35,11 @@ export class WirelessProcessor implements DeviceProcessor {
     if (!isPortForwarding(dev, inIface.portId)) {
       core.emit('PACKET_DROPPED', traceId, { reason: 'stp' }, dev.id, inPort);
       core.drop(dev, pkt, 'stp', traceId);
+      return;
+    }
+
+    // ACL/firewall: rule deny dievaluasi per frame (L2 forwarding path).
+    if (applyAclDeny(core, dev, pkt, traceId, inPort)) {
       return;
     }
 

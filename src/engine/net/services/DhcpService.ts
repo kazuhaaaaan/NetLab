@@ -20,9 +20,11 @@ export interface LeaseGrant {
 const LEASE_DURATION_MS = 24 * 60 * 60 * 1000;
 
 /** Pool pada server yang dapat melayani segmen (inPort) ini. */
-export function findServingPool(server: NetworkDevice, inPort: string): DhcpPool | null {
-  const inIface = server.getIfaceByPortId(inPort) || server.getIfaceByName(inPort);
-  const portName = inIface?.name || inPort;
+export function findServingPool(server: NetworkDevice, ifaceOrPort: string): DhcpPool | null {
+  // Prioritas nama interface persis (subinterface seperti 'ether1.10' harus
+  // menang), lalu resolusi port fisik → nama interface.
+  const inIface = server.getIfaceByName(ifaceOrPort) || server.getIfaceByPortId(ifaceOrPort);
+  const portName = inIface?.name || ifaceOrPort;
   for (const pool of server.dhcpPools) {
     // Server/pool dinonaktifkan (disabled=yes) tidak melayani lease.
     if (pool.disabled) continue;

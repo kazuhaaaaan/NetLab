@@ -9,6 +9,7 @@
 import { EventScheduler } from './EventScheduler';
 import { TimeManager } from './TimeManager';
 import { EventBus } from './EventBus';
+import { dropCodeOf } from './dropReasons';
 import { Topology, LabProjectLike, transmissionDelay, linkLatencyMs } from './Topology';
 import { NetworkDevice } from '../devices/NetworkDevice';
 import { DeviceProcessor, SimulatorCore, processorKind } from '../devices/DeviceProcessor';
@@ -73,6 +74,10 @@ export interface SimRunOptions {
 }
 
 const DEFAULT_TTL = 64;
+
+/** Masa tunggu resolusi ARP/NDP sebelum paket yang menunggu di-buffer
+ *  dinyatakan ARP_UNRESOLVED dan dibuang (waktu virtual, ms). */
+const ARP_RESOLVE_TIMEOUT_MS = 3000;
 
 export class NetworkSimulator implements SimulatorCore {
   readonly scheduler = new EventScheduler();
@@ -235,7 +240,10 @@ export class NetworkSimulator implements SimulatorCore {
   drop(device: NetworkDevice, pkt: Packet, reason: string, traceId: string): void {
     pkt.destroyed = true;
     pkt.trace.push(`t=${this.time.now()} drop:${reason}@${device.id}`);
-    this.emit('PACKET_DROPPED', traceId, { packetId: pkt.id, reason, srcIp: pkt.srcIp, dstIp: pkt.dstIp }, device.id);
+    // `code` = kode drop deterministik (PORT_DOWN, VLAN_MISMATCH, NO_ROUTE,
+    // ACL_DENY, FIREWALL_DENY, TTL_EXPIRED, NAT_FAILURE, ARP_UNRESOLVED, ...)
+    // — kanonik dan stabil untuk assertion, di samping reason detail.
+    this.emit('PACKET_DROPPED', traceId, { packetId: pkt.id, reason, code: dropCodeOf(reason), srcIp: pkt.srcIp, dstIp: pkt.dstIp }, device.id);
   }
 
   bufferForArp(device: NetworkDevice, targetIp: string, pkt: Packet, outPort: string, traceId: string): void {
@@ -369,6 +377,23 @@ export class NetworkSimulator implements SimulatorCore {
       }
       // Sesi NAT yang menganggur dibersihkan.
       dev.nat.prune(now);
+    }
+    // ARP/NDP yang tidak terjawab: paket yang menunggu MAC next-hop melebihi
+    // batas waktu di-buffer dibuang dengan alasan deterministik ARP_UNRESOLVED
+    // (bukan menggantung sampai timeout run; buffer juga tidak menumpuk).
+    for (const [key, list] of [...this.arpBuffers.entries()]) {
+      const devId = key.split('|')[0];
+      const dev = this.nodes.get(devId);
+      const live: BufferedFrame[] = [];
+      for (const b of list) {
+        if (now - b.pkt.created >= ARP_RESOLVE_TIMEOUT_MS) {
+          if (dev) this.drop(dev, b.pkt, 'arp-unresolved', b.traceId);
+        } else {
+          live.push(b);
+        }
+      }
+      if (live.length === 0) this.arpBuffers.delete(key);
+      else this.arpBuffers.set(key, live);
     }
     // jadwal ulang
     const next = now + 5000;
