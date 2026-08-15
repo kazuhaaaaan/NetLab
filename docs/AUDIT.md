@@ -161,3 +161,94 @@ build prod hijau, smoke test serve produksi (/, /canvas, asset JS) OK.
 ### Build verification
 `npm run typecheck` (tsc --noEmit) ✓ · `npm run build` (vite) ✓ ·
 `npm test` (tsx) 1109/1109 ✓ — dijalankan ulang utuh setelah semua perubahan.
+
+---
+
+## 7. Iterasi remediasi penuh (2026-08-15) — audit source P0/P1/P2
+
+> Status: **COMPLETE**. Audit menyeluruh atas source (engine, vendor, UI,
+> persistensi, keamanan) → 12 temuan diperbaiki + 27 test regresi baru.
+> **1498 passed, 0 failed** · typecheck ✓ · build prod ✓ · push `main` ✓.
+> Matriks kapabilitas terbaru: `docs/CAPABILITY_MATRIX.md`.
+
+### Ringkasan eksekutif (Deliverable A)
+
+Sumber kebenaran = kode; setiap klaim diverifikasi ke implementasi & test.
+Ditemukan & diperbaiki: (1) `add_ip` tanpa validasi IP/mask/interface →
+perangkat menerima alamat atau interface hantu secara diam-diam; (2)
+`interface <hantu>` (Cisco/Aruba/Huawei) & `ip addr add dev <hantu>`
+(Linux/OpenWrt) diterima diam-diam karena `resolveIfaceName` punya fallback
+return nama (validasi yang tampak ada sebenarnya tidak pernah aktif); (3)
+OpenWrt `uci show`/`uci show network` memfabrikasi loopback/lan/wan & baris
+rute; `ip addr` memfabrikasi `br-lan`; `ifconfig` hardcode netmask/broadcast;
+(4) export running-config Cisco tidak memuat blok BGP (round-trip rusak); (5)
+`forgetNodeMemory` tidak menghapus startup-config; (6) OSPF tidak membentuk
+adjacency lintas switch (R1–SW–R2); (7) DHCP relay mengirim balik ke segmen
+klien saat server di subnet lain via router lain (egress salah); (8) impor
+proyek (share/IndexedDB) tidak divalidasi → proyek rusak bisa masuk; (9) ping
+UI memakai IP dari state UI, bukan engine (mismatch saat IP hanya di engine);
+(10) hint CLI menawarkan `/import file=` yang tidak didukung; (11–12) klaim
+kapabilitas berlebihan `openwrt.ospf` & `fortinet.vrrp` (partial → not-supported,
+CLI kini jujur).
+
+### Temuan lengkap (Deliverable B)
+
+| # | Area | Temuan (sebelum) | Perbaikan (sesudah) | Test regresi |
+|---|------|------------------|---------------------|--------------|
+| B1 | `packages/vendors add_ip` | IP invalid (`999.999.999.999/24`), prefix >32, netmask non-kontigu (`255.0.255.0`), & interface hantu (`ghost0`) **diterima diam-diam** dan ditulis ke `configuredIps` | Validasi `isValidIpv4/isValidIpv6/isValidPrefix` + netmask kontigu (numerik 0–32 juga diterima — format engine `10.0.0.2 24`) + `isKnownInterface` (port nyata atau subinterface `port.N`) → error `% Error: …` tanpa efek samping | 30b (6 check) |
+| B2 | `interface <x>` (cisco_ios/nxos, aruba, huawei) | `interface ghost0` sukses diam-diam — bug laten: `resolveIfaceName` mengembalikan `name` saat tidak ketemu, jadi `!resolved` tidak pernah true | Cek keanggotaan port langsung (`p.name/p.id === input`); hantu → `% Invalid input detected at '^' marker. (interface "ghost0" tidak ada di device ini)`; subinterface `ether1.10` tetap diterima | 30b (2 check) |
+| B3 | linux/openwrt `ip addr add … dev X` | `dev ghost0` diterima diam-diam (bug `resolveIfaceName` yang sama) | `dev` harus port nyata atau `lo`; selain itu `% Cannot find device "X"` | 30b (1 check) |
+| B4 | openwrt `uci show` / `uci show network` | Memfabrikasi `loopback`/`lan`/`wan` + baris rute palsu dari template default | Output **diturunkan dari state** (`uciNetworkLines`: configuredIps/dhcpClients/routes); kosong → "belum ada konfigurasi"; `uci show network` → tipe baru `uci_network_show` (sebelumnya salah rute ke `ip_route_print`) | 30c (6 check) |
+| B5 | openwrt `ip addr` / `ifconfig` | `ip addr` memfabrikasi `br-lan`; `ifconfig` hardcode `netmask 255.255.255.0` + broadcast `192.168.1.255` | Port kosong → "(ip addr: tidak ada interface yang terdeteksi)"; netmask/broadcast dihitung dari prefix nyata (`bitsToMask`/`broadcastOf`) | 30c (ifconfig 1 check) |
+| B6 | Cisco export running-config | Blok BGP tidak pernah diekspor → round-trip export→import kehilangan BGP | `router bgp <asn>` + `bgp router-id` + `neighbor <ip> remote-as <as>` + `network <ip> mask <mask>` (bitsToMask); re-dispatch pulih penuh | 30d (4 check) |
+| B7 | `forgetNodeMemory` | Startup-config tidak dihapus → `reload` memuat config yang sudah dilupakan | `this.startupConfigs.delete(nodeId)` → reload jujur "No startup-configuration present" | 30e (1 check) |
+| B8 | Engine OSPF lintas switch | `ospfRound`/`buildOspfViews` melewatkan pasangan di segmen cloud (switch) → R1–SW–R2 tidak pernah Full; session cloud dihapus ulang tiap round (prune sebelum pendaftaran) | Pairing pasangan per segmen `cloud:` (adjacency multi-access), state machine sama dengan p2p; prune dipindah **setelah** semua pairKey (p2p+cloud) terdaftar; view `buildOspfViews(…, part)` menyertakan pasangan cloud | 30a (4 check) |
+| B9 | DHCP relay egress | Server di subnet lain via router lain → egress jatuh ke interface **masuk** (klien) → ARP salah segmen → `arp-unresolved`, lease gagal | Egress = `nh.iface` **atau** `resolveEgressIface(nh.gateway)` (rute tanpa iface), baru fallback subnet langsung/interface masuk; reply relayed (`BOOTPC` + `relayed.clientMac`) diteruskan ke klien | 30f (2 check) |
+| B10 | Import/load proyek (App.tsx) | Share-import & IndexedDB load tidak divalidasi → payload rusak masuk ke engine | `validateProject` di jalur share-import (invalid → toast error + fallback proyek tersimpan) & jalur IndexedDB (`applySaved`) | — (validasi eksisting `validateProject` dipakai ulang) |
+| B11 | Ping UI | `dstIp` diambil dari state UI → bisa mismatch dengan IP hanya di engine | dstIp di-resolve dari engine (`simEngineRef.getDevice` interfaces) dengan fallback port UI → nama node | — |
+| B12 | Hint CLI | `/import file=<name>` ditampilkan padahal tidak didukung | Hint dihapus dari `cliHints.ts` | — |
+| B13 | Klaim kapabilitas | `openwrt.ospf: partial`, `fortinet.vrrp: partial` (tidak diimplementasikan) | `not-supported` + note jujur; V4/V5 enforcement tetap aman (tidak ada feature case utk keduanya) | V0–V5 suite |
+
+### Hasil pengujian (Deliverable D)
+
+- `npm test` (tsx): **1498 passed, 0 failed** (sebelumnya 1469; +27 test
+  regresi section 30; 2 test dipindahkan level-nya karena format mask numerik
+  kini valid — total naik).
+- Regresi section 30: 30a OSPF lintas switch (4), 30b validasi add_ip &
+  interface (9), 30c OpenWrt jujur (6), 30d BGP export round-trip (4),
+  30e forget memory (1), 30f DHCP relay lintas subnet (2) = 26 check + 1
+  label section.
+- Selama pengerjaan ditemukan 3 bug **tambahan** yang baru aktif setelah
+  validasi dipasang (diperbaiki + dites): (i) `resolveIfaceName` fallback
+  menutupi semua cek interface hantu (B2/B3), (ii) prune OSPF cloud sebelum
+  registrasi pairKey → adjacency stuck Init (B8), (iii) DHCP relay tidak
+  menangani rute statis tanpa `iface` (B9).
+- `npm run typecheck` ✓ (strict, 0 error) · `npm run build` ✓ (Vite prod).
+
+### Keterbatasan & risiko diterima (Deliverable E)
+
+1. **`VITE_GEMINI_API_KEY` saat build produksi** (risiko diterima atas
+   permintaan pemilik — "Api key jangan diganggu gugat"): `llmClient.ts`
+   menggunakan `DIRECT_KEY = IS_DEV ? env.VITE_GEMINI_API_KEY : ''`.
+   `import.meta.env.VITE_GEMINI_API_KEY` di-inline oleh Vite **saat build**;
+   bila variabel ter-set saat `npm run build`, literal key muncul di bundle
+   (cabang mati ternary `false ? <key> : ''` yang umumnya dibuang minifier,
+   tapi tidak dijamin bila minify dimatikan). Produksi normal tidak
+   men-setnya (proxy `server/index.mjs` memakai `GEMINI_API_KEY` server-side),
+   sehingga praktis tidak bocor — tetapi klaim absolut "tidak pernah masuk
+   bundle" di README **tidak benar** → dikoreksi (lihat §8). Rekomendasi:
+   jangan pernah set `VITE_GEMINI_API_KEY` saat build produksi; pakai proxy.
+2. OSPF/BGP/VRRP multi-vendor: adjacency lintas switch kini teruji (R1–SW–R2),
+   tapi DR/BDR election pada segmen broadcast >2 router belum disimulasikan
+   (adjacency dibentuk antar semua pasangan).
+3. `uci show network` menampilkan jaringan yang dikonfigurasi (bukan semua
+   file UCI); `uci show` lain (non-network) hanya untuk network/rute/firewall
+   yang dipetakan ke state engine.
+4. Netmask numerik (`ip address 10.0.0.2 24`) sah dan tersimpan apa adanya;
+   parsing ke prefix dilakukan engine (`parseCidr`).
+5. Firewall dstnat Cisco & ACL NX-OS/Aruba teruji level memori (partial),
+   belum E2E paket.
+6. Linux host tidak menjalankan OSPF/BGP (jujur `not-supported`).
+7. ARP buffer timeout → deterministik `ARP_UNRESOLVED` (bukan menggantung).
+8. Abbreviation CLI hanya untuk command tree vendor facade; input parsial
+   diteruskan ke engine (jujur).

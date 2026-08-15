@@ -178,8 +178,11 @@ The AI chat panel works with two modes:
    (`GEMINI_API_KEY`), dikirim via `ALLOWED_ORIGINS=https://netlab.kazudev.my.id`
    untuk produksi. Lihat `.env.example` untuk semua opsi.
 
-> Mode langsung browser→Gemini dengan `VITE_GEMINI_API_KEY` hanya aktif saat
-> `npm run dev` dan **tidak pernah** masuk bundle produksi.
+> Mode langsung browser→Gemini dengan `VITE_GEMINI_API_KEY` **hanya aktif saat
+> `npm run dev`** (guard `import.meta.env.DEV`). Catatan keamanan: variabel ini
+> di-inline oleh Vite saat build — **jangan pernah** set `VITE_GEMINI_API_KEY`
+> saat `npm run build` produksi; gunakan proxy server (`GEMINI_API_KEY`) agar
+> key tidak pernah sampai ke browser. Detail: `docs/AUDIT.md` §7 E1.
 
 ### Deploy di Vercel (disarankan)
 
