@@ -879,10 +879,14 @@ export class RouterProcessor implements DeviceProcessor {
       core.drop(dev, pkt, 'dhcp-relay-no-ip', traceId);
       return;
     }
-    // Interface keluar menuju server (subnet sama atau via routing).
-    const egress = dev.resolveEgressIface(serverIp) || inIface;
+    // Interface keluar menuju server: rute lookup memberi tahu egress yang benar
+    // (server di subnet lain via router lain); fallback ke subnet langsung.
     const nh = dev.routing.lookup(serverIp);
     const nextHopIp = nh?.gateway || serverIp;
+    const egressIface =
+      (nh?.iface ? dev.getIfaceByName(nh.iface) || dev.getIfaceByPortId(nh.iface) : null) ||
+      (nh?.gateway ? dev.resolveEgressIface(nh.gateway) || null : null);
+    const egress = egressIface || dev.resolveEgressIface(serverIp) || inIface;
     const fwd = core.createPacket({
       protocol: 'udp',
       srcMac: egress.mac,

@@ -104,7 +104,6 @@ export const CLI_HINTS: Record<string, CliHint[]> = {
     },
     { command: 'ping <host>', description: 'Ping a remote host' },
     { command: 'export', description: 'Export running configuration' },
-    { command: 'import file=<name>', description: 'Import configuration from file' },
     {
       command: '/ip dhcp-server',
       description: 'DHCP server (bagikan IP otomatis)',

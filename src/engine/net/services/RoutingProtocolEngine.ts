@@ -322,17 +322,91 @@ export class RoutingProtocolEngine {
       }
     }
 
-    // Hapus session yang tidak lagi valid (link hilang / pasangan tak lagi di topologi).
+    // Adjacency lintas switch: router-router yang berbagi segmen cloud
+    // (topologi R1–SW–R2) membentuk adjacency multi-access seperti OSPF di
+    // jaringan broadcast — setiap pasangan router di segmen yang sama.
+    const cloudMembers = new Map<string, { dev: NetworkDevice; info: { iface: string; area: number; ip: string; passive: boolean } }[]>();
+    for (const dev of ospfRouters) {
+      const bySeg = part.get(dev.id);
+      if (!bySeg) continue;
+      for (const [seg, info] of bySeg) {
+        if (!seg.startsWith('cloud:')) continue;
+        let arr = cloudMembers.get(seg) || [];
+        arr.push({ dev, info });
+        cloudMembers.set(seg, arr);
+      }
+    }
+    for (const [seg, members] of cloudMembers) {
+      if (members.length < 2) continue;
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          for (const [me, peer] of [
+            [members[i], members[j]],
+            [members[j], members[i]],
+          ] as const) {
+            const pairKey = `${me.dev.id}|${routerIdOf(peer.dev)}`;
+            if (seenPairs.has(pairKey)) continue;
+            seenPairs.add(pairKey);
+            const sessionKey = pairKey;
+            if (me.info.passive || peer.info.passive) {
+              if (this.ospfSessions.delete(sessionKey)) changed = true;
+              continue;
+            }
+            const compatible = me.info.area === peer.info.area;
+            if (!compatible) {
+              if (this.ospfSessions.delete(sessionKey)) changed = true;
+              continue;
+            }
+            let s = this.ospfSessions.get(sessionKey);
+            if (!s) {
+              s = {
+                peerDevId: peer.dev.id,
+                peerRouterId: routerIdOf(peer.dev),
+                myIface: me.info.iface,
+                peerIface: peer.info.iface,
+                myIp: me.info.ip,
+                peerIp: peer.info.ip,
+                area: me.info.area,
+                rounds: 0,
+                state: 'Init',
+              };
+              this.ospfSessions.set(sessionKey, s);
+              changed = true;
+            }
+            s.rounds++;
+            const timersOk =
+              (me.dev.routingCfg?.ospf?.deadInterval ?? 40000) > (me.dev.routingCfg?.ospf?.helloInterval ?? 10000) &&
+              (peer.dev.routingCfg?.ospf?.deadInterval ?? 40000) > (peer.dev.routingCfg?.ospf?.helloInterval ?? 10000);
+            const phase = ospfPhaseFor(s.rounds);
+            const next = !timersOk && (phase === 'ExStart' || phase === 'Exchange' || phase === 'Loading' || phase === 'Full') ? '2-Way' : phase;
+            if (next !== s.state) {
+              s.state = next;
+              changed = true;
+            }
+            this.ospfSessions.set(sessionKey, s);
+          }
+        }
+      }
+    }
+
+    // Hapus session yang tidak lagi valid (link hilang / pasangan tak lagi di
+    // topologi) — dijalankan SETELAH semua pasangan (p2p + cloud) dicatat di
+    // seenPairs, agar session cloud tidak dihapus lalu dibuat ulang tiap round.
     for (const key of [...this.ospfSessions.keys()]) {
       if (!seenPairs.has(key)) this.ospfSessions.delete(key);
     }
 
     // Bangun view neighbor per perangkat (termasuk yang gagal → state Down).
-    this.buildOspfViews(devices, links, segments);
+    this.buildOspfViews(devices, links, segments, part);
     return changed;
   }
 
-  private buildOspfViews(devices: NetworkDevice[], links: LinkTable, segments: Map<string, string>): void {
+  private buildOspfViews(
+    devices: NetworkDevice[],
+    links: LinkTable,
+    segments: Map<string, string>,
+    part: Map<string, Map<string, { iface: string; area: number; ip: string; passive: boolean }>>
+  ): void {
     const ospfRouters = devices.filter(hasOspf);
     const views = new Map<string, OspfNeighborView[]>();
     const powered = new Set(devices.filter((d) => d.powered).map((d) => d.id));
@@ -374,6 +448,31 @@ export class RoutingProtocolEngine {
     // Pastikan setiap router OSPF punya entri (kosong bila tidak ada tetangga).
     for (const dev of ospfRouters) {
       if (!views.has(dev.id)) views.set(dev.id, []);
+    }
+
+    // View lintas switch: pasangan router pada segmen cloud yang sama
+    // (status dari session; tanpa session → Down).
+    for (const dev of ospfRouters) {
+      const bySeg = part.get(dev.id);
+      if (!bySeg) continue;
+      for (const [seg, myInfo] of bySeg) {
+        if (!seg.startsWith('cloud:') || myInfo.passive) continue;
+        for (const other of ospfRouters) {
+          if (other.id === dev.id) continue;
+          const otherInfo = part.get(other.id)?.get(seg);
+          if (!otherInfo || otherInfo.passive) continue;
+          const key = `${dev.id}|${routerIdOf(other)}`;
+          const session = this.ospfSessions.get(key);
+          const list = views.get(dev.id) || [];
+          list.push({
+            routerId: routerIdOf(other),
+            ip: otherInfo.ip,
+            iface: myInfo.iface,
+            state: session && session.state === 'Full' ? 'Full' : session ? session.state : 'Down',
+          });
+          views.set(dev.id, list);
+        }
+      }
     }
     this.ospfViews = views;
   }

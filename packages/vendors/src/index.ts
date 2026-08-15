@@ -1283,26 +1283,39 @@ export class OpenwrtVendorAdapter implements IVendorAdapter {
   formatResponse(cmdResult: any): string {
     if (!cmdResult) return '';
     if (cmdResult.type === 'uci_show') {
-      return ["network.loopback=interface",
-        "network.loopback.ifname='lo'",
-        "network.loopback.proto='static'",
-        "network.loopback.ipaddr='127.0.0.1'",
-        "network.loopback.netmask='255.0.0.0'",
-        "network.lan=interface",
-        "network.lan.type='bridge'",
-        "network.lan.ifname='eth0.1'",
-        "network.lan.proto='static'",
-        "network.lan.ipaddr='192.168.1.1'",
-        "network.lan.netmask='255.255.255.0'",
-        "network.wan=interface",
-        "network.wan.ifname='eth0.2'",
-        "network.wan.proto='dhcp'",
-      ].join('\n');
+      // Output derived dari state tersimpan — tidak ada fabricasi lan/wan default.
+      const lines: string[] = [];
+      const net = uciNetworkLines(cmdResult.mem || {});
+      if (net.length > 0) lines.push(...net);
+      const pools = (cmdResult.pools || []).filter((p: any) => p && p.name);
+      pools.forEach((p: any) => {
+        lines.push(`dhcp.${p.name}=dhcp`);
+        if (p.iface) lines.push(`dhcp.${p.name}.interface='${p.iface}'`);
+        if (p.range) {
+          const rm = String(p.range).match(/(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)/);
+          if (rm) {
+            lines.push(`dhcp.${p.name}.start='${Number(rm[1].split('.')[3])}'`);
+            lines.push(`dhcp.${p.name}.limit='${Number(rm[2].split('.')[3]) - Number(rm[1].split('.')[3]) + 1}'`);
+          }
+        }
+        lines.push(`dhcp.${p.name}.leasetime='12h'`);
+      });
+      const srcnat = (cmdResult.natRules || []).filter((r: any) => r.chain === 'srcnat');
+      if (srcnat.length > 0) {
+        lines.push('firewall.@zone[1]=zone');
+        lines.push("firewall.@zone[1].masq='1'");
+      }
+      (cmdResult.hostname ? [`system.@system[0]=system`, `system.@system[0].hostname='${cmdResult.hostname}'`] : []).forEach((l) => lines.push(l));
+      return lines.length > 0 ? lines.join('\n') : '(uci: belum ada konfigurasi yang tersimpan)';
+    }
+    if (cmdResult.type === 'uci_network_show') {
+      const lines = uciNetworkLines(cmdResult.mem || {});
+      return lines.length > 0 ? lines.join('\n') : '(uci show network: belum ada konfigurasi interface)';
     }
     if (cmdResult.type === 'ip_addr') {
       const ports = cmdResult.ports || [];
       if (ports.length === 0) {
-        return '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN\n    inet 127.0.0.1/8 scope host lo\n2: br-lan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP\n    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan';
+        return '(ip addr: tidak ada interface yang terdeteksi)';
       }
       return ports.map((p: any, i: number) => {
         const ip = p.ipAddress ? p.ipAddress.split('/')[0] : undefined;
@@ -1312,7 +1325,7 @@ export class OpenwrtVendorAdapter implements IVendorAdapter {
         return [
           `${i + 2}: ${p.name}: <BROADCAST,MULTICAST,${up ? 'UP,LOWER_UP' : 'DOWN'}> mtu 1500 qdisc noqueue state ${up ? 'UP' : 'DOWN'}`,
           `    link/ether ${p.macAddress || '00:00:00:00:00:00'} brd ff:ff:ff:ff:ff:ff`,
-          ...(ip ? [`    inet ${ip}/${prefix} brd ${ip.replace(/\.\d+$/, '.255')} scope global ${p.name}`] : []),
+          ...(ip ? [`    inet ${ip}/${prefix} brd ${broadcastOf(ip, Number(prefix) || 24)} scope global ${p.name}`] : []),
         ].join('\n');
       }).join('\n\n');
     }
@@ -1326,9 +1339,13 @@ export class OpenwrtVendorAdapter implements IVendorAdapter {
     }
     if (cmdResult.type === 'ifconfig') {
       const ports = cmdResult.ports || [];
-      return ports.map((p: any) =>
-        `${p.name}: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n        inet ${p.ipAddress ? p.ipAddress.split('/')[0] : '0.0.0.0'}  netmask 255.255.255.0  broadcast 192.168.1.255\n        ether ${p.macAddress || '00:00:00:00:00:00'}  txqueuelen 1000  (Ethernet)`
-      ).join('\n\n');
+      return ports.map((p: any) => {
+        const raw = p.ipAddress ? cidrOf(p.ipAddress) : '';
+        const [ip, pref] = raw.split('/');
+        const mask = ip ? bitsToMask(Number(pref) || 24) : '0.0.0.0';
+        const bc = ip ? broadcastOf(ip, Number(pref) || 24) : '0.0.0.0';
+        return `${p.name}: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n        inet ${ip || '0.0.0.0'}  netmask ${mask}  broadcast ${bc}\n        ether ${p.macAddress || '00:00:00:00:00:00'}  txqueuelen 1000  (Ethernet)`;
+      }).join('\n\n');
     }
     if (cmdResult.type === 'logread') {
       return `Mar  7 00:00:01 OpenWrt kernel: [    0.000000] Linux version 5.15.137\nMar  7 00:00:02 OpenWrt netifd: lo: set_interface_up\nMar  7 00:00:03 OpenWrt netifd: br-lan: set_interface_up`;
@@ -1880,6 +1897,9 @@ export class VendorDispatcher {
   /** Remove persisted config for a node id (called when a device is deleted). */
   forgetNodeMemory(nodeId: string): void {
     this.nodeMemory.delete(nodeId);
+    // Startup-config (write memory / copy run start) ikut terhapus — device baru
+    // tidak boleh mewarisi config lama saat reload.
+    this.startupConfigs.delete(nodeId);
   }
 
   /**
@@ -2663,9 +2683,19 @@ export class VendorDispatcher {
         mem.currentDhcpPool = '';
         cmdResult = { raw: '' };
       } else {
-        mem.currentIface = resolveIfaceName(context?.ports, ifaceRaw);
-        mem.currentDhcpPool = '';
-        cmdResult = { raw: '' };
+        // Interface hantu (tidak ada di device, bukan subinterface) → error
+        // jujur ala IOS ("Invalid input detected"), bukan sukses palsu.
+        const ifaceLower = ifaceRaw.toLowerCase();
+        const exists = (context?.ports || []).some(
+          (p: any) => String(p.name || '').toLowerCase() === ifaceLower || String(p.id || '').toLowerCase() === ifaceLower
+        );
+        if (!exists && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
+          cmdResult = { raw: `% Invalid input detected at '^' marker. (interface "${ifaceRaw}" tidak ada di device ini)` };
+        } else {
+          mem.currentIface = resolveIfaceName(context?.ports, ifaceRaw);
+          mem.currentDhcpPool = '';
+          cmdResult = { raw: '' };
+        }
       }
     } else if (/^encapsulation\s+dot1q\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && /\.\d+$/.test(mem.currentIface) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')) {
       // Cisco subinterface: "encapsulation dot1q 10"
@@ -2956,9 +2986,18 @@ export class VendorDispatcher {
       // Linux: "ip addr add 192.168.1.10/24 dev eth0" / "ip addr add 2001:db8::10/64 dev eth0"
       const m = rawInput.trim().match(/^ip\s+addr(ess)?\s+add\s+(\S+)\s+dev\s+(\S+)/i);
       if (m) {
-        const target = m[2].includes(':') ? mem.configuredIps6 : mem.configuredIps;
-        target[resolveIfaceName(context?.ports, m[3])] = m[2];
-        cmdResult = { raw: '' };
+        const devName = String(m[3]).toLowerCase();
+        // Linux jujur: device tak dikenal → error (loopback "lo" diizinkan).
+        const devExists = (context?.ports || []).some(
+          (p: any) => String(p.name || '').toLowerCase() === devName || String(p.id || '').toLowerCase() === devName
+        );
+        if (!devExists && devName !== 'lo') {
+          cmdResult = { raw: `% Cannot find device "${m[3]}"` };
+        } else {
+          const target = m[2].includes(':') ? mem.configuredIps6 : mem.configuredIps;
+          target[resolveIfaceName(context?.ports, m[3]) || m[3]] = m[2];
+          cmdResult = { raw: '' };
+        }
       }
     } else if ((vendorId === 'linux' || vendorId === 'openwrt') && /^ip\s+route\s+add\s+\S+/i.test(rawInput.trim())) {
       // Linux: "ip route add 0.0.0.0/0 via 10.0.0.1" (also "ip route add default via <gw>")
@@ -4068,11 +4107,46 @@ export class VendorDispatcher {
     } else if (normalized.action === 'add_ip') {
       const { ip, iface, mask } = normalized.payload as any;
       const ifaceName = resolveIfaceName(context?.ports, iface || mem.currentIface);
-      if (ip && ifaceName) {
-        mem.configuredIps[ifaceName] = mask ? `${ip} ${mask}` : ip;
-        cmdResult = { raw: '' };
-      } else {
+      if (!ip || !ifaceName) {
         cmdResult = { raw: '% Error: missing address or interface parameter' };
+      } else if (!isKnownInterface(context?.ports, ifaceName)) {
+        cmdResult = { raw: `% Error: unknown interface "${ifaceName}" (tidak ada di device ini)` };
+      } else {
+        // Validasi IP: IPv4 atau IPv6; prefix / mask wajib sah.
+        const rawIp = String(ip).trim();
+        const v6 = rawIp.includes(':');
+        const ipPart = rawIp.split('/')[0];
+        const ipOk = v6 ? isValidIpv6(ipPart) : isValidIpv4(ipPart);
+        const prefixOk = rawIp.includes('/') ? isValidPrefix(rawIp.split('/')[1], v6) : true;
+        const maskOk = !mask
+          ? true
+          : v6
+            ? false
+            : (() => {
+                // Mask numerik "24" (didukung engine) atau dotted-quad kontigu "255.255.255.0".
+                if (/^\d{1,2}$/.test(String(mask))) {
+                  const n = Number(mask);
+                  return Number.isInteger(n) && n >= 0 && n <= 32;
+                }
+                const m = String(mask).match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+                if (!m) return false;
+                const octets = m.slice(1).map(Number);
+                if (octets.some((o) => o < 0 || o > 255)) return false;
+                const bits = octets.reduce((acc, o) => acc + (o.toString(2).match(/1/g) || []).length, 0);
+                const expected = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+                const value = octets.reduce((acc, o) => (acc << 8) + o, 0) >>> 0;
+                return value === expected;
+              })();
+        if (!ipOk) {
+          cmdResult = { raw: `% Error: invalid IP address "${ip}"` };
+        } else if (!prefixOk) {
+          cmdResult = { raw: `% Error: invalid prefix length "${rawIp.split('/')[1]}"` };
+        } else if (mask && !maskOk) {
+          cmdResult = { raw: `% Error: invalid netmask "${mask}"` };
+        } else {
+          mem.configuredIps[ifaceName] = mask ? `${ip} ${mask}` : ip;
+          cmdResult = { raw: '' };
+        }
       }
     } else if (normalized.action === 'add_route') {
       const { dst, gw } = normalized.payload as any;
@@ -4302,7 +4376,17 @@ export class VendorDispatcher {
     } else if (normalized.action === 'identity_print' || normalized.action === 'hostname_print' || normalized.action === 'show_hostname' || normalized.action === 'hostname' || (normalized.target === 'system_identity' && normalized.action === 'print')) {
       cmdResult = { type: 'identity_print', name: mem.hostname || context?.name || vendorId };
     } else if (normalized.action === 'uci_show') {
-      cmdResult = { type: 'uci_show' };
+      cmdResult = {
+        type: 'uci_show',
+        mem: {
+          configuredIps: mem.configuredIps,
+          dhcpClients: mem.dhcpClients,
+          routes: mem.routes,
+        },
+        pools: mem.dhcpPools,
+        natRules: mem.natRules,
+        hostname: mem.hostname,
+      };
     } else if (normalized.action === 'logread') {
       cmdResult = { type: 'logread' };
     } else if (normalized.action === 'show_running' || normalized.action === 'display_current' || normalized.action === 'export') {
@@ -5662,7 +5746,10 @@ function openwrtCommand(raw: string, context: any, mem: any): any {
     return { type: 'nat_print', rules: mem.natRules };
   }
   if (/^uci\s+show\s+network/i.test(t)) {
-    return { type: 'ip_route_print', routes: mem.routes };
+    return {
+      type: 'uci_network_show',
+      mem: { configuredIps: mem.configuredIps, dhcpClients: mem.dhcpClients, routes: mem.routes },
+    };
   }
   return undefined;
 }
@@ -6191,6 +6278,65 @@ function resolveIfaceName(ports: any[], name: string | undefined): string | null
   return found ? found.name : name;
 }
 
+/** Valid IPv4? (empat oktet 0-255, tanpa leading-zero aneh yang tidak dibutuhkan). */
+function isValidIpv4(ip: string): boolean {
+  const parts = String(ip || '').split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((o) => /^\d{1,3}$/.test(o) && Number(o) >= 0 && Number(o) <= 255);
+}
+
+/** Valid IPv6? (heuristik: minimal dua grup hex, tidak ada karakter selain hex/colon). */
+function isValidIpv6(ip: string): boolean {
+  const s = String(ip || '').trim();
+  if (!s || s.includes('.')) return false;
+  if (!/^[0-9a-fA-F:]+$/.test(s)) return false;
+  const groups = s.split(':');
+  if (groups.length < 2 || groups.length > 8) return false;
+  if (s.includes('::') && s.split('::').length > 2) return false;
+  return groups.every((g) => g === '' || (g.length <= 4 && /^[0-9a-fA-F]*$/.test(g)));
+}
+
+/** Valid prefix number (0..32 IPv4 / 0..128 IPv6). */
+function isValidPrefix(n: string | undefined, v6: boolean): boolean {
+  if (n === undefined || n === '') return true;
+  if (!/^\d{1,3}$/.test(String(n))) return false;
+  const v = Number(n);
+  return Number.isInteger(v) && v >= 0 && v <= (v6 ? 128 : 32);
+}
+
+/** Nomor prefix IPv4 → netmask dotted-quad. */
+function bitsToMask(bits: number): string {
+  let mask = 0;
+  for (let i = 0; i < 32; i++) {
+    mask = (mask << 1) | (i < bits ? 1 : 0);
+  }
+  return [24, 16, 8, 0].map((s) => ((mask >>> s) & 255)).join('.');
+}
+
+/** Alamat broadcast dari IP + prefix (network dengan semua bit host = 1). */
+function broadcastOf(ip: string, prefix: number): string {
+  const octets = String(ip || '').split('.').map(Number);
+  if (octets.length !== 4 || octets.some((n) => isNaN(n))) return '0.0.0.0';
+  let mask = 0;
+  for (let i = 0; i < 32; i++) mask = (mask << 1) | (i < prefix ? 1 : 0);
+  const inv = (0xffffffff ^ mask) >>> 0;
+  return octets.map((o, k) => ((o & (((mask >>> ((3 - k) * 8)) & 255))) | ((inv >>> ((3 - k) * 8)) & 255))).join('.');
+}
+
+/**
+ * Interface fisik harus benar-benar ada (atau subinterface "port.N" yang
+ * parent-nya port nyata). Interface hantu → error jujur, bukan sukses palsu.
+ */
+function isKnownInterface(ports: any[], name: string | undefined): boolean {
+  if (!name) return false;
+  const n = String(name).toLowerCase();
+  if ((ports || []).some((p: any) => String(p.name || '').toLowerCase() === n || String(p.id || '').toLowerCase() === n)) return true;
+  // Subinterface: "ether1.10" / "Gi0/0.10" — diizinkan walau belum terdaftar.
+  const dot = n.indexOf('.');
+  if (dot > 0 && dot < n.length - 1) return true;
+  return false;
+}
+
 /** Ubah "192.168.88.1/24" atau "192.168.88.1 255.255.255.0" → bentuk CIDR. */
 function cidrOf(entry: string): string {
   if (!entry) return '';
@@ -6254,6 +6400,46 @@ function maskedPair(entry: string): string {
 }
 
 /** Hitung alamat network + prefix dari "ip mask" → "192.168.88.0/24". */
+/** Baris "uci show network" derived dari state tersimpan — bukan fabricasi. */
+function uciNetworkLines(mem: any): string[] {
+  const lines: string[] = [];
+  const keyOf = (name: string): string => name.replace(/[^A-Za-z0-9_]/g, '_') || 'iface';
+  const seen = new Set<string>();
+  const pushIface = (name: string): string => {
+    const key = keyOf(name);
+    if (seen.has(key)) return key;
+    seen.add(key);
+    lines.push(`network.${key}=interface`);
+    lines.push(`network.${key}.ifname='${name}'`);
+    return key;
+  };
+  for (const [iface, raw] of Object.entries(mem.configuredIps || {})) {
+    if (!iface || raw === undefined || raw === null || raw === '') continue;
+    const c = cidrOf(String(raw));
+    const [ip, pref] = c.split('/');
+    if (!ip) continue;
+    const key = pushIface(iface);
+    lines.push(`network.${key}.proto='static'`);
+    lines.push(`network.${key}.ipaddr='${ip}'`);
+    lines.push(`network.${key}.netmask='${bitsToMask(Number(pref) || 24)}'`);
+  }
+  for (const c of mem.dhcpClients || []) {
+    if (!c || !c.iface) continue;
+    const key = pushIface(c.iface);
+    lines.push(`network.${key}.proto='dhcp'`);
+  }
+  (mem.routes || []).forEach((r: any, i: number) => {
+    const dst = String(r.dst || '').trim().split(/\s+/)[0];
+    if (!dst || !r.gateway) return;
+    lines.push(`network.route${i}=route`);
+    lines.push(`network.route${i}.target='${dst.split('/')[0]}'`);
+    const pref = dst.includes('/') ? Number(dst.split('/')[1]) : NaN;
+    if (!Number.isNaN(pref)) lines.push(`network.route${i}.netmask='${bitsToMask(pref)}'`);
+    lines.push(`network.route${i}.gateway='${r.gateway}'`);
+  });
+  return lines;
+}
+
 function networkOfMask(ip: string, mask: string): string | null {
   const i = ip.split('.').map(Number);
   const m = mask.split('.').map(Number);
@@ -6758,6 +6944,16 @@ function generateRunningConfig(context: any, mem: any, vendor: string): string {
     if (mem.routing?.eigrp?.enabled) {
       lines.push(`router eigrp ${mem.routing.eigrp.asn || 1}`);
       (mem.routing.eigrp.networks || []).forEach((n: string) => lines.push(` network ${cidrOf(n)}`));
+    }
+    if (mem.bgp?.asn) {
+      lines.push(`router bgp ${mem.bgp.asn}`);
+      if (mem.bgp.routerId) lines.push(` bgp router-id ${mem.bgp.routerId}`);
+      (mem.bgp.peers || []).forEach((p: any) => lines.push(` neighbor ${p.remoteAddr} remote-as ${p.remoteAs}`));
+      (mem.bgp.networks || []).forEach((n: string) => {
+        const c = cidrOf(n);
+        const [ip, pref] = c.split('/');
+        if (ip && pref) lines.push(` network ${ip} mask ${bitsToMask(Number(pref))}`);
+      });
     }
     // IPv6: alamat per interface + rute statis
     Object.entries(mem.configuredIps6 || {}).forEach(([name, addr]: [string, any]) => {

@@ -3736,6 +3736,151 @@ console.log('\n== 29. L2/L3 forwarding & network services (engine hardening) =='
   }
 }
 
+// ── 30. Regresi remediasi audit: kejujuran CLI vendor, OSPF lintas switch,
+//       DHCP relay lintas subnet, export BGP, forget memory ────────────────
+console.log('\n== 30. Audit remediation regressions ==');
+{
+  const fPorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const fNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor: deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik', model: deviceType, deviceType,
+    ports: fPorts(portCount, macSeed),
+  });
+  const fEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  const routeOf = (sim: NetworkSimulator, id: string, dst: string) =>
+    sim.getDeviceStats(id)?.routes.find((r) => r.dst === dst && r.kind === 'dynamic');
+  const ospfStateOf = (sim: NetworkSimulator, id: string, rid: string) =>
+    sim.getOspfNeighbors(id).find((n) => n.routerId === rid)?.state || 'none';
+  const dCtx = (nodeId: string, name: string, portNames: string[]) => ({
+    nodeId, name,
+    ports: portNames.map((n, i) => ({ id: n, name: n, status: i === 0 ? 'up' : 'down' })),
+  });
+  const dMsg = (r: unknown) => (typeof r === 'object' && r !== null ? (r as any).message ?? '' : String(r ?? ''));
+
+  // 30a. OSPF adjacency lintas switch: R1–SW1–R2 di segmen cloud yang sama.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, '30a'), fNode('r2', 'R2', 'router', 3, '30b'), fNode('sw1', 'SW1', 'switch', 4, '30c')],
+      edges: [fEdge('e1', 'r1', 'port1', 'sw1', 'port1'), fEdge('e2', 'r2', 'port1', 'sw1', 'port2')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/24', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/24', ether2: '10.0.2.1/24' }, []);
+    sim.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/24', '10.0.1.0/24'] } });
+    sim.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.1.0/24', '10.0.2.0/24'] } });
+    sim.computeDynamicRoutes();
+    check('30a adjacency R1↔R2 lintas switch: Full', ospfStateOf(sim, 'r1', '192.168.1.2') === 'Full', JSON.stringify(sim.getOspfNeighbors('r1')));
+    check('30a adjacency R2↔R1 lintas switch: Full', ospfStateOf(sim, 'r2', '192.168.1.1') === 'Full', JSON.stringify(sim.getOspfNeighbors('r2')));
+    const r1r = routeOf(sim, 'r1', '10.0.2.0/24');
+    check('30a r1 belajar 10.0.2.0/24 via OSPF lintas switch', !!r1r && r1r.gateway === '192.168.1.2', JSON.stringify(r1r));
+    const r2r = routeOf(sim, 'r2', '10.0.1.0/24');
+    check('30a r2 belajar 10.0.1.0/24 via OSPF lintas switch', !!r2r && r2r.gateway === '192.168.1.1', JSON.stringify(r2r));
+  }
+
+  // 30b. add_ip / interface-mode / ip addr add: IP, prefix, mask, dan interface
+  //      hantu ditolak — mask numerik "24" (format engine) tetap diterima.
+  {
+    const dis = new VendorDispatcher();
+    const ctx = dCtx('r1', 'R1', ['ether1', 'ether2']);
+    check('30b IP invalid ditolak', dMsg(dis.dispatch('mikrotik', '/ip address add address=999.999.999.999/24 interface=ether1', ctx)).includes('invalid IP address'));
+    check('30b prefix invalid ditolak', dMsg(dis.dispatch('mikrotik', '/ip address add address=10.0.0.1/33 interface=ether1', ctx)).includes('invalid prefix length'));
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    check('30b netmask non-kontigu ditolak', dMsg(dis.dispatch('cisco_ios', 'ip address 10.0.0.1 255.0.255.0', ctx)).includes('invalid netmask'));
+    check('30b interface hantu ditolak', dMsg(dis.dispatch('mikrotik', '/ip address add address=10.0.0.1/24 interface=ghost0', ctx)).includes('unknown interface'));
+    dis.dispatch('mikrotik', '/ip address add address=10.0.0.1/24 interface=ether1', ctx);
+    check('30b add_ip valid tersimpan', dis.getNodeMemory('r1').configuredIps['ether1'] === '10.0.0.1/24', JSON.stringify(dis.getNodeMemory('r1').configuredIps));
+
+    // Cisco: mask numerik "24" (format yang dipakai V2 interop) diterima.
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.0.2 24', ctx);
+    check('30b cisco mask numerik 24 tersimpan', dis.getNodeMemory('r1').configuredIps['ether1'] === '10.0.0.2 24', JSON.stringify(dis.getNodeMemory('r1').configuredIps));
+
+    // Interface-mode: hantu ditolak, subinterface tetap diterima.
+    check('30b interface hantu ditolak (IOS)', dMsg(dis.dispatch('cisco_ios', 'interface ghost0', ctx)).includes('Invalid input detected'));
+    check('30b subinterface diterima', dMsg(dis.dispatch('cisco_ios', 'interface ether1.10', ctx)) === '', dMsg(dis.dispatch('cisco_ios', 'interface ether1.10', ctx)));
+
+    // Linux/OpenWrt: device hantu ditolak, lo diizinkan.
+    const lctx = dCtx('lx', 'LX', ['eth0']);
+    check('30b ip addr add dev hantu ditolak (linux)', dMsg(dis.dispatch('linux', 'ip addr add 10.0.0.1/24 dev ghost0', lctx)).includes('Cannot find device "ghost0"'));
+    dis.dispatch('linux', 'ip addr add 127.0.0.1/8 dev lo', lctx);
+    check('30b ip addr add dev lo diizinkan', dis.getNodeMemory('lx').configuredIps['lo'] === '127.0.0.1/8', JSON.stringify(dis.getNodeMemory('lx').configuredIps));
+  }
+
+  // 30c. OpenWrt jujur: uci show network / uci show / ifconfig berasal dari
+  //      state (bukan fabricasi loopback/lan/wan).
+  {
+    const dis = new VendorDispatcher();
+    const ctx = dCtx('owrt', 'OWRT', ['eth0', 'eth1']);
+    const awal = dMsg(dis.dispatch('openwrt', 'uci show network', ctx));
+    check('30c uci show network kosong → jujur', awal.includes('belum ada konfigurasi'), String(awal).slice(0, 120));
+    dis.dispatch('openwrt', 'uci set network.eth0.ipaddr=10.0.0.1', ctx);
+    dis.dispatch('openwrt', 'uci set network.eth0.netmask=255.255.255.0', ctx);
+    dis.dispatch('openwrt', 'uci set network.eth0.proto=static', ctx);
+    dis.dispatch('openwrt', 'uci commit network', ctx);
+    const show = dMsg(dis.dispatch('openwrt', 'uci show network', ctx));
+    check('30c uci show network: ipaddr derived', show.includes("network.eth0.ipaddr='10.0.0.1'"), show);
+    check('30c uci show network: netmask derived', show.includes("network.eth0.netmask='255.255.255.0'"), show);
+    check('30c uci show network: proto derived', show.includes("network.eth0.proto='static'"), show);
+    const bare = dMsg(dis.dispatch('openwrt', 'uci show', ctx));
+    check('30c uci show tanpa fabricasi lan/wan default', !bare.includes('192.168.1.1') && !bare.includes('eth0.1'), String(bare).slice(0, 200));
+    const icfg = dMsg(dis.dispatch('openwrt', 'ifconfig', ctx));
+    check('30c ifconfig netmask/broadcast dari state', icfg.includes('netmask 255.255.255.0') && icfg.includes('broadcast 10.0.0.255'), String(icfg).slice(0, 200));
+  }
+
+  // 30d. Export running-config Cisco memuat BGP; round-trip re-dispatch pulih.
+  {
+    const dis = new VendorDispatcher();
+    const ctx = dCtx('r1', 'R1', ['ether1', 'ether2']);
+    dis.dispatch('cisco_ios', 'router bgp 65001', ctx);
+    dis.dispatch('cisco_ios', 'neighbor 10.0.9.2 remote-as 65002', ctx);
+    dis.dispatch('cisco_ios', 'network 10.0.1.0 mask 255.255.255.0', ctx);
+    const cfg = dis.exportRunningConfig('cisco_ios', ctx);
+    check('30d export memuat router bgp 65001', cfg.includes('router bgp 65001'), cfg.split('\n').filter((l) => /bgp|neighbor|network/.test(l)).join(' | '));
+    check('30d export memuat neighbor remote-as', cfg.includes('neighbor 10.0.9.2 remote-as 65002'), cfg.split('\n').filter((l) => /bgp|neighbor|network/.test(l)).join(' | '));
+    check('30d export memuat network mask', cfg.includes('network 10.0.1.0 mask 255.255.255.0'), cfg.split('\n').filter((l) => /bgp|neighbor|network/.test(l)).join(' | '));
+    const dis2 = new VendorDispatcher();
+    const ctx2 = dCtx('r1', 'R1', ['ether1', 'ether2']);
+    for (const line of cfg.split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('!')) continue;
+      dis2.dispatch('cisco_ios', t, ctx2);
+    }
+    const m2 = dis2.getNodeMemory('r1');
+    check('30d BGP round-trip: asn + peer + network pulih', m2.bgp.asn === 65001 && m2.bgp.peers.length === 1 && (m2.bgp.networks || []).includes('10.0.1.0 255.255.255.0'), JSON.stringify(m2.bgp));
+  }
+
+  // 30e. forgetNodeMemory menghapus startup-config (reload jadi kosong).
+  {
+    const dis = new VendorDispatcher();
+    const ctx = dCtx('r1', 'R1', ['ether1']);
+    dis.dispatch('cisco_ios', 'interface ether1', ctx);
+    dis.dispatch('cisco_ios', 'ip address 10.0.0.1 255.255.255.0', ctx);
+    dis.dispatch('cisco_ios', 'write memory', ctx);
+    dis.forgetNodeMemory('r1');
+    const out = dis.dispatch('cisco_ios', 'reload', ctx);
+    check('30e reload setelah forget: tanpa startup-config', String(out).includes('No startup-configuration present'), String(out).slice(0, 120));
+  }
+
+  // 30f. DHCP relay lintas subnet: server di router lain (bukan segmen yang
+  //      sama) — egress relay dari routing lookup, bukan interface masuk.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [fNode('pc1', 'PC1', 'pc', 1, '30f'), fNode('r1', 'R1', 'router', 3, '30g'), fNode('r2', 'R2', 'router', 3, '30h')],
+      edges: [fEdge('e1', 'pc1', 'port1', 'r1', 'port1'), fEdge('e2', 'r1', 'port2', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '10.0.1.1/24', ether2: '10.0.2.1/30' }, [{ dst: '10.0.3.0/24', gateway: '10.0.2.2' }]);
+    sim.applyNodeConfig('r2', { ether1: '10.0.2.2/30', ether2: '10.0.3.1/24' }, []);
+    sim.setDhcpPools({ r2: [{ name: 'pool1', range: '10.0.3.100-10.0.3.200', network: '10.0.3.0/24', iface: 'ether1', gateway: '10.0.3.1' }] });
+    sim.setDhcpRelays('r1', { ether1: '10.0.3.1' });
+    const lease = sim.grantDhcpLease('pc1', 'ether1');
+    check('30f relay lintas subnet: pc1 dapat lease dari pool r2', !!lease && lease.ip.startsWith('10.0.3.1') && lease.prefix === 24, JSON.stringify(lease));
+    check('30f lease tercatat', sim.getLeases().some((l) => l.nodeId === 'pc1' && l.ip === lease?.ip));
+  }
+}
+
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('\nFAILED:');

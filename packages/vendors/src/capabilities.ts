@@ -117,10 +117,10 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   fortinet: {
     vendorId: 'fortinet',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: P,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: NS,
       staticRoute: S, firewall: S, dns: S, commit: NS,
     },
-    notes: 'FortiOS: NAT via policy & VIP teruji; VRRP FortiOS parser-level.',
+    notes: 'FortiOS: NAT via policy & VIP teruji. VRRP FortiOS tidak diimplementasikan (CLI menjawab jujur).',
   },
   aruba: {
     vendorId: 'aruba',
@@ -133,11 +133,11 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   openwrt: {
     vendorId: 'openwrt',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: P, bgp: NS, vrrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: NS, bgp: NS, vrrp: NS,
       staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes:
-      'UCI commit nyata. OSPF OpenWrt (bird/zebra) belum disimulasikan; BGP tidak didukung.',
+      'UCI commit nyata. OSPF OpenWrt (bird/zebra) tidak disimulasikan; CLI menjawab jujur. BGP tidak didukung.',
   },
   linux: {
     vendorId: 'linux',

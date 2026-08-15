@@ -31,6 +31,7 @@ import { SimulationEngine, formatPingOutput, formatTracerouteOutput } from './en
 import { runLab, findScenarios, formatLabResult } from './engine/lab';
 import { LAB_SCENARIOS } from './engine/lab/scenarios';
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
+import { validateProject } from './utils/projectValidation';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
@@ -492,11 +493,41 @@ export default function App() {
     // 0) Topologi dari link berbagi (param ?lab=...) punya prioritas tertinggi
     const urlParams = new URLSearchParams(window.location.search);
     const shared = urlParams.get(SHARE_PARAM);
+
+    // Muat proyek tersimpan (IndexedDB) yang LULUS validasi; korup → diabaikan.
+    const applySaved = (saved: any) => {
+      const res = validateProject(saved);
+      if (!('ok' in res) || !res.ok) {
+        console.warn('Proyek tersimpan tidak valid, dilewati:', res);
+        return;
+      }
+      setProject(saved);
+      // Undo history dimulai dari proyek tersimpan, bukan template default
+      historyRef.current = [saved];
+      historyIndexRef.current = 0;
+      setCanUndo(false);
+      setCanRedo(false);
+      // Terminal tab bawaan ('node-1') tidak valid bila proyek tersimpan
+      // tidak memilikinya — selaraskan tab dengan node proyek yang dimuat.
+      const validIds = new Set(saved.nodes.map((n: any) => n.id));
+      setOpenTerminalNodeIds((prev) => {
+        const clean = prev.filter((id) => validIds.has(id));
+        return clean.length > 0 ? clean : saved.nodes.slice(0, 1).map((n: any) => n.id);
+      });
+      setActiveTerminalNodeId((cur) =>
+        cur && validIds.has(cur)
+          ? cur
+          : (saved.nodes[0]?.id ?? '')
+      );
+    };
+
     if (shared) {
       const payload = decodeSharePayload(shared);
-      if (payload?.project) {
-        setProject(payload.project);
-        historyRef.current = [payload.project];
+      const proj = payload?.project ?? null;
+      const res = proj ? validateProject(proj) : null;
+      if (res && 'ok' in res && res.ok) {
+        setProject(proj);
+        historyRef.current = [proj];
         historyIndexRef.current = 0;
         setCanUndo(false);
         setCanRedo(false);
@@ -513,6 +544,17 @@ export default function App() {
         } catch {
           // abaikan — URL bersih opsional
         }
+      } else {
+        // Link tidak valid / korup → jangan dimuat; fallback ke proyek tersimpan.
+        showToast('Link berbagi tidak valid — memuat proyek tersimpan', 'error');
+        if (!StorageEngine.hasSeenTutorial()) {
+          setIsTutorialOpen(true);
+          StorageEngine.setTutorialSeen(true);
+        }
+        StorageEngine.loadProject().then((saved) => {
+          if (saved) applySaved(saved);
+          projectLoadedRef.current = true;
+        });
       }
     } else {
       // Panduan muncul otomatis saat pertama kali membuka (semua perangkat),
@@ -522,28 +564,9 @@ export default function App() {
         StorageEngine.setTutorialSeen(true);
       }
 
-      // Load saved project from IndexedDB if present
+      // Load saved project from IndexedDB if present (validated)
       StorageEngine.loadProject().then((saved) => {
-        if (saved) {
-          setProject(saved);
-          // Undo history dimulai dari proyek tersimpan, bukan template default
-          historyRef.current = [saved];
-          historyIndexRef.current = 0;
-          setCanUndo(false);
-          setCanRedo(false);
-          // Terminal tab bawaan ('node-1') tidak valid bila proyek tersimpan
-          // tidak memilikinya — selaraskan tab dengan node proyek yang dimuat.
-          const validIds = new Set(saved.nodes.map((n) => n.id));
-          setOpenTerminalNodeIds((prev) => {
-            const clean = prev.filter((id) => validIds.has(id));
-            return clean.length > 0 ? clean : saved.nodes.slice(0, 1).map((n) => n.id);
-          });
-          setActiveTerminalNodeId((cur) =>
-            cur && validIds.has(cur)
-              ? cur
-              : (saved.nodes[0]?.id ?? '')
-          );
-        }
+        if (saved) applySaved(saved);
         projectLoadedRef.current = true;
       });
     }
@@ -1022,8 +1045,14 @@ export default function App() {
     const dstNode = project.nodes.find((n) => n.id === nodeId);
     if (!srcNode || !dstNode) { setPingSource(null); return; }
 
-    // Get any IP from destination node
-    const dstIp = dstNode.ports.find((p) => p.ipAddress)?.ipAddress?.split('/')[0] || dstNode.name;
+    // IP tujuan diambil dari ENGINE (hasil CLI/DHCP), bukan UI state yang bisa basi.
+    const dstDev = simEngineRef.current.getDevice(nodeId);
+    const dstIps =
+      dstDev?.getInterfaces().filter((i: any) => i.ip && i.up).map((i: any) => i.ip.address) || [];
+    const dstIp =
+      dstIps[0] ||
+      dstNode.ports.find((p) => p.ipAddress)?.ipAddress?.split('/')[0] ||
+      dstNode.name;
 
     const pendingId = `ping-${Date.now()}`;
     const pendingResult: PingResult = {
