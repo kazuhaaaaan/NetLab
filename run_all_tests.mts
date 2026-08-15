@@ -31,6 +31,9 @@ import { runCommandTreeTests } from './tests/unit/commandTree.test';
 import { runPortInspectorTests } from './tests/unit/portInspector.test';
 import { runMentorTests } from './tests/unit/mentorCreator.test';
 import { runProductionEngineTests } from './tests/unit/productionEngine.test';
+import { dropCodeOf } from './src/engine/net/core/dropReasons';
+import { NatTranslator } from './src/engine/net/layer4/Nat';
+import type { Packet } from './src/engine/net/core/types';
 
 let passed = 0;
 let failed = 0;
@@ -2827,6 +2830,911 @@ const pep = runProductionEngineTests();
 passed += pep.passed;
 failed += pep.failed;
 fails.push(...pep.fails);
+
+// ── 28. Routing protocol fidelity: OSPF FSM/LSDB/SPF + BGP FSM/selection ──
+// State machine berbasis round: compute({rounds:n}) menjalankan tepat n
+// protocol round (observasi transisi), compute() tanpa argumen konvergen.
+console.log('\n== 28. Routing protocol fidelity (OSPF & BGP state machines) ==');
+{
+  const fPorts = (n: number, macSeed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const fNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string) => ({
+    id, name, vendor: deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik', model: deviceType, deviceType,
+    ports: fPorts(portCount, macSeed),
+  });
+  const fEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  const routeOf = (sim: NetworkSimulator, id: string, dst: string) =>
+    sim.getDeviceStats(id)?.routes.find((r) => r.dst === dst && r.kind === 'dynamic');
+  const ospfStateOf = (sim: NetworkSimulator, id: string, rid: string) =>
+    sim.getOspfNeighbors(id).find((n) => n.routerId === rid)?.state || 'none';
+
+  // 28a. OSPF FSM: satu fase per round → Full di round 6; state persisten lintas recompute.
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [fNode('r1', 'R1', 'router', 3, 'a1'), fNode('r2', 'R2', 'router', 3, 'a2')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    };
+    sim.syncTopology(project);
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30', '10.0.1.0/24'] } });
+    sim.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.1.0/30', '10.0.2.0/24'] } });
+
+    const seq: string[] = [];
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      sim.computeDynamicRoutes({ rounds: 1 });
+      seq.push(ospfStateOf(sim, 'r1', '192.168.1.2'));
+    }
+    check('28a FSM urutan Init→2-Way→ExStart→Exchange→Loading→Full',
+      JSON.stringify(seq) === JSON.stringify(['Init', '2-Way', 'ExStart', 'Exchange', 'Loading', 'Full']),
+      JSON.stringify(seq));
+    check('28a kedua sisi Full', ospfStateOf(sim, 'r2', '192.168.1.1') === 'Full', JSON.stringify(sim.getOspfNeighbors('r2')));
+
+    sim.computeDynamicRoutes(); // konvergen — state tetap Full (tidak reset)
+    check('28a convergen tetap Full', ospfStateOf(sim, 'r1', '192.168.1.2') === 'Full', JSON.stringify(sim.getOspfNeighbors('r1')));
+    const r1r = routeOf(sim, 'r1', '10.0.2.0/24');
+    check('28a r1 belajar 10.0.2.0/24 via OSPF', !!r1r && r1r.gateway === '192.168.1.2', JSON.stringify(r1r));
+
+    const lsa1 = sim.getOspfLsdb('r1')[0];
+    check('28a LSDB r1: Router-LSA dengan link ke r2 cost 1',
+      !!lsa1 && lsa1.links.length === 1 && lsa1.links[0].neighbor === '192.168.1.2' && lsa1.links[0].cost === 1 && lsa1.links[0].iface === 'ether1',
+      JSON.stringify(lsa1));
+    check('28a LSDB r1: stub 10.0.1.0/24', !!lsa1 && lsa1.stubs.some((s) => s.network === '10.0.1.0/24'), JSON.stringify(lsa1?.stubs));
+  }
+
+  // 28b. Inkompatibilitas adjacency: area beda / timer jelek / network hilang → tidak pernah Full.
+  {
+    // b1: area berbeda pada segmen yang sama
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, 'b1'), fNode('r2', 'R2', 'router', 3, 'b2')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30'], areas: { '192.168.1.0/30': 0 } } });
+    sim.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.1.0/30'], areas: { '192.168.1.0/30': 1 } } });
+    sim.computeDynamicRoutes();
+    check('28b area beda → adjacency Down (tidak pernah Full)', ospfStateOf(sim, 'r1', '192.168.1.2') === 'Down', JSON.stringify(sim.getOspfNeighbors('r1')));
+    check('28b area beda → tanpa rute dinamis', !routeOf(sim, 'r1', '10.0.2.0/24'), JSON.stringify(sim.getDeviceStats('r1')?.routes));
+
+    // b2: dead interval <= hello interval → macet di 2-Way selamanya
+    const sim2 = new NetworkSimulator();
+    sim2.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, 'b3'), fNode('r2', 'R2', 'router', 3, 'b4')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim2.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim2.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim2.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30'] } });
+    sim2.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.1.0/30'], helloInterval: 10000, deadInterval: 10000 } });
+    sim2.computeDynamicRoutes();
+    check('28b timer dead<=hello → macet di 2-Way', ospfStateOf(sim2, 'r1', '192.168.1.2') === '2-Way', JSON.stringify(sim2.getOspfNeighbors('r1')));
+    check('28b timer jelek → tanpa rute', !routeOf(sim2, 'r1', '10.0.2.0/24'));
+
+    // b3: network statement salah satu sisi tidak mencakup segmen
+    const sim3 = new NetworkSimulator();
+    sim3.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, 'b5'), fNode('r2', 'R2', 'router', 3, 'b6')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim3.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim3.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim3.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30', '10.0.1.0/24'] } });
+    sim3.setRouting('r2', { ospf: { enabled: true, networks: ['10.0.2.0/24'] } });
+    sim3.computeDynamicRoutes();
+    check('28b network tidak mencakup segmen → Down', ospfStateOf(sim3, 'r1', '192.168.1.2') === 'Down', JSON.stringify(sim3.getOspfNeighbors('r1')));
+    check('28b network tidak mencakup → tanpa rute', !routeOf(sim3, 'r1', '10.0.2.0/24'));
+  }
+
+  // 28c. LSDB + SPF multi-hop: cost interface sisi advertiser menentukan edge cost.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        fNode('r1', 'R1', 'router', 3, 'c1'), fNode('r2', 'R2', 'router', 3, 'c2'), fNode('r3', 'R3', 'router', 3, 'c3'),
+      ],
+      edges: [
+        fEdge('e1', 'r1', 'port1', 'r2', 'port1'), fEdge('e2', 'r2', 'port2', 'r3', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '192.168.2.1/30' }, []);
+    sim.applyNodeConfig('r3', { ether1: '192.168.2.2/30', ether2: '10.0.3.1/24' }, []);
+    sim.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30', '10.0.1.0/24'] } });
+    sim.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.1.0/30', '192.168.2.0/30'], interfaceCosts: { ether1: 3 } } });
+    sim.setRouting('r3', { ospf: { enabled: true, networks: ['192.168.2.0/30', '10.0.3.0/24'], interfaceCosts: { ether1: 5 } } });
+    sim.computeDynamicRoutes();
+
+    const lsa2 = sim.getOspfLsdb('r2')[0];
+    const lsa3 = sim.getOspfLsdb('r3')[0];
+    check('28c LSDB r2: cost ether1=3 (ke r1), ether2=1 (ke r3)',
+      !!lsa2 && lsa2.links.some((l) => l.neighbor === '192.168.1.1' && l.cost === 3) && lsa2.links.some((l) => l.neighbor === '192.168.2.2' && l.cost === 1),
+      JSON.stringify(lsa2?.links));
+    check('28c LSDB r3: cost ether1=5 (ke r2) + stub LAN',
+      !!lsa3 && lsa3.links.some((l) => l.neighbor === '192.168.1.2' && l.cost === 5) && lsa3.stubs.some((s) => s.network === '10.0.3.0/24'),
+      JSON.stringify(lsa3));
+
+    const r1r = routeOf(sim, 'r1', '10.0.3.0/24');
+    const r2r = routeOf(sim, 'r2', '10.0.3.0/24');
+    const r2r1 = routeOf(sim, 'r2', '10.0.1.0/24');
+    check('28c SPF r1: LAN r3 via r2 (192.168.1.2)', !!r1r && r1r.gateway === '192.168.1.2', JSON.stringify(r1r));
+    check('28c SPF r2: LAN r3 via r3 (192.168.2.2)', !!r2r && r2r.gateway === '192.168.2.2', JSON.stringify(r2r));
+    check('28c SPF r2: LAN r1 via r1 (192.168.1.1)', !!r2r1 && r2r1.gateway === '192.168.1.1', JSON.stringify(r2r1));
+    check('28c ping r1→10.0.3.1 lintas 2 hop', sim.simulatePing('r1', '10.0.3.1').success);
+  }
+
+  // 28d. Failure handling OSPF: interface shutdown → Down + rute dicabut → pulih.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        fNode('r1', 'R1', 'router', 3, 'd1'), fNode('r2', 'R2', 'router', 3, 'd2'), fNode('r3', 'R3', 'router', 3, 'd3'),
+      ],
+      edges: [
+        fEdge('e1', 'r1', 'port1', 'r2', 'port1'), fEdge('e2', 'r2', 'port2', 'r3', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '192.168.2.1/30' }, []);
+    sim.applyNodeConfig('r3', { ether1: '192.168.2.2/30', ether2: '10.0.3.1/24' }, []);
+    sim.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30', '10.0.1.0/24'] } });
+    sim.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.1.0/30', '192.168.2.0/30'] } });
+    sim.setRouting('r3', { ospf: { enabled: true, networks: ['192.168.2.0/30', '10.0.3.0/24'] } });
+    sim.computeDynamicRoutes();
+    check('28d sebelum gagal: r1 punya rute ke LAN r3', !!routeOf(sim, 'r1', '10.0.3.0/24'));
+
+    sim.setShutdownIfaces('r2', ['ether1']);
+    sim.computeDynamicRoutes();
+    check('28d link r2-ether1 down → adjacency r1 Down', ospfStateOf(sim, 'r1', '192.168.1.2') === 'Down', JSON.stringify(sim.getOspfNeighbors('r1')));
+    check('28d link down → rute r1 ke LAN r3 dicabut', !routeOf(sim, 'r1', '10.0.3.0/24'));
+    check('28d link down → ping r1→10.0.3.1 gagal', !sim.simulatePing('r1', '10.0.3.1').success);
+
+    sim.setShutdownIfaces('r2', undefined);
+    sim.computeDynamicRoutes();
+    check('28d no shutdown → adjacency Full kembali', ospfStateOf(sim, 'r1', '192.168.1.2') === 'Full', JSON.stringify(sim.getOspfNeighbors('r1')));
+    check('28d no shutdown → rute kembali', !!routeOf(sim, 'r1', '10.0.3.0/24'));
+    check('28d no shutdown → ping sukses lagi', sim.simulatePing('r1', '10.0.3.1').success);
+  }
+
+  // 28e. BGP FSM: Connect → Active → OpenSent → OpenConfirm → Established.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, 'e1'), fNode('r2', 'R2', 'router', 3, 'e2')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+
+    const seq: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      sim.computeDynamicRoutes({ rounds: 1 });
+      seq.push(sim.getBgpNeighborStates('r1')[0]?.state || 'none');
+    }
+    check('28e FSM urutan Connect→Active→OpenSent→OpenConfirm→Established',
+      JSON.stringify(seq) === JSON.stringify(['Connect', 'Active', 'OpenSent', 'OpenConfirm', 'Established']),
+      JSON.stringify(seq));
+    sim.computeDynamicRoutes();
+    check('28e convergen tetap Established', sim.getBgpNeighborStates('r1')[0]?.state === 'Established', JSON.stringify(sim.getBgpNeighborStates('r1')));
+  }
+
+  // 28f. BGP failure: AS mismatch → Active; peer tak terjangkau → Connect;
+  //      peer mati → withdrawal (tanpa rute basi).
+  {
+    // f1: AS mismatch
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, 'f1'), fNode('r2', 'R2', 'router', 3, 'f2')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65003, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+    check('28f AS mismatch → Active selamanya', sim.getBgpNeighborStates('r1')[0]?.state === 'Active', JSON.stringify(sim.getBgpNeighborStates('r1')));
+
+    // f2: peer ada (IP terkonfigurasi) tapi di pulau terpisah → Connect selamanya
+    const sim2 = new NetworkSimulator();
+    sim2.syncTopology({
+      nodes: [
+        fNode('r1', 'R1', 'router', 3, 'f3'), fNode('r2', 'R2', 'router', 2, 'f4'), fNode('r3', 'R3', 'router', 2, 'f5'),
+      ],
+      edges: [
+        fEdge('e1', 'r1', 'port1', 'r2', 'port1'),
+      ],
+    });
+    sim2.applyNodeConfig('r1', { ether1: '192.168.1.1/30' }, []);
+    sim2.applyNodeConfig('r2', { ether1: '192.168.1.2/30' }, []);
+    // r3 terisolasi: tidak ada link fisik ke r1/r2, tapi IP peer-nya ada.
+    sim2.applyNodeConfig('r3', { ether1: '192.168.9.9/30' }, []);
+    sim2.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.9.9' }], networks: [] });
+    sim2.setBgp('r3', { asn: 65002, peers: [], networks: [] });
+    sim2.computeDynamicRoutes();
+    check('28f peer ada tapi tak terjangkau → Connect', sim2.getBgpNeighborStates('r1')[0]?.state === 'Connect', JSON.stringify(sim2.getBgpNeighborStates('r1')));
+
+    // f3: withdrawal — peer dimatikan → rute dicabut, tidak ada rute basi
+    const sim3 = new NetworkSimulator();
+    sim3.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, 'f6'), fNode('r2', 'R2', 'router', 3, 'f7')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim3.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim3.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim3.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim3.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+    sim3.computeDynamicRoutes();
+    check('28f sebelum gagal: r1 belajar 10.0.2.0/24', !!routeOf(sim3, 'r1', '10.0.2.0/24'));
+    check('28f RIB r1 memuat 10.0.2.0/24 via r2', !!sim3.getBgpRib('r1').find((e) => e.dst === '10.0.2.0/24' && !e.local));
+
+    sim3.setNodePowered('r2', false);
+    sim3.computeDynamicRoutes();
+    check('28f peer mati → state Idle', sim3.getBgpNeighborStates('r1')[0]?.state === 'Idle', JSON.stringify(sim3.getBgpNeighborStates('r1')));
+    check('28f peer mati → rute r1 dicabut (withdrawal)', !routeOf(sim3, 'r1', '10.0.2.0/24'));
+    check('28f peer mati → RIB tanpa rute asing', !sim3.getBgpRib('r1').some((e) => !e.local && e.dst === '10.0.2.0/24'));
+
+    sim3.setNodePowered('r2', true);
+    sim3.computeDynamicRoutes();
+    check('28f peer hidup → Established kembali', sim3.getBgpNeighborStates('r1')[0]?.state === 'Established', JSON.stringify(sim3.getBgpNeighborStates('r1')));
+    check('28f peer hidup → rute kembali', !!routeOf(sim3, 'r1', '10.0.2.0/24'));
+  }
+
+  // 28g. BGP loop prevention & AS-path length (segitiga 3 AS).
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        fNode('r1', 'R1', 'router', 4, 'g1'), fNode('r2', 'R2', 'router', 3, 'g2'), fNode('r3', 'R3', 'router', 4, 'g3'),
+      ],
+      edges: [
+        fEdge('e1', 'r1', 'port1', 'r2', 'port1'), fEdge('e2', 'r2', 'port2', 'r3', 'port1'),
+        fEdge('e3', 'r1', 'port3', 'r3', 'port3'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24', ether3: '192.168.3.1/30' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '192.168.2.1/30' }, []);
+    sim.applyNodeConfig('r3', { ether1: '192.168.2.2/30', ether2: '10.0.9.1/24', ether3: '192.168.3.2/30' }, []);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }, { remoteAs: 65003, remoteAddr: '192.168.3.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }, { remoteAs: 65003, remoteAddr: '192.168.2.2' }], networks: [] });
+    sim.setBgp('r3', { asn: 65003, peers: [{ remoteAs: 65002, remoteAddr: '192.168.2.1' }, { remoteAs: 65001, remoteAddr: '192.168.3.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+
+    const e3 = sim.getBgpRib('r3').find((e) => e.dst === '10.0.1.0/24');
+    check('28g r3 pilih jalur langsung ke r1 (AS-path pendek)', !!e3 && e3.asPath.length === 1 && e3.asPath[0] === 65001, JSON.stringify(e3));
+    check('28g r3 next-hop = r1 (192.168.3.1)', !!e3 && e3.gateway === '192.168.3.1', JSON.stringify(e3));
+    const e1 = sim.getBgpRib('r1').find((e) => e.dst === '10.0.9.0/24');
+    check('28g r1 pilih jalur langsung ke r3 (AS-path pendek)', !!e1 && e1.asPath.length === 1 && e1.asPath[0] === 65003, JSON.stringify(e1));
+    const e2 = sim.getBgpRib('r2').find((e) => e.dst === '10.0.1.0/24');
+    check('28g r2 AS-path [65001] (dari r1, bukan pantulan r3)', !!e2 && e2.asPath.length === 1 && e2.asPath[0] === 65001, JSON.stringify(e2));
+    const local1 = sim.getBgpRib('r1').find((e) => e.dst === '10.0.1.0/24');
+    check('28g prefix sendiri tidak pernah kembali (loop prevention)', !!local1 && local1.local && local1.asPath.length === 0, JSON.stringify(local1));
+    check('28g ping transit r2 lintas 3 AS', sim.simulatePing('r2', '10.0.1.1').success);
+  }
+
+  // 28h. Best-path BGP: LOCAL_PREF menang (rute via peer ber-localPref tinggi).
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        fNode('r1', 'R1', 'router', 4, 'h1'), fNode('r2a', 'R2A', 'router', 3, 'h2'), fNode('r2b', 'R2B', 'router', 3, 'h3'),
+      ],
+      edges: [
+        fEdge('e1', 'r1', 'port1', 'r2a', 'port1'), fEdge('e2', 'r1', 'port2', 'r2b', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '192.168.2.1/30', ether3: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2a', { ether1: '192.168.1.2/30', ether2: '10.0.9.1/24' }, []);
+    sim.applyNodeConfig('r2b', { ether1: '192.168.2.2/30', ether2: '10.0.8.1/24' }, []);
+    sim.setBgp('r1', {
+      asn: 65001,
+      peers: [
+        { remoteAs: 65002, remoteAddr: '192.168.1.2' },
+        { remoteAs: 65002, remoteAddr: '192.168.2.2', localPref: 200 },
+      ],
+      networks: [],
+    });
+    sim.setBgp('r2a', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+    sim.setBgp('r2b', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.2.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+
+    const e = sim.getBgpRib('r1').find((x) => x.dst === '10.0.8.0/24' && !x.local);
+    check('28h LOCAL_PREF 200 menang', !!e && e.localPref === 200, JSON.stringify(e));
+    check('28h next-hop via r2b (192.168.2.2)', !!e && e.gateway === '192.168.2.2', JSON.stringify(e));
+    const r = routeOf(sim, 'r1', '10.0.8.0/24');
+    check('28h tabel routing r1 pakai next-hop r2b', !!r && r.gateway === '192.168.2.2', JSON.stringify(r));
+  }
+
+  // 28i. iBGP non-transit: rute iBGP tidak diiklankan ke iBGP lain;
+  //      rute eBGP boleh transit iBGP (hub-and-spoke).
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        fNode('r1', 'R1', 'router', 3, 'i1'), fNode('r2', 'R2', 'router', 2, 'i2'),
+        fNode('r3', 'R3', 'router', 4, 'i3'), fNode('r4', 'R4', 'router', 3, 'i4'),
+      ],
+      edges: [
+        fEdge('e1', 'r1', 'port1', 'r3', 'port1'), fEdge('e2', 'r2', 'port1', 'r3', 'port2'),
+        fEdge('e3', 'r3', 'port3', 'r4', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.2.2/30' }, []);
+    sim.applyNodeConfig('r3', { ether1: '192.168.1.2/30', ether2: '192.168.2.1/30', ether3: '192.168.3.1/30' }, []);
+    sim.applyNodeConfig('r4', { ether1: '192.168.3.2/30', ether2: '10.0.9.1/24' }, []);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65001, peers: [{ remoteAs: 65001, remoteAddr: '192.168.2.1' }], networks: [] });
+    sim.setBgp('r3', {
+      asn: 65001,
+      peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }, { remoteAs: 65001, remoteAddr: '192.168.2.2' }, { remoteAs: 65002, remoteAddr: '192.168.3.2' }],
+      networks: [],
+    });
+    sim.setBgp('r4', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.3.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+
+    check('28i r2 TIDAK belajar 10.0.1.0/24 (iBGP non-transit)', !sim.getBgpRib('r2').some((e) => e.dst === '10.0.1.0/24'), JSON.stringify(sim.getBgpRib('r2')));
+    const e4 = sim.getBgpRib('r4').find((e) => e.dst === '10.0.1.0/24');
+    check('28i r4 (eBGP) belajar 10.0.1.0/24 asPath [65001]', !!e4 && e4.asPath.length === 1 && e4.asPath[0] === 65001, JSON.stringify(e4));
+    const e1 = sim.getBgpRib('r1').find((e) => e.dst === '10.0.9.0/24');
+    check('28i r1 belajar 10.0.9.0/24 via r3 (iBGP transit eBGP)', !!e1 && e1.asPath.length === 1 && e1.asPath[0] === 65002 && e1.gateway === '192.168.1.2', JSON.stringify(e1));
+    const e2 = sim.getBgpRib('r2').find((e) => e.dst === '10.0.9.0/24');
+    check('28i r2 belajar 10.0.9.0/24 via r3 (192.168.2.1)', !!e2 && e2.gateway === '192.168.2.1', JSON.stringify(e2));
+  }
+
+  // 28j. BGP menjalankan IP-routing (bukan BFS fisik): interface shutdown
+  //      memutus sesi + menarik rute — TCP/179 tak bisa dibangun di atasnya.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [fNode('r1', 'R1', 'router', 3, 'j1'), fNode('r2', 'R2', 'router', 3, 'j2')],
+      edges: [fEdge('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.2.1/24' }, []);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+    check('28j awal: Established + rute', sim.getBgpNeighborStates('r1')[0]?.state === 'Established' && !!routeOf(sim, 'r1', '10.0.2.0/24'));
+
+    // Interface peer di-shutdown → rute connected hilang → peer tak terjangkau.
+    sim.setShutdownIfaces('r2', ['ether1']);
+    sim.computeDynamicRoutes();
+    check('28j iface peer down → Connect (retry)', sim.getBgpNeighborStates('r1')[0]?.state === 'Connect', JSON.stringify(sim.getBgpNeighborStates('r1')));
+    check('28j iface peer down → rute dicabut', !routeOf(sim, 'r1', '10.0.2.0/24'));
+    check('28j iface peer down → RIB tanpa rute asing', !sim.getBgpRib('r1').some((e) => !e.local && e.dst === '10.0.2.0/24'));
+    check('28j iface peer down → ping lintas AS gagal', !sim.simulatePing('r1', '10.0.2.1').success);
+
+    sim.setShutdownIfaces('r2', undefined);
+    sim.computeDynamicRoutes();
+    check('28j no shutdown → Established kembali', sim.getBgpNeighborStates('r1')[0]?.state === 'Established', JSON.stringify(sim.getBgpNeighborStates('r1')));
+    check('28j no shutdown → rute kembali', !!routeOf(sim, 'r1', '10.0.2.0/24'));
+  }
+
+  // 28k. iBGP multi-hop via jalur ROUTING (OSPF transit): sesi terbentuk karena
+  //      tabel routing menjangkau peer — dan putus saat IGP kehilangan jalur.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        fNode('r1', 'R1', 'router', 3, 'k1'), fNode('r3', 'R3', 'router', 3, 'k2'), fNode('r2', 'R2', 'router', 3, 'k3'),
+      ],
+      edges: [
+        fEdge('e1', 'r1', 'port1', 'r3', 'port1'), fEdge('e2', 'r3', 'port2', 'r2', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '10.0.1.1/24' }, []);
+    sim.applyNodeConfig('r3', { ether1: '192.168.1.2/30', ether2: '192.168.2.1/30' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.2.2/30', ether2: '10.0.2.1/24' }, []);
+    // IGP (OSPF) di semua router; r3 transit tanpa BGP.
+    sim.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30', '10.0.1.0/24'] } });
+    sim.setRouting('r3', { ospf: { enabled: true, networks: ['192.168.1.0/30', '192.168.2.0/30'] } });
+    sim.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.2.0/30', '10.0.2.0/24'] } });
+    // iBGP multi-hop: r1↔r2 peer IP transit masing-masing (bukan link langsung).
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65001, remoteAddr: '192.168.2.2' }], networks: [] });
+    sim.setBgp('r2', { asn: 65001, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [] });
+    sim.computeDynamicRoutes();
+
+    check('28k iBGP multi-hop Established (via OSPF)', sim.getBgpNeighborStates('r1')[0]?.state === 'Established' && sim.getBgpNeighborStates('r2')[0]?.state === 'Established', JSON.stringify([sim.getBgpNeighborStates('r1'), sim.getBgpNeighborStates('r2')]));
+    const e1k = sim.getBgpRib('r1').find((e) => e.dst === '10.0.2.0/24' && !e.local);
+    const e2k = sim.getBgpRib('r2').find((e) => e.dst === '10.0.1.0/24' && !e.local);
+    check('28k r1 belajar 10.0.2.0/24 via iBGP (asPath kosong)', !!e1k && e1k.asPath.length === 0, JSON.stringify(e1k));
+    check('28k next-hop r1 = IP egress ADVERTISER r2 (192.168.2.2)', !!e1k && e1k.gateway === '192.168.2.2', JSON.stringify(e1k));
+    check('28k next-hop r2 = IP egress ADVERTISER r1 (192.168.1.1)', !!e2k && e2k.gateway === '192.168.1.1', JSON.stringify(e2k));
+    check('28k ping r1→10.0.2.1 lewat r3', sim.simulatePing('r1', '10.0.2.1').success);
+
+    // IGP r3-r1 putus → rute OSPF hilang → peer tak terjangkau → sesi putus.
+    sim.setShutdownIfaces('r3', ['ether1']);
+    sim.computeDynamicRoutes();
+    check('28k jalur IGP putus → sesi Connect (bukan Established)', sim.getBgpNeighborStates('r1')[0]?.state === 'Connect', JSON.stringify(sim.getBgpNeighborStates('r1')));
+    check('28k jalur IGP putus → rute BGP dicabut', !routeOf(sim, 'r1', '10.0.2.0/24'));
+    check('28k jalur IGP putus → RIB r1 tanpa rute iBGP', !sim.getBgpRib('r1').some((e) => !e.local));
+
+    sim.setShutdownIfaces('r3', undefined);
+    sim.computeDynamicRoutes();
+    check('28k IGP pulih → sesi Established lagi', sim.getBgpNeighborStates('r1')[0]?.state === 'Established' && !!routeOf(sim, 'r1', '10.0.2.0/24'), JSON.stringify(sim.getBgpNeighborStates('r1')));
+  }
+}
+
+// ── 29. L2/L3 FORWARDING & NETWORK SERVICES hardening ────────────────────
+//     Audit Part 3: interface state, ARP (cache/invalidation/unresolved),
+//     IPv4 routing (LPM /8 /16 /24 /30 /32, route removal, interface-down),
+//     TTL, IPv6 (NDP/ICMPv6/hop limit), DHCP (pool/exhaustion/VLAN isolation/
+//     duplicate), NAT (static one-to-one, PAT, state, return traffic),
+//     firewall/ACL (in/out-interface, proto, port, direction), drop reasons
+//     kanonik. Setiap fitur diuji memengaruhi PERILAKU paket nyata.
+console.log('\n== 29. L2/L3 forwarding & network services (engine hardening) ==');
+{
+  const sNode = (id: string, name: string, deviceType: string, portCount: number, macSeed: string, vendor?: string) => ({
+    id, name,
+    vendor: vendor || (deviceType === 'pc' || deviceType === 'server' ? 'linux' : 'mikrotik'),
+    model: deviceType,
+    deviceType,
+    ports: Array.from({ length: portCount }, (_, i) => ({
+      id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up',
+      macAddress: `3a:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01`,
+    })),
+  });
+  const sEdge = (id: string, a: string, ap: string, b: string, bp: string) => ({
+    id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
+  });
+  const dropsOf = (sim: NetworkSimulator, reason?: string) =>
+    sim.eventHistory.filter((e) => e.type === 'PACKET_DROPPED' && (!reason || e.data?.reason === reason));
+
+  // 29a. Longest-Prefix Match lintas panjang prefix (/8 /16 /24 /30 /32):
+  //      rute terspesifik menang walau rute lebih luas ada di gateway beda.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        sNode('r1', 'R1', 'router', 3, 'a1'),
+        sNode('r2', 'R2', 'router', 4, 'a2'),
+        sNode('r3', 'R3', 'router', 4, 'a3'),
+        sNode('pcD1', 'PCD1', 'pc', 1, 'a4'),
+        sNode('pcD2', 'PCD2', 'pc', 1, 'a5'),
+        sNode('pcD3', 'PCD3', 'pc', 1, 'a6'),
+        sNode('pcD4', 'PCD4', 'pc', 1, 'a7'),
+      ],
+      edges: [
+        sEdge('e1', 'r1', 'port1', 'r2', 'port1'),
+        sEdge('e2', 'r1', 'port2', 'r3', 'port1'),
+        sEdge('e3', 'r2', 'port2', 'pcD1', 'port1'),
+        sEdge('e4', 'r3', 'port2', 'pcD2', 'port1'),
+        sEdge('e5', 'r2', 'port3', 'pcD3', 'port1'),
+        sEdge('e6', 'r2', 'port4', 'pcD4', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30', ether2: '192.168.2.1/30' }, [
+      { dst: '10.0.0.0/8', gateway: '192.168.1.2' },
+      { dst: '10.1.0.0/16', gateway: '192.168.2.2' },
+      { dst: '10.1.1.0/24', gateway: '192.168.1.2' },
+      { dst: '10.1.1.4/30', gateway: '192.168.2.2' },
+      { dst: '10.1.1.5/32', gateway: '192.168.1.2' },
+    ]);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.5.1.1/24', ether3: '10.1.3.1/24', ether4: '10.1.1.1/24' }, []);
+    sim.applyNodeConfig('r3', { ether1: '192.168.2.2/30', ether2: '10.1.2.1/24' }, []);
+    sim.applyNodeConfig('pcD1', { ether1: '10.5.1.10/24' }, [{ dst: '0.0.0.0/0', gateway: '10.5.1.1' }]);
+    sim.applyNodeConfig('pcD2', { ether1: '10.1.2.10/24' }, [{ dst: '0.0.0.0/0', gateway: '10.1.2.1' }]);
+    sim.applyNodeConfig('pcD3', { ether1: '10.1.3.10/24' }, [{ dst: '0.0.0.0/0', gateway: '10.1.3.1' }]);
+    sim.applyNodeConfig('pcD4', { ether1: '10.1.1.200/24' }, [{ dst: '0.0.0.0/0', gateway: '10.1.1.1' }]);
+
+    const r1 = sim.getDevice('r1')!;
+    const rt = r1.routing;
+    check('29a /8 dipilih untuk 10.2.3.4', rt.lookup('10.2.3.4')?.gateway === '192.168.1.2', JSON.stringify(rt.lookup('10.2.3.4')));
+    check('29a /16 dipilih untuk 10.1.9.9', rt.lookup('10.1.9.9')?.gateway === '192.168.2.2', JSON.stringify(rt.lookup('10.1.9.9')));
+    check('29a /24 dipilih untuk 10.1.1.200', rt.lookup('10.1.1.200')?.gateway === '192.168.1.2', JSON.stringify(rt.lookup('10.1.1.200')));
+    check('29a /30 dipilih untuk 10.1.1.6', rt.lookup('10.1.1.6')?.gateway === '192.168.2.2', JSON.stringify(rt.lookup('10.1.1.6')));
+    check('29a /32 dipilih untuk 10.1.1.5', rt.lookup('10.1.1.5')?.gateway === '192.168.1.2', JSON.stringify(rt.lookup('10.1.1.5')));
+    check('29a /30 tidak menelan 10.1.1.3 (kembali /24)', rt.lookup('10.1.1.3')?.gateway === '192.168.1.2', JSON.stringify(rt.lookup('10.1.1.3')));
+    check('29a tanpa rute → null', rt.lookup('172.16.0.1') === null);
+
+    // E2E: /16 harus menang atas /8 (10.1.2.10 hanya dikenal r3).
+    const p1 = sim.simulatePing('r1', '10.1.2.10');
+    check('29a E2E /16 dipilih (10.1.2.10 via r3)', p1.success, JSON.stringify(p1));
+    // E2E: /8 menang bila /16 tidak mencakup (10.5.1.10 hanya dikenal r2).
+    const p2 = sim.simulatePing('r1', '10.5.1.10');
+    check('29a E2E /8 dipilih (10.5.1.10 via r2)', p2.success, JSON.stringify(p2));
+    // E2E: /24 menang atas /16 dan /8 (10.1.1.200 hanya dikenal r2 via /24;
+    // /16 mengarah ke r3 yang tidak punya subnet 10.1.1.0/24).
+    const p3 = sim.simulatePing('r1', '10.1.1.200');
+    check('29a E2E /24 dipilih (10.1.1.200 via r2)', p3.success, JSON.stringify(p3));
+    // E2E negatif: 10.1.3.10 berada di /16 (via r3) meski r2 punya subnet-nya —
+    // bila lookup salah memilih /8, ping justru berhasil. Gagal = LPM benar.
+    const p4 = sim.simulatePing('r1', '10.1.3.10');
+    check('29a E2E LPM lebih spesifik menang (10.1.3.10 gagal via r3)', !p4.success && p4.reason === 'unreachable', JSON.stringify(p4));
+  }
+
+// 29b. Route removal & interface-down: konfigurasi rute dihapus → paket
+//      tidak lagi diteruskan; shutdown interface router → forwarding berhenti
+//      (ingress dan egress); no shutdown → pulih.
+{
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [sNode('pc1', 'PC1', 'pc', 1, 'b1'), sNode('r1', 'R1', 'router', 3, 'b2'), sNode('r2', 'R2', 'router', 3, 'b3'), sNode('pcX', 'PCX', 'pc', 1, 'b4')],
+      edges: [
+        sEdge('e1', 'pc1', 'port1', 'r1', 'port1'),
+        sEdge('e2', 'r1', 'port2', 'r2', 'port1'),
+        sEdge('e3', 'r2', 'port2', 'pcX', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('pc1', { ether1: '10.0.0.10/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.0.1' }]);
+    sim.applyNodeConfig('r1', { ether1: '10.0.0.1/24', ether2: '192.168.1.1/30' }, [{ dst: '10.0.1.0/24', gateway: '192.168.1.2' }]);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30', ether2: '10.0.1.1/24' }, [{ dst: '10.0.0.0/24', gateway: '192.168.1.1' }]);
+    sim.applyNodeConfig('pcX', { ether1: '10.0.1.5/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    check('29b rute statis ada → ping lintas router sukses', sim.simulatePing('pc1', '10.0.1.5').success);
+
+    // Penghapusan rute (re-konfigurasi tanpa rute tsb) → paket sampai di r1,
+    // lookup gagal → drop no-route (code NO_ROUTE) + ICMP unreachable.
+    sim.applyNodeConfig('r1', { ether1: '10.0.0.1/24', ether2: '192.168.1.1/30' }, []);
+    const gone = sim.simulatePing('pc1', '10.0.1.5');
+    check('29b rute dihapus → ping gagal (unreachable)', !gone.success && gone.reason === 'unreachable', JSON.stringify(gone));
+    const noRoute = dropsOf(sim, 'no-route');
+    check('29b drop alasan no-route → code NO_ROUTE', noRoute.some((d) => d.data?.code === 'NO_ROUTE'), JSON.stringify(noRoute.map((d) => d.data?.code)));
+
+    sim.applyNodeConfig('r1', { ether1: '10.0.0.1/24', ether2: '192.168.1.1/30' }, [{ dst: '10.0.1.0/24', gateway: '192.168.1.2' }]);
+    check('29b rute dipasang ulang → ping kembali', sim.simulatePing('pc1', '10.0.1.5').success);
+
+    // Interface router shutdown: frame yang MASUK interface mati ditolak (PORT_DOWN).
+    sim.setShutdownIfaces('r1', ['ether1']);
+    const downIn = sim.simulatePing('pc1', '10.0.1.5');
+    check('29b shutdown ether1 → forwarding berhenti', !downIn.success, JSON.stringify(downIn));
+    const portDown = dropsOf(sim, 'iface-down');
+    check('29b drop iface-down → code PORT_DOWN', portDown.some((d) => d.data?.code === 'PORT_DOWN'), JSON.stringify(portDown.map((d) => d.data?.code)));
+
+    sim.setShutdownIfaces('r1', []);
+    check('29b no shutdown → forwarding pulih', sim.simulatePing('pc1', '10.0.1.5').success);
+
+// Interface DESTINASI down: rute connected ditarik dari tabel (sama seperti
+// router nyata) → drop no-route / NO_ROUTE; no shutdown → rute kembali.
+    sim.setShutdownIfaces('r2', ['ether2']);
+    const downDst = sim.simulatePing('pc1', '10.0.1.5');
+    check('29b interface destinasi down → ping gagal', !downDst.success, JSON.stringify(downDst));
+    const routeDown = dropsOf(sim, 'no-route');
+    check('29b interface down → rute ditarik (drop no-route → NO_ROUTE)', routeDown.some((d) => d.data?.code === 'NO_ROUTE'), JSON.stringify(routeDown.map((d) => d.data?.code)));
+    sim.setShutdownIfaces('r2', []);
+    check('29b no shutdown destinasi → ping pulih', sim.simulatePing('pc1', '10.0.1.5').success);
+  }
+
+  // 29c. ARP: unresolved destination → ARP_REQUEST dibroadcast tanpa balasan →
+  //      buffer dibuang deterministik ARP_UNRESOLVED; cache aging menginvalidasi
+  //      entri; ARP ulang menyelesaikan MAC lagi.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [sNode('pc1', 'PC1', 'pc', 1, 'c1'), sNode('sw1', 'SW1', 'switch', 4, 'c2'), sNode('pc2', 'PC2', 'pc', 1, 'c3')],
+      edges: [
+        sEdge('e1', 'pc1', 'port1', 'sw1', 'port1'),
+        sEdge('e2', 'pc2', 'port1', 'sw1', 'port2'),
+      ],
+    });
+    sim.applyNodeConfig('pc1', { ether1: '10.0.8.2/24' }, []);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.8.3/24' }, []);
+    check('29c pra-syarat: ping ARP-resolved sukses', sim.simulatePing('pc1', '10.0.8.3').success);
+
+    const pc1 = sim.getDevice('pc1')!;
+    const pc2 = sim.getDevice('pc2')!;
+    const pc2Mac = pc2.getIfaceByPortId('port1')!.mac;
+    const entry = pc1.arpCache.resolve('10.0.8.3');
+    check('29c ARP cache berisi 10.0.8.3 → MAC pc2', !!entry && entry.mac === pc2Mac, JSON.stringify(entry));
+    check('29c cache invalidation (aging): entri tua dihapus', (() => {
+      const aged = pc1.arpCache.age(sim.time.now() + 120_001);
+      return aged.includes('10.0.8.3') && pc1.arpCache.resolve('10.0.8.3') === null;
+    })());
+    check('29c setelah invalidasi ping tetap jalan (ARP ulang)', sim.simulatePing('pc1', '10.0.8.3').success);
+    check('29c ARP cache terisi lagi', pc1.arpCache.resolve('10.0.8.3')?.mac === pc2Mac);
+
+    // Unresolved: tidak ada yang memiliki 10.0.8.99 → buffer dibuang ARP_UNRESOLVED.
+    const baseEvents = sim.eventHistory.length;
+    sim.simulatePing('pc1', '10.0.8.99');
+    const arpReqs = sim.eventHistory.filter((e) => e.type === 'ARP_REQUEST' && e.data?.who === '10.0.8.99');
+    check('29c ARP request dibroadcast untuk tujuan tak dikenal', arpReqs.length > 0, JSON.stringify(arpReqs));
+    const unresolved = dropsOf(sim, 'arp-unresolved');
+    check('29c drop arp-unresolved → code ARP_UNRESOLVED', unresolved.some((d) => d.data?.code === 'ARP_UNRESOLVED'), JSON.stringify(unresolved.map((d) => d.data?.code)));
+    check('29c tidak ada MAC yang di-resolve secara ajaib', pc1.arpCache.resolve('10.0.8.99') === null);
+    void baseEvents;
+  }
+
+  // 29d. DHCP nyata: DORA, pool habis (exhaustion), anti-duplikat alokasi,
+  //      isolasi VLAN (pool per subinterface).
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [
+        sNode('r1', 'R1', 'router', 3, 'd1'),
+        sNode('sw1', 'SW1', 'switch', 5, 'd2'),
+        sNode('pc1', 'PC1', 'pc', 1, 'd3'),
+        sNode('pc2', 'PC2', 'pc', 1, 'd4'),
+        sNode('pc3', 'PC3', 'pc', 1, 'd5'),
+      ],
+      edges: [
+        sEdge('e1', 'pc1', 'port1', 'sw1', 'port1'),
+        sEdge('e2', 'pc2', 'port1', 'sw1', 'port2'),
+        sEdge('e3', 'pc3', 'port1', 'sw1', 'port3'),
+        sEdge('e4', 'sw1', 'port4', 'r1', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('r1', { ether1: '10.0.5.1/24' }, []);
+    sim.setDhcpPools({ r1: [{ name: 'poolA', range: '10.0.5.100 - 10.0.5.101', iface: 'ether1', gateway: '10.0.5.1' }] });
+
+    const l1 = sim.grantDhcpLease('pc1', 'ether1');
+    const l2 = sim.grantDhcpLease('pc2', 'ether1');
+    const l3 = sim.grantDhcpLease('pc3', 'ether1');
+    check('29d DORA: klien1 dapat 10.0.5.100', !!l1 && l1.ip === '10.0.5.100', JSON.stringify(l1));
+    check('29d DORA: klien2 dapat 10.0.5.101', !!l2 && l2.ip === '10.0.5.101', JSON.stringify(l2));
+    check('29d pool habis: klien3 tanpa lease', l3 === null, JSON.stringify(l3));
+    const events = sim.eventHistory;
+    const dora = ['DHCP_DISCOVER', 'DHCP_OFFER', 'DHCP_REQUEST', 'DHCP_ACK'];
+    check('29d siklus DORA lengkap terekam', dora.every((t) => events.some((e) => e.type === t)), JSON.stringify(dora.map((t) => events.filter((e) => e.type === t).length)));
+    const noPool = dropsOf(sim, 'dhcp-no-pool');
+    check('29d exhaustion → drop dhcp-no-pool (DHCP_NO_POOL)', noPool.some((d) => d.data?.code === 'DHCP_NO_POOL'), JSON.stringify(noPool.map((d) => d.data?.code)));
+    check('29d gateway lease = 10.0.5.1', l1?.gateway === '10.0.5.1');
+    check('29d klien DHCP bisa ping gateway', (() => { const p = sim.simulatePing('pc1', '10.0.5.1'); return p.success; })());
+
+    // Anti-duplikat: host statis 10.0.5.100 → klien baru TIDAK pernah dapat .100.
+    const sim2 = new NetworkSimulator();
+    sim2.syncTopology({
+      nodes: [
+        sNode('r1', 'R1', 'router', 3, 'd6'),
+        sNode('sw1', 'SW1', 'switch', 5, 'd7'),
+        sNode('pcX', 'PCX', 'pc', 1, 'd8'),
+        sNode('pcY', 'PCY', 'pc', 1, 'd9'),
+      ],
+      edges: [
+        sEdge('e1', 'pcX', 'port1', 'sw1', 'port1'),
+        sEdge('e2', 'pcY', 'port1', 'sw1', 'port2'),
+        sEdge('e3', 'sw1', 'port4', 'r1', 'port1'),
+      ],
+    });
+    sim2.applyNodeConfig('r1', { ether1: '10.0.5.1/24' }, []);
+    sim2.applyNodeConfig('pcX', { ether1: '10.0.5.100/24' }, []);
+    sim2.setDhcpPools({ r1: [{ name: 'poolA', range: '10.0.5.100 - 10.0.5.110', iface: 'ether1', gateway: '10.0.5.1' }] });
+    const lx = sim2.grantDhcpLease('pcY', 'ether1');
+    check('29d alokasi duplikat dicegah (klien baru ≠ .100)', !!lx && lx.ip !== '10.0.5.100', JSON.stringify(lx));
+
+    // Isolasi VLAN: klien VLAN 10 hanya dapat dari pool subinterface 10,
+    // klien VLAN 20 hanya dari pool 20.
+    const sim3 = new NetworkSimulator();
+    sim3.syncTopology({
+      nodes: [
+        sNode('r1', 'R1', 'router', 3, 'da'),
+        sNode('sw1', 'SW1', 'switch', 5, 'db'),
+        sNode('pcA', 'PCA', 'pc', 1, 'dc'),
+        sNode('pcB', 'PCB', 'pc', 1, 'dd'),
+      ],
+      edges: [
+        sEdge('e1', 'pcA', 'port1', 'sw1', 'port1'),
+        sEdge('e2', 'pcB', 'port1', 'sw1', 'port2'),
+        sEdge('e3', 'sw1', 'port4', 'r1', 'port1'),
+      ],
+    });
+    sim3.setPortVlans('sw1', { ether1: 10, ether2: 20 });
+    sim3.setTrunkPorts('sw1', ['ether4']);
+    sim3.setSubinterfaces('r1', [{ name: 'ether1.10', parentPort: 'ether1', vlanId: 10 }, { name: 'ether1.20', parentPort: 'ether1', vlanId: 20 }]);
+    sim3.applyNodeConfig('r1', { 'ether1.10': '10.0.6.1/24', 'ether1.20': '10.0.7.1/24' }, []);
+    sim3.setDhcpPools({ r1: [
+      { name: 'pool10', range: '10.0.6.100 - 10.0.6.199', iface: 'ether1.10', gateway: '10.0.6.1' },
+      { name: 'pool20', range: '10.0.7.100 - 10.0.7.199', iface: 'ether1.20', gateway: '10.0.7.1' },
+    ] });
+    const lA = sim3.grantDhcpLease('pcA', 'ether1');
+    const lB = sim3.grantDhcpLease('pcB', 'ether1');
+    check('29d VLAN 10 → pool 10.0.6.x', !!lA && lA.ip === '10.0.6.100', JSON.stringify(lA));
+    check('29d VLAN 20 → pool 10.0.7.x', !!lB && lB.ip === '10.0.7.100', JSON.stringify(lB));
+    check('29d isolasi: klien VLAN 10 tidak dapat IP VLAN 20', !!lA && !lA.ip.startsWith('10.0.7.'), JSON.stringify(lA));
+  }
+
+  // 29e. NAT: static one-to-one (srcnat to-addresses) + session state + return
+  //      traffic; PAT (port ephemeral dua host); NAT_FAILURE (port exhaustion).
+  {
+    // e1. Static NAT E2E: 10.0.1.2 → 203.0.113.1 di egress WAN, balasan
+    //     dikembalikan ke host asal (session state + unmasquerade). Server
+    //     berada di AS berbeda (r2) yang TIDAK punya rute balik ke 10.0.1.0/24
+    //     — tanpa NAT egress gagal; dengan NAT balasan ke 203.0.113.1 sampai
+    //     ke r1 yang membalikkan translasi.
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [sNode('pc1', 'PC1', 'pc', 1, 'e1'), sNode('r1', 'R1', 'router', 3, 'e2'), sNode('r2', 'R2', 'router', 3, 'e3'), sNode('svr', 'SVR', 'server', 1, 'e4')],
+      edges: [
+        sEdge('e1', 'pc1', 'port1', 'r1', 'port1'),
+        sEdge('e2', 'r1', 'port2', 'r2', 'port1'),
+        sEdge('e3', 'r2', 'port2', 'svr', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig('pc1', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    sim.applyNodeConfig('r1', { ether1: '10.0.1.1/24', ether2: '203.0.113.1/30' }, [{ dst: '10.0.99.0/24', gateway: '203.0.113.2' }]);
+    sim.applyNodeConfig('r2', { ether1: '203.0.113.2/30', ether2: '10.0.99.1/24' }, []);
+    sim.applyNodeConfig('svr', { ether1: '10.0.99.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.99.1' }]);
+    sim.setWebServer('svr', { enabled: true, port: 80, content: 'Public Static' });
+
+    const before = sim.simulateTcpConnect('pc1', '10.0.99.2', 80);
+    check('29e tanpa NAT: TCP keluar gagal (no route balik)', !before.ok && before.reason === 'unreachable', JSON.stringify(before));
+
+    sim.setNatRules('r1', [{ chain: 'srcnat', action: 'srcnat', outInterface: 'ether2', toAddresses: '203.0.113.1' }]);
+    const nat = sim.simulateTcpConnect('pc1', '10.0.99.2', 80);
+    check('29e static NAT: TCP ke server sukses', nat.ok && nat.status === 200 && nat.body === 'Public Static', JSON.stringify(nat));
+    const srcnatRewrites = sim.eventHistory.filter((e) => e.type === 'NAT_REWRITE' && e.data?.action === 'srcnat');
+    check('29e paket benar-benar di-rewrite (NAT_REWRITE srcnat)', srcnatRewrites.length > 0, JSON.stringify(srcnatRewrites[0]));
+    const sessions = (sim.getDevice('r1') as any).nat.sessions as Map<string, { kind: string; original: { ip: string }; translated: { ip: string } }>;
+    const staticSess = [...sessions.values()].find((s) => s.kind === 'static');
+    check('29e session state tersimpan (original → translated)', !!staticSess && staticSess.original.ip === '10.0.1.2' && staticSess.translated.ip === '203.0.113.1', JSON.stringify(staticSess));
+
+    // e2. PAT: dua host internal, srcPort sama, dst sama → port ephemeral berbeda.
+    const t = new NatTranslator();
+    const mk = (srcIp: string, srcPort: number) => ({
+      srcIp, srcPort, dstIp: '8.8.8.8', dstPort: 80, protocol: 'tcp',
+    }) as unknown as Packet;
+    const p1 = mk('10.0.1.2', 1000);
+    const p2 = mk('10.0.1.3', 1000);
+    check('29e PAT: host1 masquerade sukses (port 1000 dipertahankan)', t.masquerade(p1, '203.0.113.1', 'ether2', 0) === true && p1.srcIp === '203.0.113.1' && p1.srcPort === 1000, JSON.stringify({ ...p1, protocol: 'tcp' }));
+    check('29e PAT: host2 dapat port ephemeral berbeda', t.masquerade(p2, '203.0.113.1', 'ether2', 0) === true && p2.srcIp === '203.0.113.1' && p2.srcPort !== 1000, JSON.stringify({ ...p2, protocol: 'tcp' }));
+    const reply = { srcIp: '8.8.8.8', srcPort: 80, dstIp: '203.0.113.1', dstPort: p2.srcPort, protocol: 'tcp' } as unknown as Packet;
+    check('29e PAT: return traffic dibalikkan ke host2', t.unmasquerade(reply, 1) === true && reply.dstIp === '10.0.1.3', JSON.stringify(reply));
+    check('29e masquerade pada IP egress sendiri → tidak ada translasi', t.masquerade(mk('203.0.113.1', 5000), '203.0.113.1', 'ether2', 1) === false);
+
+    // e3. Port exhaustion → masquerade gagal → NAT_FAILURE (drop nat-port-exhausted).
+    const ex = new NatTranslator();
+    for (let port = 1024; port <= 61023; port++) {
+      ex.record({
+        key: `203.0.113.1:${port}->8.8.8.8:80|tcp`,
+        original: { ip: '10.9.9.9', port },
+        translated: { ip: '203.0.113.1', port },
+        outInterface: 'ether2',
+        kind: 'masquerade',
+      });
+    }
+    const exPkt = mk('10.0.0.2', 4000);
+    check('29e NAT port exhaustion → masquerade gagal (NAT_FAILURE)', ex.masquerade(exPkt, '203.0.113.1', 'ether2', 1) === false, JSON.stringify(exPkt));
+    check('29e dropCodeOf(nat-port-exhausted) = NAT_FAILURE', dropCodeOf('nat-port-exhausted') === 'NAT_FAILURE');
+  }
+
+  // 29f. Firewall: rule memengaruhi forwarding nyata — in-interface, protocol,
+  //      port, out-interface (direction), dan kode drop FIREWALL_DENY.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [sNode('pcA', 'PCA', 'pc', 1, 'f1'), sNode('rA', 'RA', 'router', 4, 'f2'), sNode('pcB', 'PCB', 'pc', 1, 'f3'), sNode('pcC', 'PCC', 'pc', 1, 'f4')],
+      edges: [
+        sEdge('e1', 'pcA', 'port1', 'rA', 'port1'),
+        sEdge('e2', 'pcB', 'port1', 'rA', 'port2'),
+        sEdge('e3', 'pcC', 'port1', 'rA', 'port3'),
+      ],
+    });
+    sim.applyNodeConfig('rA', { ether1: '10.0.1.1/24', ether2: '10.0.2.1/24', ether3: '10.0.3.1/24' }, []);
+    sim.applyNodeConfig('pcA', { ether1: '10.0.1.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.1.1' }]);
+    sim.applyNodeConfig('pcB', { ether1: '10.0.2.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.2.1' }]);
+    sim.applyNodeConfig('pcC', { ether1: '10.0.3.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.3.1' }]);
+    sim.setWebServer('pcB', { enabled: true, port: 80, content: 'PCB' });
+    sim.setWebServer('pcC', { enabled: true, port: 8080, content: 'PCC-8080' });
+    check('29f tanpa rule → permit (ping jalan)', sim.simulatePing('pcA', '10.0.2.2').success);
+
+    // Protocol: deny icmp saja — ping diblokir, TCP tetap jalan.
+    sim.setAcls('rA', [{ action: 'deny', proto: 'icmp', src: '10.0.1.0/24', dst: '10.0.2.0/24' }]);
+    const icmpDeny = sim.simulatePing('pcA', '10.0.2.2');
+    check('29f deny proto icmp → ping diblokir', !icmpDeny.success && icmpDeny.reason === 'blocked', JSON.stringify(icmpDeny));
+    check('29f deny icmp → TCP tetap jalan', sim.simulateTcpConnect('pcA', '10.0.2.2', 80).ok);
+    // Arah balik: request pcB→pcA lolos ingress (src 10.0.2.2 tak cocok), tapi
+    // REPLY pcA→pcB (src 10.0.1.2, dst 10.0.2.2) cocok rule → diblokir. Stateless.
+    const revIcmp = sim.simulatePing('pcB', '10.0.1.2');
+    check('29f deny icmp: reply arah balik juga diblokir (stateless)', !revIcmp.success && revIcmp.reason === 'blocked', JSON.stringify(revIcmp));
+
+    // Port: deny dstPort 8080 — hanya port itu yang diblokir.
+    sim.setAcls('rA', [{ action: 'deny', proto: 'tcp', dst: '10.0.3.0/24', dstPort: '8080' }]);
+    const portDeny = sim.simulateTcpConnect('pcA', '10.0.3.2', 8080);
+    check('29f deny dstPort 8080 → TCP 8080 diblokir', !portDeny.ok && portDeny.reason === 'blocked', JSON.stringify(portDeny));
+    sim.setWebServer('pcC', { enabled: true, port: 80, content: 'PCC-80' });
+    check('29f port lain (80) tidak kena rule', sim.simulateTcpConnect('pcA', '10.0.3.2', 80).ok);
+
+    // In-interface: deny semua yang MASUK ether1 — egress interface lain bebas.
+    sim.setAcls('rA', [{ action: 'deny', inInterface: 'ether1' }]);
+    check('29f deny in-interface ether1 → pcA diblokir', !sim.simulatePing('pcA', '10.0.2.2').success);
+    check('29f deny in-interface ether1 → pcC (ether3) tetap jalan', sim.simulatePing('pcC', '10.0.2.2').success);
+    // Arah balik: request pcB→pcA masuk ether2 (lolos), reply pcA masuk ether1
+    // (kena deny) → ping balik gagal. Stateless.
+    const revIn = sim.simulatePing('pcB', '10.0.1.2');
+    check('29f deny in-interface ether1: reply yang masuk ether1 juga diblokir', !revIn.success && revIn.reason === 'blocked', JSON.stringify(revIn));
+
+    // Out-interface (direction): deny egress ether3 — hanya trafik keluar itu.
+    sim.setAcls('rA', [{ action: 'deny', outInterface: 'ether3' }]);
+    check('29f deny out-interface ether3 → ke pcC diblokir', !sim.simulatePing('pcB', '10.0.3.2').success);
+    check('29f deny out-interface ether3 → ke pcB (ether2) jalan', sim.simulatePing('pcB', '10.0.2.2').success);
+
+    // Kode drop kanonik: rule tanpa aclId = firewall filter → FIREWALL_DENY.
+    const fwDrops = dropsOf(sim, 'firewall');
+    check('29f drop reason firewall → code FIREWALL_DENY', fwDrops.some((d) => d.data?.code === 'FIREWALL_DENY'), JSON.stringify(fwDrops.map((d) => d.data?.code)));
+  }
+
+  // 29g. IPv6: NDP (NS/NA), ICMPv6 echo, hop limit per hop yang dirutekan,
+  //      no-route v6 → NO_ROUTE.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [sNode('pc1', 'PC1', 'pc', 1, 'g1'), sNode('r1', 'R1', 'router', 3, 'g2'), sNode('r2', 'R2', 'router', 3, 'g3'), sNode('pc2', 'PC2', 'pc', 1, 'g4')],
+      edges: [
+        sEdge('e1', 'pc1', 'port1', 'r1', 'port1'),
+        sEdge('e2', 'r1', 'port2', 'r2', 'port1'),
+        sEdge('e3', 'r2', 'port2', 'pc2', 'port1'),
+      ],
+    });
+    sim.applyNodeConfig6('pc1', { ether1: '2001:db8:1::10/64' }, [{ dst: '::/0', gateway: '2001:db8:1::1' }]);
+    sim.applyNodeConfig6('r1', { ether1: '2001:db8:1::1/64', ether2: '2001:db8:2::1/64' }, [{ dst: '2001:db8:3::/64', gateway: '2001:db8:2::2' }]);
+    sim.applyNodeConfig6('r2', { ether1: '2001:db8:2::2/64', ether2: '2001:db8:3::1/64' }, [{ dst: '2001:db8:1::/64', gateway: '2001:db8:2::1' }]);
+    sim.applyNodeConfig6('pc2', { ether1: '2001:db8:3::20/64' }, [{ dst: '::/0', gateway: '2001:db8:3::1' }]);
+
+    const ping6 = sim.simulatePing6('pc1', '2001:db8:3::20');
+    check('29g ping6 lintas 2 router sukses', ping6.success, JSON.stringify(ping6));
+    check('29g hop limit: 64 − 2 hop = 62 di tujuan', ping6.ttlAtDestination === 62, String(ping6.ttlAtDestination));
+    const pc1 = sim.getDevice('pc1')!;
+    const r1Mac = sim.getDevice('r1')!.getIfaceByPortId('port1')!.mac;
+    const nd = pc1.ipv6Neighbors.resolve('2001:db8:1::1');
+    check('29g NDP: neighbor table pc1 berisi gateway (MAC r1)', !!nd && nd.mac === r1Mac, JSON.stringify(nd));
+
+    // No-route IPv6 → drop no-route-v6, code NO_ROUTE.
+    const unr = sim.simulatePing6('pc1', '2001:db8:99::1');
+    check('29g IPv6 tanpa rute → unreachable', !unr.success && unr.reason === 'unreachable', JSON.stringify(unr));
+    const v6nr = dropsOf(sim, 'no-route-v6');
+    check('29g drop no-route-v6 → code NO_ROUTE', v6nr.some((d) => d.data?.code === 'NO_ROUTE'), JSON.stringify(v6nr.map((d) => d.data?.code)));
+  }
+
+  // 29h. Drop reasons kanonik E2E: VLAN_MISMATCH (port dipindah VLAN) dan
+  //      TTL_EXPIRED (traceroute), plus pemetaan lengkap yang dijanjikan.
+  {
+    // VLAN_MISMATCH: MAC dipelajari di VLAN 10, port egress dipindah ke VLAN 20
+    // → unicast ke MAC itu ditolak egress (bukan diam-diam diteruskan).
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [sNode('pcA', 'PCA', 'pc', 1, 'h1'), sNode('pcB', 'PCB', 'pc', 1, 'h2'), sNode('sw1', 'SW1', 'switch', 4, 'h3')],
+      edges: [
+        sEdge('e1', 'pcA', 'port1', 'sw1', 'port1'),
+        sEdge('e2', 'pcB', 'port1', 'sw1', 'port2'),
+      ],
+    });
+    sim.setPortVlans('sw1', { ether1: 10, ether2: 10 });
+    sim.applyNodeConfig('pcA', { ether1: '10.0.1.2/24' }, []);
+    sim.applyNodeConfig('pcB', { ether1: '10.0.1.3/24' }, []);
+    check('29h baseline same-VLAN ping sukses', sim.simulatePing('pcA', '10.0.1.3').success);
+
+    sim.setPortVlans('sw1', { ether1: 10, ether2: 20 });
+    const moved = sim.simulatePing('pcA', '10.0.1.3');
+    check('29h port dipindah VLAN → forwarding berhenti', !moved.success, JSON.stringify(moved));
+    const vlanDrops = dropsOf(sim, 'vlan');
+    check('29h drop reason vlan → code VLAN_MISMATCH', vlanDrops.some((d) => d.data?.code === 'VLAN_MISMATCH'), JSON.stringify(vlanDrops.map((d) => d.data?.code)));
+
+    // TTL_EXPIRED: traceroute memicu TTL=1 probe yang habis di router.
+    const sim2 = new NetworkSimulator();
+    sim2.syncTopology({
+      nodes: [sNode('pc1', 'PC1', 'pc', 1, 'h4'), sNode('r1', 'R1', 'router', 3, 'h5'), sNode('svr', 'SVR', 'server', 1, 'h6')],
+      edges: [
+        sEdge('e1', 'pc1', 'port1', 'r1', 'port1'),
+        sEdge('e2', 'r1', 'port2', 'svr', 'port1'),
+      ],
+    });
+    sim2.applyNodeConfig('pc1', { ether1: '10.0.9.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.9.1' }]);
+    sim2.applyNodeConfig('r1', { ether1: '10.0.9.1/24', ether2: '10.0.10.1/24' }, []);
+    sim2.applyNodeConfig('svr', { ether1: '10.0.10.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.10.1' }]);
+    const tr = sim2.simulateTraceroute('pc1', '10.0.10.2');
+    check('29h traceroute sukses (hop1 = R1)', tr.ok && tr.hops[0]?.name === 'R1', JSON.stringify(tr));
+    const ttlDrops = dropsOf(sim2, 'ttl-expired');
+    check('29h drop reason ttl-expired → code TTL_EXPIRED', ttlDrops.some((d) => d.data?.code === 'TTL_EXPIRED'), JSON.stringify(ttlDrops.map((d) => d.data?.code)));
+
+    // Pemetaan kanonik lengkap yang dijanjikan prompt.
+    const map = {
+      PORT_DOWN: dropCodeOf('iface-down') === 'PORT_DOWN' && dropCodeOf('egress-down') === 'PORT_DOWN',
+      VLAN_MISMATCH: dropCodeOf('vlan') === 'VLAN_MISMATCH',
+      NO_MAC_ENTRY: dropCodeOf('flood-empty') === 'NO_MAC_ENTRY',
+      ARP_UNRESOLVED: dropCodeOf('arp-unresolved') === 'ARP_UNRESOLVED',
+      NO_ROUTE: dropCodeOf('no-route') === 'NO_ROUTE' && dropCodeOf('no-route-v6') === 'NO_ROUTE',
+      ACL_DENY: dropCodeOf('acl-deny') === 'ACL_DENY',
+      FIREWALL_DENY: dropCodeOf('firewall') === 'FIREWALL_DENY',
+      TTL_EXPIRED: dropCodeOf('ttl-expired') === 'TTL_EXPIRED',
+      NAT_FAILURE: dropCodeOf('nat-port-exhausted') === 'NAT_FAILURE',
+    };
+    check('29h pemetaan kode drop kanonik lengkap', Object.values(map).every(Boolean), JSON.stringify(map));
+  }
+}
 
 console.log(`\nRESULT: ${passed} passed, ${failed} failed`);
 if (failed > 0) {

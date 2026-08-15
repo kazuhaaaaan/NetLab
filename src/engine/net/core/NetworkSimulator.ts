@@ -19,7 +19,7 @@ import { RouterProcessor } from '../devices/RouterProcessor';
 import { HostProcessor } from '../devices/HostProcessor';
 import { arpResolveAndSend } from '../devices/sendUtils';
 import { ndpResolveAndSend } from '../devices/ndpUtils';
-import { RoutingProtocolEngine } from '../services/RoutingProtocolEngine';
+import { RoutingProtocolEngine, OspfLsa, BgpRibEntry } from '../services/RoutingProtocolEngine';
 import { computeStp, StpConfig, StpPortState } from '../services/StpService';
 import { computeFhrp, FhrpGroup, FhrpState } from '../services/FhrpService';
 import { computeWireless, WirelessIfaceCfg, WirelessProfileCfg } from '../services/WirelessService';
@@ -93,6 +93,13 @@ export class NetworkSimulator implements SimulatorCore {
   private seq = 0;
   private runSeq = 0;
   private pktSeq = 0;
+
+  /**
+   * Engine routing protokol PERSISTEN (lintas recompute): menyimpan state
+   * FSM OSPF/BGP, LSDB, dan RIB — transisi fase tidak direset tiap panggilan
+   * computeDynamicRoutes(), sehingga observasi FSM per round bermakna.
+   */
+  private readonly routingProtocols = new RoutingProtocolEngine();
 
   // ── State konfigurasi CLI (bertahan antar sync topology) ──────
   private configs = new Map<string, { ips: Record<string, string>; routes: { dst: string; gateway: string | null; distance?: number }[] }>();
@@ -921,7 +928,16 @@ export class NetworkSimulator implements SimulatorCore {
     if (cfg && cfg.asn) this.bgps.set(nodeId, cfg);
     else this.bgps.delete(nodeId);
     const dev = this.nodes.get(nodeId);
-    if (dev) dev.bgpCfg = cfg && cfg.asn ? { asn: cfg.asn, peers: cfg.peers, networks: cfg.networks } : null;
+    if (dev) {
+      dev.bgpCfg = cfg && cfg.asn
+        ? {
+            asn: cfg.asn,
+            peers: cfg.peers.map((p) => ({ remoteAs: p.remoteAs, remoteAddr: p.remoteAddr, localPref: p.localPref })),
+            networks: cfg.networks,
+            routerId: cfg.routerId,
+          }
+        : null;
+    }
   }
 
   setSnmp(nodeId: string, cfg: SnmpAgentConfig | undefined): void {
@@ -1119,8 +1135,14 @@ export class NetworkSimulator implements SimulatorCore {
     return this.trunkNative.get(nodeId) || new Map();
   }
 
-  computeDynamicRoutes(): void {
-    new RoutingProtocolEngine().compute([...this.nodes.values()], this.topology.links);
+  /**
+   * Hitung ulang rute protokol dinamis (OSPF/RIP/EIGRP/BGP) dengan state
+   * FSM persisten dari engine.
+   * @param opts.rounds 0 (default) = konvergen (round sampai stabil);
+   *   n>0 = tepat n protocol round untuk observasi transisi FSM.
+   */
+  computeDynamicRoutes(opts?: { rounds?: number }): void {
+    this.routingProtocols.compute([...this.nodes.values()], this.topology.links, opts?.rounds ?? 0);
   }
 
   // ── Statistik / read helpers ───────────────────────────────────
@@ -1714,75 +1736,32 @@ export class NetworkSimulator implements SimulatorCore {
   }
 
   getOspfNeighbors(nodeId: string): OspfNeighborInfo[] {
-    const dev = this.nodes.get(nodeId);
-    if (!dev || !dev.routingCfg.ospf?.enabled) return [];
-    const out: OspfNeighborInfo[] = [];
-    const seen = new Set<string>();
-    for (const link of this.topology.links.linksOf(nodeId)) {
-      const peerId = link.a.nodeId === nodeId ? link.b.nodeId : link.a.nodeId;
-      const peer = this.nodes.get(peerId);
-      if (!peer || peer.isSwitch) continue;
-      // Adjacency hanya mungkin bila kedua perangkat hidup & OSPF aktif.
-      if (!this.isNodePowered(peerId) || !peer.routingCfg.ospf?.enabled) continue;
-      const peerIp = peer.getIpAddress();
-      if (!peerIp || seen.has(peerIp)) continue;
-      const myPort = link.a.nodeId === nodeId ? link.a.port : link.b.port;
-      const peerPort = link.a.nodeId === peerId ? link.a.port : link.b.port;
-      // passive-interface: salah satu sisi tidak membentuk adjacency
-      const myIface = dev.getIfaceByPortId(myPort) || dev.getIfaceByName(myPort);
-      const peerIface = peer.getIfaceByPortId(peerPort) || peer.getIfaceByName(peerPort);
-      const myPassive = dev.routingCfg.ospf?.passiveInterfaces?.includes(myIface?.name || myPort) ?? false;
-      const peerPassive = peer.routingCfg.ospf?.passiveInterfaces?.includes(peerIface?.name || peerPort) ?? false;
-      if (myPassive || peerPassive) continue;
-      // Link/interface rusak → adjacency tidak terbentuk (state Down).
-      const myLinkUp = !!myIface && myIface.up;
-      const peerLinkUp = !!peerIface && peerIface.up;
-      const linkDown = !!link.down;
-      const full = myLinkUp && peerLinkUp && !linkDown;
-      seen.add(peerIp);
-      // Router-ID OSPF: nilai router-id CLI bila diatur (bukan IP interface sembarang).
-      const rid = peer.routingCfg.ospf?.routerId || peerIp;
-      out.push({ routerId: rid, ip: peerIp, iface: myIface?.name || myPort, state: full ? 'Full' : 'Down' });
-    }
-    return out;
+    return this.routingProtocols.getOspfNeighbors(nodeId).map((n) => ({
+      routerId: n.routerId,
+      ip: n.ip,
+      iface: n.iface,
+      state: n.state,
+    }));
   }
 
   getBgpNeighborStates(nodeId: string): BgpNeighborStateInfo[] {
-    const cfg = this.bgps.get(nodeId);
-    if (!cfg) return [];
-    return cfg.peers.map((p) => {
-      const peer = this.deviceByIp(p.remoteAddr);
-      const peerCfg = peer ? this.bgps.get(peer.id) : undefined;
-      // Deterministic subset BGP: state diturunkan dari kondisi nyata topologi
-      // (power, konfigurasi AS, reachability). Bukan hardcoded success.
-      let state: BgpNeighborStateInfo['state'] = 'Idle';
-      let uptime = 'never';
-      let prefixes = 0;
-      if (!peer) {
-        state = 'Idle';
-      } else if (!this.bgps.has(peer.id)) {
-        state = 'Idle';
-      } else if (!this.isNodePowered(peer.id) || !this.isNodePowered(nodeId)) {
-        state = 'Idle';
-      } else if (peerCfg && peerCfg.asn !== p.remoteAs) {
-        // AS remote tidak cocok → session tidak pernah Established.
-        state = 'Active';
-      } else if (!this.canReach(nodeId, p.remoteAddr)) {
-        // TCP/179 tidak bisa dibangun ke peer → tetap di Connect.
-        state = 'Connect';
-      } else {
-        state = 'Established';
-        uptime = '00:00:12';
-        prefixes = peer.getRoutes().filter((r) => r.kind === 'dynamic').length;
-      }
-      return {
-        remoteAddr: p.remoteAddr,
-        remoteAs: p.remoteAs,
-        state,
-        uptime,
-        prefixes,
-      };
-    });
+    return this.routingProtocols.getBgpPeerViews(nodeId).map((p) => ({
+      remoteAddr: p.remoteAddr,
+      remoteAs: p.remoteAs,
+      state: p.state,
+      uptime: p.state === 'Established' ? '00:00:12' : 'never',
+      prefixes: p.prefixes,
+    }));
+  }
+
+  /** LSDB OSPF (Router-LSA per advertiser) untuk observasi/verifikasi. */
+  getOspfLsdb(nodeId: string): OspfLsa[] {
+    return this.routingProtocols.getOspfLsdb(nodeId);
+  }
+
+  /** Loc-RIB BGP (hasil best-path selection) untuk observasi/verifikasi. */
+  getBgpRib(nodeId: string): BgpRibEntry[] {
+    return this.routingProtocols.getBgpRib(nodeId);
   }
 
   getTcpConnections(nodeId: string): TcpConnectionInfo[] {

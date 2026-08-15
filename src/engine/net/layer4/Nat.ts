@@ -12,6 +12,8 @@ export interface NatSession {
   original: { ip: string; port: number };
   translated: { ip: string; port: number };
   outInterface: string;
+  /** 'masquerade' = PAT (port ephemeral), 'static' = srcnat one-to-one to-addresses. */
+  kind: 'masquerade' | 'static';
 }
 
 export class NatTranslator {
@@ -32,13 +34,14 @@ export class NatTranslator {
     }
   }
 
-  /** Cari rule srcnat masquerade yang cocok: chain, action, out-interface
-   *  dan (jika ada) src-address — paket yang tidak berasal dari subnet
-   *  rule TIDAK kena NAT (sesuai perilaku RouterOS). */
+  /** Cari rule srcnat yang cocok: chain, action, out-interface dan (jika ada)
+   *  src-address — paket yang tidak berasal dari subnet rule TIDAK kena NAT
+   *  (sesuai perilaku RouterOS). Action valid: 'masquerade' (PAT dinamis) dan
+   *  'srcnat' dengan to-addresses (static one-to-one). */
   static srcnatRule(rules: NatRule[], outInterface: string, srcIp: string): NatRule | null {
     for (const r of rules) {
       if (r.chain !== 'srcnat') continue;
-      if (r.action !== 'masquerade') continue;
+      if (r.action !== 'masquerade' && !(r.action === 'srcnat' && r.toAddresses)) continue;
       if (r.outInterface && r.outInterface !== outInterface) continue;
       if (r.srcAddress && !addrInSpec(srcIp, r.srcAddress)) continue;
       return r;
@@ -118,9 +121,30 @@ export class NatTranslator {
       original: { ip: pkt.srcIp, port: pkt.srcPort },
       translated: { ip: egressIp, port },
       outInterface: egressIface,
+      kind: 'masquerade',
     }, now);
     pkt.srcIp = egressIp;
     pkt.srcPort = port;
+    return true;
+  }
+
+  /**
+   * Static one-to-one srcnat: ganti srcIp ke alamat tetap (to-addresses),
+   * port TIDAK berubah. Sesi dicatat dengan key yang sama seperti masquerade
+   * (hanya ip yang berubah), sehingga trafik balik yang menuju alamat hasil
+   * translasi di-balikkan oleh unmasquerade() tanpa penyesuaian tambahan.
+   */
+  translateStatic(pkt: Packet, toIp: string, outIface: string, now?: number): boolean {
+    if (pkt.srcIp === toIp) return false;
+    const key = natKey(toIp, pkt.srcPort, pkt.dstIp, pkt.dstPort, pkt.protocol);
+    this.record({
+      key,
+      original: { ip: pkt.srcIp, port: pkt.srcPort },
+      translated: { ip: toIp, port: pkt.srcPort },
+      outInterface: outIface,
+      kind: 'static',
+    }, now);
+    pkt.srcIp = toIp;
     return true;
   }
 

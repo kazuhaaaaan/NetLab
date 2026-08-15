@@ -106,7 +106,19 @@ export interface DhcpLeaseGrant {
 
 export interface RoutingMemoryShape {
   /** interface → cost OSPF eksplisit (clé = nama interface) */
-  ospf?: { enabled?: boolean; networks?: string[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[]; routerId?: string };
+  ospf?: {
+    enabled?: boolean;
+    networks?: string[];
+    interfaceCosts?: Record<string, number>;
+    passiveInterfaces?: string[];
+    routerId?: string;
+    /** network → area ID (kunci = string raw network seperti di CLI). */
+    areas?: Record<string, number>;
+    /** Hello interval (ms). Model: fase adjacency per round protokol. */
+    helloInterval?: number;
+    /** Dead interval (ms). Wajib > helloInterval agar adjacency bisa Full. */
+    deadInterval?: number;
+  };
   rip?: { enabled?: boolean; networks?: string[] };
   eigrp?: { enabled?: boolean; asn?: number; networks?: string[] };
 }
@@ -114,12 +126,16 @@ export interface RoutingMemoryShape {
 export interface BgpPeerConfig {
   remoteAs: number;
   remoteAddr: string;
+  /** LOCAL_PREF dari peer ini (default 100) — memengaruhi best-path selection. */
+  localPref?: number;
 }
 
 export interface BgpConfig {
   asn: number;
   peers: BgpPeerConfig[];
   networks: string[];
+  /** Router-ID BGP untuk tie-break best-path (default: IP interface pertama). */
+  routerId?: string;
 }
 
 export interface WebServerInfo {
@@ -165,7 +181,7 @@ export interface OspfNeighborInfo {
 export interface BgpNeighborStateInfo {
   remoteAddr: string;
   remoteAs: number;
-  state: 'Established' | 'Idle' | 'Connect' | 'Active';
+  state: 'Established' | 'Idle' | 'Connect' | 'Active' | 'OpenSent' | 'OpenConfirm';
   uptime: string;
   prefixes: number;
 }

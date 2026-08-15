@@ -248,14 +248,21 @@ export class RouterProcessor implements DeviceProcessor {
 
     const nextHopIp = nh.gateway || pkt.dstIp;
 
-    // srcnat masquerade di interface keluar (src-address rule ikut dihormati)
-    const masq = NatTranslator.srcnatRule(dev.natRules, egress.name, pkt.srcIp);
-    if (masq && pkt.srcIp !== egress.ip.address) {
-      if (dev.nat.masquerade(pkt, egress.ip.address, egress.name, core.now)) {
-        core.emit('NAT_REWRITE', traceId, { action: 'masquerade', to: egress.ip.address, port: pkt.srcPort }, dev.id, egress.name);
-      } else {
-        core.drop(dev, pkt, 'nat-port-exhausted', traceId);
-        return;
+    // srcnat: masquerade (PAT dinamis) atau static one-to-one (to-addresses).
+    // Rule dinilai per paket; src-address rule ikut dihormati.
+    const natRule = NatTranslator.srcnatRule(dev.natRules, egress.name, pkt.srcIp);
+    if (natRule && pkt.srcIp !== egress.ip.address) {
+      if (natRule.action === 'masquerade') {
+        if (dev.nat.masquerade(pkt, egress.ip.address, egress.name, core.now)) {
+          core.emit('NAT_REWRITE', traceId, { action: 'masquerade', to: egress.ip.address, port: pkt.srcPort }, dev.id, egress.name);
+        } else {
+          core.drop(dev, pkt, 'nat-port-exhausted', traceId);
+          return;
+        }
+      } else if (natRule.action === 'srcnat' && natRule.toAddresses) {
+        const toIp = NatTranslator.toAddresses(natRule);
+        dev.nat.translateStatic(pkt, toIp, egress.name, core.now);
+        core.emit('NAT_REWRITE', traceId, { action: 'srcnat', to: toIp }, dev.id, egress.name);
       }
     }
 
@@ -329,6 +336,7 @@ export class RouterProcessor implements DeviceProcessor {
           dstIp: pkt.srcIp,
           ttl: 64,
           traceId,
+          flags: { ttlAtDst: pkt.ttl },
           payload: { type: ICMPV6_ECHO_REPLY, code: 0, seq: p.seq, id: p.id, v6: true },
         });
         reply.hops = pkt.hops.slice();
@@ -436,6 +444,7 @@ export class RouterProcessor implements DeviceProcessor {
           dstIp: pkt.srcIp,
           ttl: 64,
           traceId,
+          flags: { ttlAtDst: pkt.ttl },
           payload: { type: ICMP_ECHO_REPLY, code: 0, seq: p.seq, id: p.id },
         });
         // bawa trace request agar lintasan utuh di reply

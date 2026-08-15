@@ -100,8 +100,8 @@ export class NetworkDevice {
   aclRules: AclRule[] = [];
   natRules: NatRule[] = [];
   webServer: WebServerState | null = null;
-  routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[]; routerId?: string }> = {};
-  bgpCfg: { asn: number; peers: { remoteAs: number; remoteAddr: string }[]; networks: string[] } | null = null;
+  routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[]; routerId?: string; areas?: Record<string, number>; helloInterval?: number; deadInterval?: number }> = {};
+  bgpCfg: { asn: number; peers: { remoteAs: number; remoteAddr: string; localPref?: number }[]; networks: string[]; routerId?: string } | null = null;
   /** Agent SNMP (community, hidup/mati) — diisi via CLI + engine. */
   snmpAgent: SnmpAgentConfig | null = null;
   /** Basis uptime (ticks) untuk sysUpTime.0. */

@@ -1688,7 +1688,7 @@ export class VendorDispatcher {
       acls: [],
       portVlans: {},
       routing: {
-        ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [] },
+        ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [], areas: {} },
         rip: { enabled: false, networks: [] },
         eigrp: { enabled: false, asn: 0, networks: [] },
       },
@@ -1820,7 +1820,7 @@ export class VendorDispatcher {
       if (mem.portVlans && typeof mem.portVlans === 'object') target.portVlans = { ...target.portVlans, ...mem.portVlans };
       if (mem.routing && typeof mem.routing === 'object') {
         target.routing = {
-          ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [], ...(mem.routing.ospf || {}) },
+          ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [], areas: {}, ...(mem.routing.ospf || {}) },
           rip: { enabled: false, networks: [], ...(mem.routing.rip || {}) },
           eigrp: { enabled: false, asn: 0, networks: [], ...(mem.routing.eigrp || {}) },
         };
@@ -3567,14 +3567,22 @@ export class VendorDispatcher {
       }
     } else if (/^network\s+\d+\.\d+\.\d+\.\d+(?:\/\d{1,2})?(?:\s+\d+\.\d+\.\d+\.\d+)?(?:\s+area\s+\S+)?$/i.test(rawInput.trim()) && mem.currentProto && mem.currentProto !== 'bgp' && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')) {
       // Cisco/Huawei: "network 10.0.0.0 0.0.0.255 area 0" / "network 10.0.0.0/24" / "network 192.168.0.0" (RIP)
-      const m = rawInput.trim().match(/^network\s+(\d+\.\d+\.\d+\.\d+(?:\/\d{1,2})?)(?:\s+(\d+\.\d+\.\d+\.\d+))?/i);
+      const m = rawInput.trim().match(/^network\s+(\d+\.\d+\.\d+\.\d+(?:\/\d{1,2})?)(?:\s+(\d+\.\d+\.\d+\.\d+))?(?:\s+area\s+(\S+))?/i);
       if (m) {
         const net = m[2] ? `${m[1]} ${m[2]}` : m[1];
+        const areaRaw = m[3] || (vendorId === 'huawei' && mem.currentOspfArea >= 0 && mem.currentProto === 'ospf' ? String(mem.currentOspfArea) : null);
         const entry = (vendorId === 'huawei' && mem.currentOspfArea >= 0 && mem.currentProto === 'ospf')
           ? `${net} area ${mem.currentOspfArea}`
           : net;
         if (!mem.routing[mem.currentProto].networks.includes(entry)) {
           mem.routing[mem.currentProto].networks.push(entry);
+        }
+        // Area per-network (Cisco/Huawei "area N"): dipakai engine untuk
+        // kompatibilitas adjacency (area berbeda → tidak pernah Full).
+        if (areaRaw !== null && mem.currentProto === 'ospf') {
+          const areaId = /^\d+$/.test(areaRaw) ? parseInt(areaRaw, 10) : areaRaw;
+          if (!mem.routing.ospf.areas) mem.routing.ospf.areas = {};
+          mem.routing.ospf.areas[net] = typeof areaId === 'number' ? areaId : (mem.routing.ospf.areas[net] ?? 0);
         }
         cmdResult = { raw: '' };
       }
@@ -3628,6 +3636,15 @@ export class VendorDispatcher {
         const net = raw.match(/network=(\S+)/i)?.[1];
         if (net) {
           if (!mem.routing[proto].networks.includes(net)) mem.routing[proto].networks.push(net);
+          // MikroTik: "area=<area>" pada network add — dipakai engine untuk
+          // kompatibilitas adjacency OSPF (area berbeda → tidak Full).
+          if (proto === 'ospf') {
+            const areaRaw = raw.match(/area=(\S+)/i)?.[1];
+            if (areaRaw && /^\d+$/.test(areaRaw)) {
+              if (!mem.routing.ospf.areas) mem.routing.ospf.areas = {};
+              mem.routing.ospf.areas[net] = parseInt(areaRaw, 10);
+            }
+          }
           cmdResult = { raw: '' };
         } else {
           cmdResult = { raw: `% Usage: /routing ${proto} network add network=<jaringan/prefix>` };
