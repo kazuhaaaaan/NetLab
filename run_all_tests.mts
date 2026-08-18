@@ -22,6 +22,7 @@ import { LabProject } from './src/types';
 import { NetworkSimulator } from './src/engine/net/core/NetworkSimulator';
 import type { LabProjectLike } from './src/engine/net/core/Topology';
 import type { AclRule, NatRule } from './src/engine/net/core/types';
+import { syncNodeToEngine, syncDhcpPools } from './src/utils/cliSync';
 import { runLab, findScenarios, formatLabResult } from './src/engine/lab';
 import { LAB_SCENARIOS } from './src/engine/lab/scenarios';
 import { buildNodeExports, validateConfigExport, portLinksOfNode } from './src/utils/configExport';
@@ -1014,38 +1015,12 @@ console.log('\n== 12. Integrasi CLI antar perangkat terhubung (alur App) ==');
     id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
   });
 
-  // Replika App.syncNodeToEngine + App.syncDhcpPools
+  // Replika App.syncNodeToEngine + App.syncDhcpPools (helper shared — lihat src/utils/cliSync.ts)
   const syncCli = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string) => {
-    const mem = dis.getNodeMemory(nodeId);
-    sim.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
-    sim.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
-    sim.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
-    sim.setRouting(nodeId, mem.routing || undefined);
-    sim.setBgp(nodeId, mem.bgp || undefined);
-    sim.setSnmp(nodeId, mem.snmp || undefined);
-    sim.setAcls(nodeId, mem.acls || undefined);
-    sim.setNatRules(nodeId, mem.natRules || undefined);
-    sim.setDnsRecords(nodeId, mem.dnsRecords || undefined);
-    sim.setDnsServers(nodeId, mem.dnsServers || undefined);
-    sim.setWebServer(nodeId, mem.webServer || undefined);
-    sim.setPortVlans(nodeId, mem.portVlans || undefined);
-    sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
-    sim.setVlans(nodeId, mem.vlans || undefined);
-    sim.setStp(nodeId, mem.stp || undefined);
-    sim.setWireless(nodeId, mem.wireless || mem.wirelessSecurityProfiles
-      ? { interfaces: mem.wireless || {}, profiles: mem.wirelessSecurityProfiles || {} }
-      : undefined);
-    sim.setQos(nodeId, mem.queues || undefined, mem.mangleRules || undefined);
-    sim.setDhcpRelays(nodeId, mem.dhcpRelays || undefined);
-    sim.setPortSecurity(nodeId, mem.portSecurity || undefined);
-    sim.setIpv6DhcpClients(nodeId, mem.ipv6DhcpClients || undefined);
+    syncNodeToEngine(sim, dis, nodeId);
   };
   const syncPools = (dis: VendorDispatcher, sim: NetworkSimulator) => {
-    const poolsByNode: Record<string, any[]> = {};
-    for (const [nodeId, m] of Object.entries(dis.serializeMemory())) {
-      if (m && Array.isArray(m.dhcpPools) && m.dhcpPools.length > 0) poolsByNode[nodeId] = m.dhcpPools;
-    }
-    sim.setDhcpPools(poolsByNode);
+    syncDhcpPools(sim, dis);
   };
   // Konteks CLI replika App.handleTerminalCommand
   const iCtx = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string, name: string, ports: any[]) => ({
@@ -1487,24 +1462,7 @@ console.log('\n== 13. IPv6 & VRRP via CLI antar perangkat ==');
     id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
   });
   const syncCli = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string) => {
-    const mem = dis.getNodeMemory(nodeId);
-    sim.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
-    sim.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
-    sim.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
-    sim.applyNodeConfig6(nodeId, mem.configuredIps6 || {}, mem.routes6 || []);
-    sim.setRouting(nodeId, mem.routing || undefined);
-    sim.setBgp(nodeId, mem.bgp || undefined);
-    sim.setSnmp(nodeId, mem.snmp || undefined);
-    sim.setAcls(nodeId, mem.acls || undefined);
-    sim.setNatRules(nodeId, mem.natRules || undefined);
-    sim.setDnsRecords(nodeId, mem.dnsRecords || undefined);
-    sim.setDnsServers(nodeId, mem.dnsServers || undefined);
-    sim.setWebServer(nodeId, mem.webServer || undefined);
-    sim.setPortVlans(nodeId, mem.portVlans || undefined);
-    sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
-    sim.setVlans(nodeId, mem.vlans || undefined);
-    sim.setStp(nodeId, mem.stp || undefined);
-    sim.setFhrp(nodeId, mem.fhrpGroups || undefined);
+    syncNodeToEngine(sim, dis, nodeId);
   };
   const iCtx = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string, name: string, ports: any[]) => ({
     nodeId,
@@ -1646,7 +1604,9 @@ console.log('\n== 13. IPv6 & VRRP via CLI antar perangkat ==');
     id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight',
   });
   function iCtx(dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string, name: string, ports: any[], extra: Record<string, any> = {}) {
-    const node = (sim as any).nodes.get(nodeId);
+    // Catatan: fhrpProvider tidak pernah dipanggil di seksi ini (provider
+    // mati); device dipertahankan seperti versi lama demi behavior identik.
+    const node: any = sim.getDevice(nodeId);
     const ctx: any = {
       nodeId, name, ports,
       dhcpClientGrant: (iface: string, addDefaultRoute: boolean) => {
@@ -1661,29 +1621,8 @@ console.log('\n== 13. IPv6 & VRRP via CLI antar perangkat ==');
     return { ...ctx, ...extra };
   }
   const syncCli = (d: VendorDispatcher, s: NetworkSimulator, nodeId: string) => {
-    const mem = d.getNodeMemory(nodeId);
-    s.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
-    s.setDhcpPools({ [nodeId]: mem.dhcpPools });
-    s.setRouting(nodeId, mem.routing);
-    s.setBgp(nodeId, mem.bgp);
-    s.setDnsRecords(nodeId, mem.dnsRecords);
-    s.setDnsServers(nodeId, mem.dnsServers);
-    s.setAcls(nodeId, mem.acls);
-    s.setNatRules(nodeId, mem.natRules);
-    s.setPortVlans(nodeId, mem.portVlans as Record<string, number>);
-    s.setShutdownIfaces(nodeId, mem.shutdownIfaces);
-    s.setSubinterfaces(nodeId, mem.subinterfaces);
-    s.setTrunkPorts(nodeId, mem.trunkPorts);
-    s.setVlans(nodeId, mem.vlans);
-    s.setStp(nodeId, mem.stp);
-    s.setFhrp(nodeId, mem.fhrpGroups);
-    s.applyNodeConfig6(nodeId, mem.configuredIps6, mem.routes6);
-    s.setDhcpRelays(nodeId, mem.dhcpRelays);
-    s.setPortSecurity(nodeId, mem.portSecurity);
-    s.setIpv6DhcpClients(nodeId, mem.ipv6DhcpClients);
-    s.setWireless(nodeId, { interfaces: mem.wireless, profiles: mem.wirelessSecurityProfiles });
-    s.setQos(nodeId, mem.queues, mem.mangleRules);
-    s.setSnmp(nodeId, mem.snmp);
+    syncNodeToEngine(s, d, nodeId);
+    s.setDhcpPools({ [nodeId]: d.getNodeMemory(nodeId).dhcpPools });
   };
 
 // ── 14a. reload: restore node dari startup-config ──────────────
@@ -2071,7 +2010,7 @@ console.log('\n== 15. Engine correctness (host IP, traceroute, power, DHCP, NAT/
 
     const lease = sim.grantDhcpLease('pc1', 'ether1');
     check('15d IP pertama melewati excluded-address', !!lease && lease.ip === '192.168.5.101', JSON.stringify(lease));
-    const pcNode: any = (sim as any).nodes.get('pc1');
+    const pcNode = sim.getDevice('pc1');
     const leaseRec = pcNode?.leases.get('ether1');
     check('15d lease-time pool (1 jam) dipakai', !!leaseRec && Math.abs(leaseRec.expiresAt - sim.time.now() - 3_600_000) < 1000, JSON.stringify(leaseRec));
     check('15d DNS option 6 terpasang di klien', JSON.stringify(pcNode?.dnsServers) === JSON.stringify(['192.168.5.1']), JSON.stringify(pcNode?.dnsServers));
@@ -2281,9 +2220,8 @@ console.log('\n== 15. Engine correctness (host IP, traceroute, power, DHCP, NAT/
     sim.applyNodeConfig('pc1', { ether1: '10.0.8.2/24' }, []);
     sim.applyNodeConfig('pc2', { ether1: '10.0.8.3/24' }, []);
     sim.simulatePing('pc1', '10.0.8.99');
-    const buffered = (sim as any).arpBuffers;
-    const pending = buffered instanceof Map ? buffered.size : Object.keys(buffered || {}).length;
-    check('15k buffer ARR pending kosong setelah ARP timeout', pending === 0, JSON.stringify(pending));
+    const timedOut = sim.eventHistory.filter((e) => e.type === 'PACKET_DROPPED' && e.data?.reason === 'arp-unresolved');
+    check('15k buffer ARR pending kosong setelah ARP timeout', timedOut.length > 0, JSON.stringify(timedOut.length));
     const pingOk = sim.simulatePing('pc1', '10.0.8.3');
     check('15k ping normal tetap jalan setelah ARP timeout', pingOk.success === true, JSON.stringify(pingOk));
   }
@@ -2645,8 +2583,7 @@ console.log('\n== 20. CLI route distance + /test E2E ==');
     dis.dispatch('linux', 'ip addr add 10.0.2.10/24 dev ether1', iCtx2('svr', 'SVR', project.nodes[2].ports));
     dis.dispatch('linux', 'ip route add default via 10.0.2.1', iCtx2('svr', 'SVR', project.nodes[2].ports));
     const syncCli = (nodeId: string) => {
-      const m = dis.getNodeMemory(nodeId);
-      sim.applyNodeConfig(nodeId, m.configuredIps, m.routes);
+      syncNodeToEngine(sim, dis, nodeId);
     };
     for (const n of project.nodes) syncCli(n.id);
     const stats = sim.getDevice('r1')!.getRoutes();

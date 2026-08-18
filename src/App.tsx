@@ -32,6 +32,7 @@ import { runLab, findScenarios, formatLabResult } from './engine/lab';
 import { LAB_SCENARIOS } from './engine/lab/scenarios';
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
 import { validateProject } from './utils/projectValidation';
+import { syncNodeToEngine as syncNodeToEngineAll, syncDhcpPools as syncDhcpPoolsAll } from './utils/cliSync';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
@@ -371,49 +372,15 @@ export default function App() {
 
   /** Sinkronkan pool DHCP dari konfigurasi CLI (MikroTik/Cisco/etc.) ke simulation engine. */
   const syncDhcpPools = useCallback(() => {
-    const mem = vendorDispatcher.serializeMemory();
-    const poolsByNode: Record<string, any[]> = {};
-    for (const [nodeId, m] of Object.entries(mem)) {
-      if (m && Array.isArray(m.dhcpPools) && m.dhcpPools.length > 0) {
-        // excluded-address global (Cisco) berlaku untuk semua pool perangkat.
-        const excl = Array.isArray(m.dhcpExcluded) ? m.dhcpExcluded : [];
-        poolsByNode[nodeId] = excl.length > 0
-          ? m.dhcpPools.map((p: any) => ({ ...p, excluded: [...new Set([...(p.excluded || []), ...excl])] }))
-          : m.dhcpPools;
-      }
-    }
-    simEngineRef.current.setDhcpPools(poolsByNode);
+    syncDhcpPoolsAll(simEngineRef.current, vendorDispatcher);
   }, []);
 
   /** Dorong SEMUA state konfigurasi CLI sebuah node ke simulation engine
    *  (IP, rute statis, routing dinamis, BGP, ACL, NAT, VLAN port,
-   *  interface shutdown/up, subinterface & trunk). */
+   *  interface shutdown/up, subinterface & trunk) — lihat utils/cliSync.ts. */
   const syncNodeToEngine = useCallback((nodeId: string) => {
+    syncNodeToEngineAll(simEngineRef.current, vendorDispatcher, nodeId);
     const mem = vendorDispatcher.getNodeMemory(nodeId);
-    simEngineRef.current.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
-    simEngineRef.current.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
-    simEngineRef.current.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
-    simEngineRef.current.applyNodeConfig6(nodeId, mem.configuredIps6 || {}, mem.routes6 || []);
-    simEngineRef.current.setRouting(nodeId, mem.routing || undefined);
-    simEngineRef.current.setBgp(nodeId, mem.bgp || undefined);
-    simEngineRef.current.setSnmp(nodeId, mem.snmp || undefined);
-    simEngineRef.current.setAcls(nodeId, mem.acls || undefined);
-    simEngineRef.current.setNatRules(nodeId, mem.natRules || undefined);
-    simEngineRef.current.setDnsRecords(nodeId, mem.dnsRecords || undefined);
-    simEngineRef.current.setDnsServers(nodeId, mem.dnsServers || undefined);
-    simEngineRef.current.setWebServer(nodeId, mem.webServer || undefined);
-    simEngineRef.current.setPortVlans(nodeId, mem.portVlans || undefined);
-    simEngineRef.current.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
-    // Allowed/native VLAN trunk (switchport trunk allowed/native vlan) — disinkronkan
-    // ke engine supaya SwitchProcessor benar-benar menegakkannya.
-    simEngineRef.current.setTrunkAllowed(nodeId, mem.trunkAllowed || undefined);
-    simEngineRef.current.setTrunkNative(nodeId, mem.trunkNative || undefined);
-    // Database VLAN otoritatif (vlan 10 / /interface vlan add / set vlans …)
-    // disinkronkan ke VlanTable engine — memori vendor tidak boleh menjadi
-    // satu-satunya tempat "VLAN dikonfigurasi" (state divergence).
-    simEngineRef.current.setVlans(nodeId, mem.vlans || undefined);
-    simEngineRef.current.setDhcpRelays(nodeId, mem.dhcpRelays || undefined);
-    simEngineRef.current.setPortSecurity(nodeId, mem.portSecurity || undefined);
     setShutdownPortsByNode((prev) => {
       const ports = mem.shutdownIfaces && mem.shutdownIfaces.length > 0 ? [...mem.shutdownIfaces] : undefined;
       if (!ports) {
@@ -444,16 +411,6 @@ export default function App() {
       }
       return { ...prev, [nodeId]: vlans };
     });
-    simEngineRef.current.setStp(nodeId, mem.stp || undefined);
-    simEngineRef.current.setFhrp(nodeId, mem.fhrpGroups || undefined);
-    simEngineRef.current.setWireless(
-      nodeId,
-      mem.wireless || mem.wirelessSecurityProfiles
-        ? { interfaces: mem.wireless || {}, profiles: mem.wirelessSecurityProfiles || {} }
-        : undefined
-    );
-    simEngineRef.current.setQos(nodeId, mem.queues || undefined, mem.mangleRules || undefined);
-    simEngineRef.current.computeDynamicRoutes();
   }, []);
 
   /** Dorong konfigurasi SEMUA node + pool DHCP ke engine — dipakai sebelum analisis AI. */

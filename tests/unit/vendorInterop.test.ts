@@ -13,6 +13,7 @@
 import { VendorDispatcher, VENDOR_CAPABILITIES } from '../../packages/vendors/src/index';
 import type { CapabilityKey } from '../../packages/vendors/src/capabilities';
 import { NetworkSimulator } from '../../src/engine/net/core/NetworkSimulator';
+import { syncNodeToEngine, syncDhcpPools } from '../../src/utils/cliSync';
 import type { LabProjectLike } from '../../src/engine/net/core/Topology';
 import { unwrapProjectFile, validateProject, SCHEMA_VERSION, ENGINE_VERSION } from '../../src/utils/projectValidation';
 import { isReservedAddress, validateGatewayInSubnet, findSubnetOverlap, validateHostIp } from '../../src/utils/validation';
@@ -41,7 +42,7 @@ function check(name: string, cond: boolean, detail = '') {
   }
 }
 
-// ── Harness: replika App.syncNodeToEngine ─────────────────────────────
+// ── Harness: replika App.syncNodeToEngine (helper shared — lihat src/utils/cliSync.ts) ──
 const iPorts = (n: number, macSeed: string) =>
   Array.from({ length: n }, (_, i) => ({ id: `ether${i + 1}`, name: `ether${i + 1}`, status: 'up' as const, macAddress: `00:0c:29:${macSeed}:${(i + 1).toString().padStart(2, '0')}:01` }));
 
@@ -53,23 +54,7 @@ const mkCtx = (nodeId: string, name: string, portNames: string[]) => ({
 });
 
 const syncCli = (dis: VendorDispatcher, sim: NetworkSimulator, nodeId: string) => {
-  const mem = dis.getNodeMemory(nodeId);
-  sim.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
-  sim.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
-  sim.applyNodeConfig(nodeId, mem.configuredIps, mem.routes);
-  sim.setRouting(nodeId, mem.routing || undefined);
-  sim.setBgp(nodeId, mem.bgp || undefined);
-  sim.setSnmp(nodeId, mem.snmp || undefined);
-  sim.setAcls(nodeId, mem.acls || undefined);
-  sim.setNatRules(nodeId, mem.natRules || undefined);
-  sim.setDnsRecords(nodeId, mem.dnsRecords || undefined);
-  sim.setDnsServers(nodeId, mem.dnsServers || undefined);
-  sim.setFhrp(nodeId, mem.fhrpGroups || undefined);
-  sim.setTrunkPorts(nodeId, mem.trunkPorts || undefined);
-  sim.setPortVlans(nodeId, mem.portVlans || undefined);
-  sim.setVlans(nodeId, mem.vlans || undefined);
-  sim.setStp(nodeId, mem.stp || undefined);
-  sim.setWebServer(nodeId, mem.webServer || undefined);
+  syncNodeToEngine(sim, dis, nodeId);
 };
 
 // ── 1. Per-capability feature commands per vendor (bukti dukungan) ────
@@ -358,11 +343,7 @@ export function runVendorInteropTests(): Report {
     fortinet: ['config system interface', 'edit ether1', 'set ip 192.168.9.1 255.255.255.0', 'next', 'end', 'config system dhcp server', 'edit 1', 'set interface ether1', 'config ip-range', 'edit 1', 'set start-ip 192.168.9.100', 'set end-ip 192.168.9.200', 'next', 'end', 'set netmask 255.255.255.0', 'next', 'end'],
   };
   const syncPools = (dis: VendorDispatcher, sim: NetworkSimulator) => {
-    const poolsByNode: Record<string, any[]> = {};
-    for (const [nodeId, m] of Object.entries(dis.serializeMemory())) {
-      if (m && Array.isArray(m.dhcpPools) && m.dhcpPools.length > 0) poolsByNode[nodeId] = m.dhcpPools;
-    }
-    sim.setDhcpPools(poolsByNode);
+    syncDhcpPools(sim, dis);
   };
   for (const sv of DHCP_SERVERS) {
     const dis = new VendorDispatcher();

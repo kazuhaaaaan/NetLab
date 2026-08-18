@@ -76,8 +76,7 @@ protocol cores) used by the engine and tests.
 | Location | Responsibility |
 |---|---|
 | `src/components` | UI: canvas, sidebar, terminal, panels, modals, landing page |
-| `src/engine/net/core` | Authoritative simulation engine (L2/L3, protocols, services) |
-| `src/engine/sim` | Simulator integration & ping output formatting |
+| `src/engine/net` | Authoritative simulation engine: `core` (facade NetworkSimulator + subsystem runtime), `devices`, `layer2/3/4`, `services` |
 | `src/engine/lab` | Lab scenario engine, grading & diagnostics |
 | `packages/vendors` | Vendor CLI adapters + normalized command pipeline |
 | `packages/protocols`, `packages/packet`, `packages/core` | Reference packet/protocol cores |
