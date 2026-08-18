@@ -493,14 +493,15 @@ export const mikrotikEntries: ChainEntry[] = [
           const action = raw.match(/action=(\S+)/i)?.[1];
           if (action) {
             mem.acls.push({
-              action: action === 'drop' || action === 'reject' ? 'deny' : 'permit',
+              // drop → deny senyap; reject → deny + balas RST/ICMP oleh engine.
+              action: action === 'drop' ? 'deny' : action === 'reject' ? 'reject' : 'permit',
               proto: raw.match(/protocol=(\S+)/i)?.[1] || 'any',
               src: raw.match(/src-address=(\S+)/i)?.[1] || 'any',
               dst: raw.match(/dst-address=(\S+)/i)?.[1] || 'any',
             });
             cmdResult = { raw: '' };
           } else {
-            cmdResult = { raw: '% Usage: /ip firewall filter add chain=<chain> protocol=<proto> action=drop|accept' };
+            cmdResult = { raw: '% Usage: /ip firewall filter add chain=<chain> protocol=<proto> action=drop|accept|reject' };
           }
         
     return cmdResult;

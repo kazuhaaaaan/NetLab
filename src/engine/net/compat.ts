@@ -25,7 +25,7 @@ export interface PingSimResult {
   dhcpGranted?: boolean;
   /** round-trip time (ms) dari latensi kabel di lintasan */
   rttMs?: number;
-  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power' | 'refused';
+  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power' | 'refused' | 'rejected';
 }
 
 export interface DhcpPoolInfo {

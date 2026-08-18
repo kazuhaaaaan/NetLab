@@ -11,10 +11,10 @@ import { isBroadcastMac } from '../layer2/EthernetFrame';
 import { applyAclDeny } from '../services/FirewallService';
 import { NatTranslator } from '../layer4/Nat';
 import { allocateIp, findServingPool, LeaseGrant } from '../services/DhcpService';
-import { staticRecord } from '../services/DnsService';
+import { resolveLocalChain } from '../services/DnsService';
 import { parseCidr, ipToInt, networkOf, inSameSubnet, isValidIp } from '../core/ip';
-import { isIpv6Address, isIpv6Multicast, inSameIpv6Subnet } from '../core/ipv6';
-import { ndpResolveAndSend, NDP_NS, NDP_NA, ICMPV6_ECHO_REQUEST, ICMPV6_ECHO_REPLY } from './ndpUtils';
+import { isIpv6Address, isIpv6Multicast, inSameIpv6Subnet, ipv6NetworkString } from '../core/ipv6';
+import { ndpResolveAndSend, NDP_NS, NDP_NA, ICMPV6_ECHO_REQUEST, ICMPV6_ECHO_REPLY, ICMPV6_RS, ICMPV6_RA, slaacAddressFor } from './ndpUtils';
 import {
   ICMP_DEST_UNREACHABLE,
   ICMP_ECHO_REPLY,
@@ -24,11 +24,25 @@ import {
   buildDestUnreachable,
   buildTimeExceeded,
 } from '../layer4/Icmp';
-import { TCP_SYN, TCP_ACK, TcpSegment, buildTcpSegment, isSyn, isAck } from '../layer4/Tcp';
+import { TCP_SYN, TCP_ACK, TCP_FIN, TCP_RST, TcpSegment, buildTcpSegment, isSyn, isAck, isFin, isRst } from '../layer4/Tcp';
 import { UDP_BOOTPS, UDP_BOOTPC, UDP_DNS, UDP_SNMP } from '../layer4/Udp';
 import { buildMib, mibLookup, normalizeOid } from '../services/SnmpService';
 
 const PREFIX = '.1.3.6.1.2.1';
+
+/** Penanda balasan DHCP yang lewat relay (payload `relayed` — dibuat handleDhcpRelayReply). */
+interface RelayedMarker {
+  clientMac?: unknown;
+  clientIface?: unknown;
+}
+
+/** Baca `clientMac` dari penanda relay DHCP dengan validasi tipe (sumber payload dinamis). */
+function relayedClientMac(payload: Record<string, unknown> | undefined): string | undefined {
+  const r = payload?.relayed;
+  if (typeof r !== 'object' || r === null) return undefined;
+  const mac = (r as RelayedMarker).clientMac;
+  return typeof mac === 'string' && mac.length > 0 ? mac : undefined;
+}
 
 export class RouterProcessor implements DeviceProcessor {
   constructor(protected device: NetworkDevice) {}
@@ -71,15 +85,18 @@ export class RouterProcessor implements DeviceProcessor {
       dev.arpCache.learn(p.senderIp, p.senderMac, inPort, core.now);
       core.emit('ARP_REQUEST', traceId, { who: p.targetIp, src: p.senderIp }, dev.id, inPort);
       if (mine) {
+        // VRRP: ARP untuk virtual IP dijawab dengan MAC VIRTUAL master
+        // (00:00:5e:00:01:xx), bukan MAC fisik interface — perilaku VRRP nyata.
+        const vmac = dev.virtualMacs.get(p.targetIp || '') || mine.mac;
         const reply = core.createPacket({
           protocol: 'arp',
-          srcMac: mine.mac,
+          srcMac: vmac,
           dstMac: p.senderMac,
           srcIp: p.targetIp!,
           dstIp: p.senderIp,
           ttl: 1,
           traceId,
-          payload: { op: 2, senderIp: p.targetIp, senderMac: mine.mac, targetIp: p.senderIp },
+          payload: { op: 2, senderIp: p.targetIp, senderMac: vmac, targetIp: p.senderIp },
         });
         reply.vlan = pkt.vlan;
         core.transmit(dev, reply, inPort, traceId);
@@ -110,10 +127,10 @@ export class RouterProcessor implements DeviceProcessor {
       return;
     }
 
-    // L2 filter: frame harus untuk MAC saya / broadcast
-    const forMyMac =
-      isBroadcastMac(pkt.dstMac) ||
-      [...dev.getInterfaces()].some((i) => i.mac.toLowerCase() === pkt.dstMac.toLowerCase());
+    // L2 filter: frame harus untuk MAC saya / broadcast / MAC virtual FHRP
+    const myMacs = new Set([...dev.getInterfaces()].map((i) => i.mac.toLowerCase()));
+    for (const vMac of dev.virtualMacs.values()) myMacs.add(vMac.toLowerCase());
+    const forMyMac = isBroadcastMac(pkt.dstMac) || myMacs.has(pkt.dstMac.toLowerCase());
     if (!forMyMac) {
       core.emit('PACKET_DROPPED', traceId, { reason: 'l2-filter' }, dev.id, inPort);
       core.drop(dev, pkt, 'l2-filter', traceId);
@@ -166,7 +183,7 @@ export class RouterProcessor implements DeviceProcessor {
       // Jangan tangkap balasan DHCP yang harus diteruskan relay (relayed offer/ack
       // membawa penanda relayed walau dstIp menunjuk interface router itu sendiri).
       const rp0 = (pkt.payload ?? {}) as Record<string, unknown> | undefined;
-      if (!(pkt.protocol === 'udp' && pkt.dstPort === UDP_BOOTPC && rp0?.relayed && (rp0.relayed as any).clientMac)) {
+      if (!(pkt.protocol === 'udp' && pkt.dstPort === UDP_BOOTPC && relayedClientMac(rp0))) {
         // Balas via interface tempat paket masuk (bukan interface yang IP-nya cocok),
         // agar reply lintas-interface (mis. ping ke IP LAN lain) kembali ke sumber.
         const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
@@ -275,7 +292,17 @@ export class RouterProcessor implements DeviceProcessor {
   private handleIpv6(pkt: Packet, inPort: string, core: SimulatorCore, traceId: string): void {
     const dev = this.device;
     core.emit('PACKET_RECEIVED', traceId, { packetId: pkt.id }, dev.id, inPort);
-    const p = (pkt.payload ?? {}) as { type?: number; ndp?: string; target?: string; seq?: number; id?: number };
+    const p = (pkt.payload ?? {}) as {
+    type?: number;
+    ndp?: string;
+    target?: string;
+    seq?: number;
+    id?: number;
+    icmp6?: string;
+    prefix?: string;
+    prefixLength?: number;
+    flags?: Record<string, unknown>;
+  };
 
     // Interface masuk mati (shutdown) → frame ditolak.
     const inIfaceCheck = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
@@ -309,6 +336,61 @@ export class RouterProcessor implements DeviceProcessor {
     if (p.type === NDP_NA && p.ndp === 'na' && p.target) {
       dev.ipv6Neighbors.learn(p.target, pkt.srcMac, inPort, core.now);
       core.flushArp(dev, p.target, pkt.srcMac, traceId);
+      core.drop(dev, pkt, 'ndp-consumed', traceId);
+      return;
+    }
+
+    // RS (Router Solicitation, 133) → balas RA (134) berisi prefix iface
+    // penerima. Ini jalur E2E SLAAC: host tanpa alamat v6 mendapat prefix
+    // dari router terhubung (bukan hanya helper statis).
+    if (p.type === ICMPV6_RS && p.icmp6 === 'rs') {
+      const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+      if (!inIface?.ipv6) {
+        core.drop(dev, pkt, 'rs-no-prefix', traceId);
+        return;
+      }
+      dev.ipv6Neighbors.learn(pkt.srcIp, pkt.srcMac, inPort, core.now);
+      core.emit('NDP_RS', traceId, { iface: inIface.name, srcIp: pkt.srcIp, prefix: ipv6NetworkString(inIface.ipv6.address, inIface.ipv6.prefix) }, dev.id, inPort);
+      const ra = core.createPacket({
+        protocol: 'icmp',
+        srcMac: inIface.mac,
+        dstMac: pkt.srcMac,
+        srcIp: inIface.ipv6.address,
+        dstIp: pkt.srcIp,
+        ttl: 64,
+        traceId,
+        payload: {
+          type: ICMPV6_RA,
+          code: 0,
+          icmp6: 'ra',
+          prefix: ipv6NetworkString(inIface.ipv6.address, inIface.ipv6.prefix),
+          prefixLength: inIface.ipv6.prefix,
+          flags: { managed: false, other: false, onlink: true, auto: true },
+        },
+      });
+      core.transmit(dev, ra, inPort, traceId);
+      core.drop(dev, pkt, 'ndp-consumed', traceId);
+      return;
+    }
+
+    // RA (Router Advertisement, 134): host SLAAC menerapkan alamat EUI-64
+    // + default route dari prefix yang diiklankan router.
+    if (p.type === ICMPV6_RA && p.icmp6 === 'ra' && p.prefix) {
+      const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
+      core.emit('NDP_RA', traceId, { prefix: p.prefix, prefixLength: Number(p.prefixLength) || 64, from: pkt.srcIp }, dev.id, inIface?.name || inPort);
+      const raFlags = (p.flags ?? {}) as { auto?: boolean; managed?: boolean };
+      if (inIface && !inIface.ipv6 && raFlags.auto !== false && dev.slaacIfaces.includes(inIface.name)) {
+        const prefixLen = Math.min(Number(p.prefixLength) || 64, 64);
+        const addr = slaacAddressFor(inIface.mac, p.prefix, prefixLen);
+        if (addr) {
+          dev.setIpv6ByName(inIface.name, `${addr}/${p.prefixLength ?? prefixLen}`);
+          dev.slaacAddresses[inIface.name] = `${addr}/${p.prefixLength ?? prefixLen}`;
+          if (!dev.ipv6StaticRoutes.some((r) => r.dst === '::/0')) {
+            dev.ipv6StaticRoutes.push({ dst: '::/0', gateway: pkt.srcIp, iface: null, kind: 'static' });
+            dev.ipv6Routing.addRoute({ dst: '::/0', gateway: pkt.srcIp, iface: null, kind: 'static' });
+          }
+        }
+      }
       core.drop(dev, pkt, 'ndp-consumed', traceId);
       return;
     }
@@ -385,6 +467,8 @@ export class RouterProcessor implements DeviceProcessor {
         run.status = 'fail';
         run.reason = 'unreachable';
       }
+      // Balas ICMPv6 destination-unreachable (type 1) ke pengirim — jalur putus terlihat.
+      this.sendIcmpError(pkt, inPort, buildDestUnreachable(), core, traceId);
       core.drop(dev, pkt, nh?.gateway === 'discard' ? 'route-discard' : 'no-route-v6', traceId);
       return;
     }
@@ -408,16 +492,26 @@ export class RouterProcessor implements DeviceProcessor {
     const dev = this.device;
     const inIface = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
     if (!inIface) return;
+    const v6 = isIpv6Address(pkt.dstIp) || isIpv6Address(pkt.srcIp);
+    // ICMPv6 memakai tipe error sendiri: dst-unreachable=1, time-exceeded=3
+    // (bukan 3/11 seperti ICMPv4). Source = alamat IPv6 interface masuk.
+    const payload: Record<string, unknown> = v6
+      ? {
+          ...error,
+          type: error.type === ICMP_TIME_EXCEEDED ? 3 : error.type === ICMP_DEST_UNREACHABLE ? 1 : error.type,
+          v6: true,
+        }
+      : { ...error };
     const err = core.createPacket({
       protocol: 'icmp',
       srcMac: inIface.mac,
       dstMac: pkt.srcMac,
       // Source IP ICMP error harus milik router (interface masuk), bukan dstIp asli paket.
-      srcIp: inIface.ip?.address || pkt.dstIp || '0.0.0.0',
+      srcIp: v6 ? inIface.ipv6?.address || pkt.dstIp || '::' : inIface.ip?.address || pkt.dstIp || '0.0.0.0',
       dstIp: pkt.srcIp,
       ttl: 64,
       traceId,
-      payload: { ...error },
+      payload,
     });
     // ICMP error kembali lewat interface masuk → pertahankan tag VLAN-nya.
     err.vlan = pkt.vlan;
@@ -514,6 +608,22 @@ export class RouterProcessor implements DeviceProcessor {
           run.status = 'fail';
           run.reason = 'refused';
         }
+        // Port tertutup → RST balik (TCP nyata), bukan drop senyap.
+        const rst = core.createPacket({
+          protocol: 'tcp',
+          srcMac: iface.mac,
+          dstMac: pkt.srcMac,
+          srcIp: pkt.dstIp,
+          dstIp: pkt.srcIp,
+          srcPort: pkt.dstPort,
+          dstPort: pkt.srcPort,
+          ttl: 64,
+          traceId,
+          payload: { ...buildTcpSegment(pkt.dstPort, pkt.srcPort, 0, seg.seq + 1, TCP_RST) },
+        });
+        rst.vlan = pkt.vlan;
+        core.transmit(dev, rst, iface.name, traceId);
+        core.emit('TCP_RST', traceId, { port: pkt.dstPort }, dev.id, iface.name);
         core.drop(dev, pkt, 'refused', traceId);
         return;
       }
@@ -541,15 +651,16 @@ export class RouterProcessor implements DeviceProcessor {
     } else if (isAck(seg) && isSyn(seg)) {
       // Client menerima SYN-ACK → 3-way handshake selesai, kirim ACK balik.
       core.emit('TCP_ACK', traceId, {}, dev.id, iface.name);
-      if (run && run.status === 'running') {
-        run.status = 'ok';
-        run.statusCode = 200;
-        run.body = String(pkt.flags['webContent'] ?? '');
-        run.handshake = [
-          { seq: seg.ack - 1, ack: 0, flags: 'SYN' },
-          { seq: seg.seq, ack: seg.ack, flags: 'SYN-ACK' },
-          { seq: seg.ack, ack: seg.seq + 1, flags: 'ACK' },
-        ];
+      // Catat koneksi sisi klien (netstat pada host pemanggil).
+      if (!dev.tcpConnections.some((c) => c.localIp === pkt.dstIp && c.localPort === pkt.dstPort && c.remoteIp === pkt.srcIp)) {
+        dev.tcpConnections.push({
+          localIp: pkt.dstIp,
+          localPort: pkt.dstPort,
+          remoteIp: pkt.srcIp,
+          remotePort: pkt.srcPort,
+          state: 'ESTABLISHED',
+          proto: 'tcp',
+        });
       }
       const ack = core.createPacket({
         protocol: 'tcp',
@@ -570,22 +681,91 @@ export class RouterProcessor implements DeviceProcessor {
       } else {
         core.transmit(dev, ack, iface.name, traceId);
       }
+      // Run selesai di sisi SERVER (branch ACK final) — status 'ok' di sini
+      // akan memutus processUntil sebelum ACK terkirim & tercatat di server.
+      if (run && run.status === 'running') {
+        run.statusCode = 200;
+        run.body = String(pkt.flags['webContent'] ?? '');
+        run.handshake = [
+          { seq: seg.ack - 1, ack: 0, flags: 'SYN' },
+          { seq: seg.seq, ack: seg.ack, flags: 'SYN-ACK' },
+          { seq: seg.ack, ack: seg.seq + 1, flags: 'ACK' },
+        ];
+      }
       core.drop(dev, pkt, 'consumed', traceId);
+    } else if (isFin(seg) && isAck(seg)) {
+      // Konfirmasi close (FIN-ACK) dari sisi yang menerima FIN: hapus sesi
+      // tanpa membalas lagi — mencegah ping-pong FIN antar perangkat.
+      core.emit('TCP_FIN', traceId, { seq: seg.seq, ack: seg.ack }, dev.id, iface.name);
+      this.teardownTcp(dev, pkt.dstIp, pkt.dstPort, pkt.srcIp, pkt.srcPort);
+      if (run && run.status === 'running') {
+        run.status = 'ok';
+        run.reason = 'tcp-closed';
+      }
+      core.drop(dev, pkt, 'tcp-fin-consumed', traceId);
     } else if (isAck(seg)) {
-      // Server menerima ACK final → catat koneksi server-side.
+      // Server menerima ACK final → catat koneksi server-side (dedupe) dan
+      // tuntaskan run: handshake lengkap (SYN → SYN-ACK → ACK).
       core.emit('TCP_ACK', traceId, {}, dev.id, iface.name);
-      dev.tcpConnections.push({
-        localIp: pkt.dstIp,
-        localPort: pkt.dstPort,
-        remoteIp: pkt.srcIp,
-        remotePort: pkt.srcPort,
-        state: 'ESTABLISHED',
-        proto: 'tcp',
-      });
+      if (!dev.tcpConnections.some((c) => c.localIp === pkt.dstIp && c.localPort === pkt.dstPort && c.remoteIp === pkt.srcIp)) {
+        dev.tcpConnections.push({
+          localIp: pkt.dstIp,
+          localPort: pkt.dstPort,
+          remoteIp: pkt.srcIp,
+          remotePort: pkt.srcPort,
+          state: 'ESTABLISHED',
+          proto: 'tcp',
+        });
+      }
+      if (run && run.status === 'running') {
+        run.status = 'ok';
+        run.statusCode = 200;
+        run.body = String(pkt.flags['webContent'] ?? run.body ?? '');
+      }
       core.drop(dev, pkt, 'consumed', traceId);
+    } else if (isFin(seg)) {
+      // Teardown: terima FIN → balas FIN-ACK → hapus koneksi (state CLOSE).
+      core.emit('TCP_FIN', traceId, { seq: seg.seq, ack: seg.ack }, dev.id, iface.name);
+      const finAck = core.createPacket({
+        protocol: 'tcp',
+        srcMac: iface.mac,
+        dstMac: pkt.srcMac,
+        srcIp: pkt.dstIp,
+        dstIp: pkt.srcIp,
+        srcPort: pkt.dstPort,
+        dstPort: pkt.srcPort,
+        ttl: 64,
+        traceId,
+        payload: { ...buildTcpSegment(pkt.dstPort, pkt.srcPort, seg.ack, seg.seq + 1, TCP_FIN | TCP_ACK) },
+      });
+      finAck.vlan = pkt.vlan;
+      core.transmit(dev, finAck, iface.name, traceId);
+      this.teardownTcp(dev, pkt.dstIp, pkt.dstPort, pkt.srcIp, pkt.srcPort);
+      if (run && run.status === 'running') {
+        run.status = 'ok';
+        run.reason = 'tcp-closed';
+      }
+      core.drop(dev, pkt, 'tcp-fin-consumed', traceId);
+    } else if (isRst(seg)) {
+      // RST: reset koneksi — hapus sesi TCP (deterministik, bukan drop senyap).
+      core.emit('TCP_RST', traceId, { seq: seg.seq }, dev.id, iface.name);
+      this.teardownTcp(dev, pkt.dstIp, pkt.dstPort, pkt.srcIp, pkt.srcPort);
+      if (run && run.status === 'running') {
+        run.status = 'fail';
+        run.reason = 'reset';
+      }
+      core.drop(dev, pkt, 'tcp-reset', traceId);
     } else {
       core.drop(dev, pkt, 'tcp-unknown', traceId);
     }
+  }
+
+  /** Hapus koneksi TCP dari tabel netstat perangkat (teardown FIN/RST). */
+  private teardownTcp(dev: NetworkDevice, localIp: string, localPort: number, remoteIp: string, remotePort: number): void {
+    const idx = dev.tcpConnections.findIndex(
+      (c) => c.localIp === localIp && c.localPort === localPort && c.remoteIp === remoteIp && c.remotePort === remotePort
+    );
+    if (idx >= 0) dev.tcpConnections.splice(idx, 1);
   }
 
   protected handleUdpLocal(pkt: Packet, inPort: string, iface: { name: string; mac: string }, core: SimulatorCore, traceId: string): void {
@@ -596,7 +776,9 @@ export class RouterProcessor implements DeviceProcessor {
     }
     if (pkt.dstPort === UDP_DNS) {
       const name = String((pkt.payload as Record<string, unknown> | null)?.name || '');
-      const rec = staticRecord(dev, name);
+      // CNAME: record yang address-nya bukan IP di-resolve berantai (maks 5 hop).
+      const chain = resolveLocalChain(dev, name);
+      const rec = chain?.ip ?? null;
       if (pkt.srcIp && pkt.srcIp !== '0.0.0.0' && pkt.srcMac) {
         // Jawab SELALU (termasuk saat record tidak ada → NXDOMAIN), jangan
         // drop diam-diam agar klien tidak menunggu sampai timeout.
@@ -610,7 +792,7 @@ export class RouterProcessor implements DeviceProcessor {
           dstPort: pkt.srcPort,
           ttl: 64,
           traceId,
-          payload: { address: rec, name, nxdomain: !rec },
+          payload: { address: rec, name, nxdomain: !rec, cnameChain: chain?.chain },
         });
         reply.vlan = pkt.vlan;
         core.transmit(dev, reply, iface.name, traceId);
@@ -678,7 +860,7 @@ export class RouterProcessor implements DeviceProcessor {
       return;
     }
 
-    const mib = buildMib(dev);
+    const mib = buildMib(dev, core.now);
     const oid = normalizeOid(req.oid || '');
     const walk = req.snmpOp === 'getnext' || req.snmpOp === 'walk';
     const result: { ok: boolean; oids?: { oid: string; value: string; type: string }[]; readonly?: boolean } = { ok: true };
@@ -830,6 +1012,17 @@ export class RouterProcessor implements DeviceProcessor {
       ack.vlan = pkt.vlan;
       core.transmit(dev, ack, inPort, traceId);
       core.emit('DHCP_ACK', traceId, { ip: grant.ip }, dev.id, inPort);
+      core.drop(dev, pkt, 'dhcp-consumed', traceId);
+    } else if (p.type === 'release') {
+      // Release: klien menyerahkan IP — lease dihapus, IP kembali ke pool.
+      const relIp = String(p.ip || '');
+      core.emit('DHCP_RELEASE', traceId, { ip: relIp, mac: pkt.srcMac }, dev.id, inPort);
+      if (relIp) core.releaseLease(relIp);
+      const run = core.getRun(traceId);
+      if (run && run.status === 'running') {
+        run.status = 'ok';
+        run.reason = 'dhcp-released';
+      }
       core.drop(dev, pkt, 'dhcp-consumed', traceId);
     } else {
       core.drop(dev, pkt, 'dhcp-unknown', traceId);

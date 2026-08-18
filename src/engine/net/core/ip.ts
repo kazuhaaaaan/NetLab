@@ -76,10 +76,15 @@ export function isBroadcastAddress(ip: string, prefix: number): boolean {
   return ipToInt(ip) === (networkOf(ip, prefix) | (~mask >>> 0)) >>> 0;
 }
 
-/** Validasi alamat HOST yang sah: format benar, bukan network/broadcast address. */
+/** Validasi alamat HOST yang sah: format benar, bukan network/broadcast address.
+ *  Pengecualian: /31 (point-to-point, RFC 3021) dan /32 (loopback) — keduanya
+ *  alamat host yang sah; /32 dipakai untuk loopback di router. */
 export function isValidHostIp(ip: string, prefix: number): boolean {
   if (!isValidIp(ip)) return false;
-  if (!hasHostAddressSpace(prefix)) return false;
+  if (!hasHostAddressSpace(prefix)) {
+    if (prefix === 31 || prefix === 32) return true;
+    return false;
+  }
   if (isNetworkAddress(ip, prefix)) return false;
   if (isBroadcastAddress(ip, prefix)) return false;
   return true;

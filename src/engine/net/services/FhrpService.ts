@@ -34,6 +34,10 @@ export interface FhrpState {
   priority: number;
   interface?: string;
   vrid?: number;
+  /** MAC virtual VRRP (00:00:5e:00:01:xx) — milik master, dipakai balas ARP untuk VIP. */
+  virtualMac?: string;
+  /** interval advertisement (ms) — display; protokol disimulasikan via recompute. */
+  intervalMs?: number;
 }
 
 export interface FhrpResult {
@@ -44,6 +48,12 @@ export interface FhrpResult {
 }
 
 export const DEFAULT_FHRP_PRIORITY = 100;
+
+/** MAC virtual VRRP: 00:00:5e:00:01:xx (xx = vrid, default 1). */
+export function vrrpVirtualMac(vrid: number | undefined): string {
+  const v = Math.max(1, Math.min(255, Math.round(vrid ?? 1)));
+  return `00:00:5e:00:01:${v.toString(16).padStart(2, '0')}`;
+}
 
 /** Clamp prioritas VRRP ke rentang sah 1–255 (0 reserved). */
 function clampPriority(p: number | undefined): number {
@@ -98,7 +108,10 @@ export function computeFhrp(
   const states = new Map<string, FhrpState[]>();
   const masters = new Map<string, string>();
 
-  for (const dev of devices) dev.virtualIps = [];
+  for (const dev of devices) {
+    dev.virtualIps = [];
+    dev.virtualMacs.clear();
+  }
 
   for (const [key, members] of membersByKey) {
     members.sort(
@@ -110,6 +123,10 @@ export function computeFhrp(
     const vip = key.split('|')[0];
     masters.set(vip, master.nodeId);
     master.dev.virtualIps.push(vip);
+    // MAC virtual VRRP — master balas ARP untuk VIP dengan MAC ini
+    // (bukan MAC fisik interface), persis perilaku VRRP nyata.
+    const vmac = vrrpVirtualMac(master.group.vrid);
+    master.dev.virtualMacs.set(vip, vmac);
 
     for (const m of members) {
       const isMaster = m.nodeId === master.nodeId;
@@ -123,6 +140,8 @@ export function computeFhrp(
         priority: clampPriority(m.group.priority),
         interface: m.group.interface,
         vrid: m.group.vrid,
+        virtualMac: isMaster ? vmac : undefined,
+        intervalMs: m.group.interval,
       });
       states.set(m.nodeId, arr);
     }

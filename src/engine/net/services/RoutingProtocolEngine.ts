@@ -94,6 +94,29 @@ export interface BgpPeerView {
   prefixes: number;
 }
 
+/** Tetangga EIGRP (adjacency berbasis segmen fisik + ASN cocok). */
+export interface EigrpNeighborView {
+  neighborId: string;
+  iface: string;
+  ip: string;
+  asn?: number;
+}
+
+/** Baris tabel topologi DUAL: successor + feasible successor + FD/RD. */
+export interface EigrpTopologyEntry {
+  dst: string;
+  /** Successor (next-hop terbaik); null = rute dalam state active (query). */
+  successor: string | null;
+  /** Feasible successor: tetangga dengan RD < FD (kandidat backup). */
+  feasibleSuccessors: string[];
+  /** Feasible distance: metric terbaik via successor. */
+  fd: number;
+  /** Reported distance dari successor. */
+  rd: number;
+  /** passive = konvergen; active = menunggu update (tanpa successor). */
+  state: 'passive' | 'active';
+}
+
 /** Round protokol tempat fase transisi ke Full/Established tercapai. */
 const OSPF_FULL_ROUND = 6;
 const BGP_ESTABLISHED_ROUND = 5;
@@ -184,6 +207,7 @@ export class RoutingProtocolEngine {
     const refreshIgp = () => {
       this.computeOspfRoutes(alive, links, segments);
       this.computeRipEigrpRoutes(alive, links, segments);
+      this.computeEigrpRoutes(alive, links, segments);
     };
     if (rounds > 0) {
       for (let i = 0; i < rounds; i++) {
@@ -898,11 +922,13 @@ export class RoutingProtocolEngine {
     const protoOf = (dev: NetworkDevice): 'rip' | 'eigrp' | null =>
       dev.routingCfg?.rip?.enabled ? 'rip' : dev.routingCfg?.eigrp?.enabled ? 'eigrp' : null;
 
+    // EIGRP kini ditangani DUAL sendiri (metric komposit), RIP tetap hop-count.
+    const ripOnly = (dev: NetworkDevice): boolean => protoOf(dev) === 'rip';
+
     const tables = new Map<string, TableEntry[]>();
     for (const dev of l3) {
-      const proto = protoOf(dev);
-      if (!proto) continue;
-      const nets = (dev.routingCfg[proto]?.networks || []).map((n) => this.normalizeNetworkEntry(dev, n)).filter((n): n is string => !!n);
+      if (!ripOnly(dev)) continue;
+      const nets = (dev.routingCfg.rip?.networks || []).map((n) => this.normalizeNetworkEntry(dev, n)).filter((n): n is string => !!n);
       if (nets.length === 0) continue;
       const entries: TableEntry[] = [];
       for (const iface of dev.getInterfaces()) {
@@ -977,7 +1003,180 @@ export class RoutingProtocolEngine {
     }
   }
 
-  // ── Helper bersama ────────────────────────────────────────────────
+  // ── EIGRP (educational DUAL subset) ─────────────────────────────
+  // Metric komposit K1/K3 (default): metric = 256 * (10^7 / BW_kbps + delay_unit)
+  // dengan delay per-hop = 1 unit (10µs). Successor = tetangga dengan
+  // feasible distance terkecil; feasible successor = tetangga lain dengan
+  // reported distance (RD) < FD (feasibility condition). State passive =
+  // konvergen; active = query (tidak ada successor, menunggu update).
+
+  /** Tetangga EIGRP terakhir per perangkat (view observasi). */
+  private eigrpNeighbors = new Map<string, EigrpNeighborView[]>();
+  /** Tabel topologi DUAL terakhir per perangkat (view observasi). */
+  private eigrpTopology = new Map<string, EigrpTopologyEntry[]>();
+
+  getEigrpNeighbors(nodeId: string): EigrpNeighborView[] {
+    return this.eigrpNeighbors.get(nodeId) || [];
+  }
+
+  getEigrpTopology(nodeId: string): EigrpTopologyEntry[] {
+    return this.eigrpTopology.get(nodeId) || [];
+  }
+
+  /** Biaya link EIGRP dari interface (BW + delay tetap 1 unit). */
+  private eigrpLinkCost(iface: { speedMbps?: number }): number {
+    const bwKbps = Math.max((iface.speedMbps || 100) * 1000, 1);
+    return 256 * (Math.floor(10_000_000 / bwKbps) + 1);
+  }
+
+  private computeEigrpRoutes(devices: NetworkDevice[], links: LinkTable, segments: Map<string, string>): void {
+    const l3 = devices.filter((d) => !d.isSwitch && d.powered);
+    const eigrpDevs = l3.filter((d) => d.routingCfg?.eigrp?.enabled);
+    const asnOf = (dev: NetworkDevice): number | null => dev.routingCfg?.eigrp?.asn ?? null;
+
+    const dist = new Map<string, Map<string, number>>(); // devId → dst → metric
+    const via = new Map<string, Map<string, string>>(); // devId → dst → gateway
+    const neighbors = new Map<string, EigrpNeighborView[]>();
+
+    // Seed: subnet lokal yang ikut network statement.
+    for (const dev of eigrpDevs) {
+      const nets = (dev.routingCfg?.eigrp?.networks || []).map((n) => this.normalizeNetworkEntry(dev, n)).filter((n): n is string => !!n);
+      const mine = new Map<string, number>();
+      for (const iface of dev.getInterfaces()) {
+        if (!iface.ip || !iface.up) continue;
+        const subnet = `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`;
+        const parsed = nets.map((net) => parseCidr(net)).filter((c): c is NonNullable<typeof c> => !!c);
+        const participates = parsed.some((c) => {
+          const pa = Math.min(iface.ip.prefix, c.prefix);
+          return inSameSubnet(iface.ip.address, pa, c.address);
+        });
+        if (participates) mine.set(subnet, 0);
+      }
+      dist.set(dev.id, mine);
+      via.set(dev.id, new Map());
+    }
+
+    // Deteksi adjacency: berbagi segmen fisik + ASN cocok (bila keduanya set).
+    for (const link of links.all) {
+      const a = devices.find((d) => d.id === link.a.nodeId);
+      const b = devices.find((d) => d.id === link.b.nodeId);
+      if (!a || !b || a.isSwitch || b.isSwitch) continue;
+      if (!eigrpDevs.includes(a) || !eigrpDevs.includes(b)) continue;
+      const aAsn = asnOf(a);
+      const bAsn = asnOf(b);
+      if (aAsn != null && bAsn != null && aAsn !== bAsn) continue;
+      const aIface = ifaceNameOf(a, link.a.port);
+      const bIface = ifaceNameOf(b, link.b.port);
+      const aIp = this.ipOnSegment(a, segments.get(`${a.id}:${link.a.port}`) || `ptp:${link.id}`, segments, links);
+      const bIp = this.ipOnSegment(b, segments.get(`${b.id}:${link.b.port}`) || `ptp:${link.id}`, segments, links);
+      if (!aIp || !bIp) continue;
+      const nbA = neighbors.get(a.id) || [];
+      if (!nbA.some((n) => n.neighborId === b.id)) {
+        nbA.push({ neighborId: b.id, iface: aIface, ip: bIp, asn: bAsn ?? undefined });
+        neighbors.set(a.id, nbA);
+      }
+      const nbB = neighbors.get(b.id) || [];
+      if (!nbB.some((n) => n.neighborId === a.id)) {
+        nbB.push({ neighborId: a.id, iface: bIface, ip: aIp, asn: aAsn ?? undefined });
+        neighbors.set(b.id, nbB);
+      }
+    }
+
+    // DUAL: iterate advertised distance antar-tetangga sampai stabil.
+    // RD (reported distance) dari tetangga n ke dst = dist(n, dst) — jarak
+    // yang diiklankan n; FD (feasible distance) = min(RD + biaya link ke n).
+    for (let round = 0; round < l3.length; round++) {
+      let changed = false;
+      for (const dev of eigrpDevs) {
+        const nb = neighbors.get(dev.id) || [];
+        const myDist = dist.get(dev.id)!;
+        const myVia = via.get(dev.id)!;
+        for (const n of nb) {
+          const peer = devices.find((d) => d.id === n.neighborId);
+          if (!peer) continue;
+          const peerDist = dist.get(peer.id);
+          if (!peerDist) continue;
+          const devIface = dev.getIfaceByName(n.iface) || dev.getInterfaces().find((i) => i.name === n.iface);
+          const cost = this.eigrpLinkCost(devIface || {});
+          for (const [dst, reported] of peerDist) {
+            if (this.isOwnSubnet(dev, dst)) continue;
+            const candidate = reported + cost;
+            if ((myDist.get(dst) ?? Infinity) > candidate) {
+              myDist.set(dst, candidate);
+              myVia.set(dst, peer.id);
+              changed = true;
+            }
+          }
+        }
+      }
+      if (!changed) break;
+    }
+
+    // Prune rute yang successor-nya hilang (link putus / perangkat mati):
+    // rute tidak boleh menempel via tetangga yang tidak lagi adjacency.
+    for (const dev of eigrpDevs) {
+      const nbIds = new Set((neighbors.get(dev.id) || []).map((n) => n.neighborId));
+      const myVia = via.get(dev.id)!;
+      for (const [dst, gw] of [...myVia.entries()]) {
+        if (!nbIds.has(gw)) {
+          myVia.delete(dst);
+          dist.get(dev.id)!.delete(dst);
+        }
+      }
+    }
+
+    // Topology table + pemasangan rute successor.
+    const topology = new Map<string, EigrpTopologyEntry[]>();
+    for (const dev of eigrpDevs) {
+      const myDist = dist.get(dev.id)!;
+      const myVia = via.get(dev.id)!;
+      const nb = neighbors.get(dev.id) || [];
+      const entries: EigrpTopologyEntry[] = [];
+      for (const [dst, fd] of myDist) {
+        if (fd === 0) continue; // connected, bukan hasil DUAL
+        const succ = myVia.get(dst);
+        const succNb = nb.find((n) => n.neighborId === succ);
+        // RD = reported distance successor (jarak successor ke dst).
+        const rdVal = succ ? dist.get(succ)?.get(dst) ?? fd : fd;
+        // Feasibility condition: RD < FD → kandidat backup (feasible successor).
+        const fs: string[] = [];
+        for (const n of nb) {
+          if (n.neighborId === succ) continue;
+          const r = dist.get(n.neighborId)?.get(dst);
+          if (r != null && r < fd) fs.push(n.neighborId);
+        }
+        entries.push({
+          dst,
+          successor: succ || null,
+          feasibleSuccessors: fs,
+          fd,
+          rd: rdVal,
+          state: succ ? 'passive' : 'active',
+        });
+        if (succ) {
+          // Next-hop = IP tetangga di segmen yang sama (bukan interface milik
+          // peer — `n.iface` adalah interface KITA menuju tetangga).
+          const succPeer = devices.find((d) => d.id === succ);
+          const gw = succNb?.ip || succPeer?.getIpAddress() || null;
+          if (gw) dev.addDynamicRoute(dst, gw);
+        }
+      }
+      topology.set(dev.id, entries);
+    }
+
+    this.eigrpNeighbors = neighbors;
+    this.eigrpTopology = topology;
+  }
+
+  /** True bila `subnet` adalah subnet langsung milik dev (tolak update loop-back). */
+  private isOwnSubnet(dev: NetworkDevice, subnet: string): boolean {
+    for (const iface of dev.getInterfaces()) {
+      if (!iface.ip) continue;
+      const own = `${intToIp(networkOf(iface.ip.address, iface.ip.prefix))}/${iface.ip.prefix}`;
+      if (own === subnet) return true;
+    }
+    return false;
+  }
 
   private isSwitch(dev: NetworkDevice): boolean {
     return dev.isSwitch;
@@ -1052,7 +1251,7 @@ export class RoutingProtocolEngine {
    *  selain itu otomatis dari bandwidth (referensi 100 Mbps). */
   private ospfIfaceCost(dev: NetworkDevice, iface: { name: string; speedMbps?: number } | null): number {
     if (!iface) return 1;
-    const override = ((dev.routingCfg as any).ospf?.interfaceCosts || {})[iface.name];
+    const override = (dev.routingCfg.ospf?.interfaceCosts || {})[iface.name];
     if (override && override > 0) return override;
     const speed = iface.speedMbps || 100;
     return Math.max(1, Math.round(100 / speed));

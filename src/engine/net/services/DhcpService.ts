@@ -111,7 +111,7 @@ function isExcluded(pool: DhcpPool, ip: string): boolean {
 
 export function buildLease(
   clientIface: string,
-  grant: LeaseGrant,
+  grant: Pick<LeaseGrant, 'ip' | 'gateway' | 'prefix'> & { poolNodeId?: string },
   now: number,
   leaseTimeMs?: number
 ): NetLease {
@@ -119,7 +119,7 @@ export function buildLease(
     ip: grant.ip,
     gateway: grant.gateway,
     prefix: grant.prefix,
-    poolNodeId: grant.poolNodeId,
+    poolNodeId: grant.poolNodeId || '',
     iface: clientIface,
     expiresAt: now + (leaseTimeMs || LEASE_DURATION_MS),
   };

@@ -18,9 +18,10 @@ import { ConfigStore } from './ConfigStore';
 import { Observation } from './Observation';
 import { isValidIp, inSameSubnet } from './ip';
 import { isIpv6Address, inSameIpv6Subnet } from './ipv6';
-import { buildTcpSegment, TCP_SYN } from '../layer4/Tcp';
+import { buildTcpSegment, TCP_SYN, TCP_FIN, TCP_ACK } from '../layer4/Tcp';
 import { arpResolveAndSend } from '../devices/sendUtils';
-import { ndpResolveAndSend } from '../devices/ndpUtils';
+import { ndpResolveAndSend, slaacAddressFor, ALL_ROUTERS_MCAST_IP, ALL_ROUTERS_MCAST_MAC } from '../devices/ndpUtils';
+import { resolve, DNS_CACHE_TTL_MS } from '../services/DnsService';
 import {
   DhcpLeaseGrant,
   DnsResolution,
@@ -68,20 +69,57 @@ export class SimulationFlows {
     return this.observation.getLeaseFor(nodeId);
   }
 
+  /**
+   * Renew lease (T1 = 50% masa sewa): klien mengirim DHCPREQUEST dengan
+   * requestedIp yang sudah dimiliki → server memperpanjang (ACK tanpa NAK).
+   * Dipakai pengguna (CLI/UI) dan verification engine untuk menguji renew.
+   */
+  simulateDhcpRenew(nodeId: string, ifaceName?: string): DhcpLeaseGrant | null {
+    const dev = this.ctx.nodes.get(nodeId);
+    if (!dev) return null;
+    const lease = this.observation.getLeaseFor(nodeId, ifaceName);
+    if (!lease) return this.ensureLease(nodeId, ifaceName);
+    const proc = this.ctx.processors.get(nodeId);
+    if (!proc?.startDhcpRenew) return null;
+    const traceId = `dhcp-renew-${nodeId}-${++this.runSeq}`;
+    this.runManager.beginRun(traceId);
+    if (!proc.startDhcpRenew(traceId, this.core, lease)) return null;
+    this.runManager.processUntil(traceId);
+    return this.observation.getLeaseFor(nodeId);
+  }
+
+  /**
+   * Release lease: klien mengirim DHCPRELEASE → server menghapus lease,
+   * IP kembali ke pool (bisa dipakai klien lain). Lease dihapus dari
+   * perangkat klien juga.
+   */
+  simulateDhcpRelease(nodeId: string, ifaceName?: string): boolean {
+    const dev = this.ctx.nodes.get(nodeId);
+    if (!dev) return false;
+    const lease = this.observation.getLeaseFor(nodeId, ifaceName);
+    if (!lease) return false;
+    const proc = this.ctx.processors.get(nodeId);
+    if (!proc?.startDhcpRelease) return false;
+    const traceId = `dhcp-release-${nodeId}-${++this.runSeq}`;
+    this.runManager.beginRun(traceId);
+    if (!proc.startDhcpRelease(traceId, this.core, lease)) return false;
+    this.runManager.processUntil(traceId);
+    return this.observation.getLeaseFor(nodeId) === null;
+  }
+
   resolveHostname(nodeId: string, name: string): DnsResolution {
     const dev = this.ctx.nodes.get(nodeId);
     const n = name.toLowerCase().replace(/\.$/, '');
-    if (dev) {
-      const own = dev.dnsRecords.find((r) => r.name.toLowerCase() === n || r.name.toLowerCase() === n + '.');
-      if (own) return { resolved: own.address, server: 'self' };
+    if (!dev) return { resolved: null, nxdomain: true };
+    // Cache klien: hasil resolusi valid bertahan DNS_CACHE_TTL_MS.
+    const cached = dev.dnsCache.get(n);
+    if (cached && cached.expiresAt > this.ctx.time.now()) {
+      return { resolved: cached.ip, server: 'cache' };
     }
-    const servers = dev?.dnsServers || [];
-    if (servers.length === 0) return { resolved: null, timedOut: true };
-    for (const srvIp of servers) {
-      const srv = this.deviceByIp(srvIp);
-      if (!srv || !this.configStore.isNodePowered(srv.id)) continue;
-      const rec = srv.dnsRecords.find((r) => r.name.toLowerCase() === n);
-      if (rec) return { resolved: rec.address, server: srvIp };
+    const out = resolve(dev, name, (ip) => this.deviceByIp(ip), (id) => this.configStore.isNodePowered(id));
+    if (out.resolved) {
+      dev.dnsCache.set(n, { ip: out.resolved, expiresAt: this.ctx.time.now() + DNS_CACHE_TTL_MS });
+      return { resolved: out.resolved, server: out.server };
     }
     // Fallback: nama perangkat di topologi (mis. "PC2" → IP pertamanya).
     const byName = this.deviceByName(n);
@@ -89,6 +127,7 @@ export class SimulationFlows {
       const ip = byName.getIpAddress();
       if (ip) return { resolved: ip, server: 'topology' };
     }
+    if (out.timedOut) return { resolved: null, timedOut: true };
     return { resolved: null, nxdomain: true };
   }
 
@@ -203,15 +242,44 @@ export class SimulationFlows {
     }
     const iface = src.getInterfaces().find((i) => i.ipv6 && i.up);
     if (!iface || !iface.ipv6) {
-      // SLAAC/DHCPv6 client: host dengan interface autoconfig mendapatkan
-      // alamat dari prefix router terhubung sebelum ping.
-      if (src.slaacIfaces.length > 0 && this.configStore.slaacAutoConfig(src)) {
+      // SLAAC client: host mengirim Router Solicitation (E2E) — router
+      // terhubung membalas Router Advertisement berisi prefix, lalu host
+      // menerapkan alamat EUI-64 + default route sebelum ping.
+      if (src.slaacIfaces.length > 0 && this.solicitSlaac(src)) {
         const newIface = src.getInterfaces().find((i) => i.ipv6 && i.up);
         if (newIface?.ipv6) return this.continueSimulatePing6(src, newIface, dstIp);
       }
       return this.pingFail('no-ip');
     }
     return this.continueSimulatePing6(src, iface, dstIp);
+  }
+
+  /** RS → RA: minta prefix ke router terhubung; true bila host mendapat alamat. */
+  private solicitSlaac(src: NetworkDevice): boolean {
+    const iface = src.slaacIfaces
+      .map((name) => src.getIfaceByName(name))
+      .find((i) => i && i.up && !i.ipv6);
+    if (!iface || !iface.mac) return false;
+    const traceId = `ndp-rs-${++this.runSeq}`;
+    this.runManager.beginRun(traceId);
+    // Link-local EUI-64 sebagai sumber RS (alamat SLAAC nanti dari prefix RA).
+    const linkLocal = slaacAddressFor(iface.mac, 'fe80::', 64) || 'fe80::1';
+    const rs = this.core.createPacket({
+      protocol: 'icmp',
+      srcIp: linkLocal,
+      dstIp: ALL_ROUTERS_MCAST_IP,
+      srcMac: iface.mac,
+      dstMac: ALL_ROUTERS_MCAST_MAC,
+      srcPort: 0,
+      dstPort: 0,
+      ttl: 64,
+      traceId,
+      flags: { dir: 'req', icmpType: 133, v6: true },
+      payload: { type: 133, code: 0, icmp6: 'rs' },
+    });
+    this.core.transmit(src, rs, iface.name, traceId);
+    this.runManager.processUntil(traceId, { maxEvents: 50 });
+    return !!iface.ipv6 || !!src.slaacAddresses[iface.name];
   }
 
   private continueSimulatePing6(src: NetworkDevice, iface: NetworkInterfaceModel, dstIp: string): PingSimResult {
@@ -252,7 +320,7 @@ export class SimulationFlows {
   simulateTraceroute(srcNodeId: string, dstIp: string): TracerouteResult {
     const src = this.ctx.nodes.get(srcNodeId);
     if (!src) return { ok: false, hops: [], reason: 'not-found' };
-    if (isIpv6Address(dstIp)) return { ok: false, hops: [], reason: 'invalid' };
+    if (isIpv6Address(dstIp)) return this.simulateTraceroute6(srcNodeId, dstIp);
     const target = this.resolvePingTarget(srcNodeId, dstIp);
     if (!target) return { ok: false, hops: [], reason: 'invalid' };
     dstIp = target;
@@ -327,6 +395,65 @@ export class SimulationFlows {
     return { ok: false, hops, reason: 'unreachable' };
   }
 
+  /** Traceroute IPv6: probe ICMPv6 echo (type 128) dengan TTL naik. */
+  simulateTraceroute6(srcNodeId: string, dstIp: string): TracerouteResult {
+    const src = this.ctx.nodes.get(srcNodeId);
+    if (!src) return { ok: false, hops: [], reason: 'not-found' };
+    if (!this.configStore.isNodePowered(src.id)) return { ok: false, hops: [], reason: 'power' };
+
+    if (!src.getIpv6Address()) {
+      return { ok: false, hops: [], reason: 'no-ip' };
+    }
+    const iface = src.getInterfaces().find((i) => i.ipv6 && i.up);
+    if (!iface || !iface.ipv6) return { ok: false, hops: [], reason: 'no-ip' };
+
+    const MAX_HOPS = 16;
+    const hops: TracerouteResult['hops'] = [];
+    for (let ttl = 1; ttl <= MAX_HOPS; ttl++) {
+      const traceId = `trace6-${++this.runSeq}`;
+      const run = this.runManager.beginRun(traceId);
+      run.fwdPath = [src.name];
+      const logStart = this.core.eventLog.length;
+      const req = this.core.createPacket({
+        protocol: 'icmp',
+        srcIp: iface.ipv6.address,
+        dstIp,
+        srcMac: iface.mac,
+        dstMac: '',
+        srcPort: 0,
+        dstPort: 0,
+        ttl,
+        traceId,
+        flags: { dir: 'req', icmpType: 128, v6: true },
+        payload: { type: 128, code: 0, seq: ttl, id: (Math.random() * 0xffff) & 0xffff, traceroute: true, v6: true },
+      });
+      run.rootPktId = req.id;
+      if (!this.inject6(src, req, traceId)) break;
+      this.runManager.processUntil(traceId);
+
+      if (run.status === 'ok') {
+        const dst = this.deviceByIp(dstIp) || src;
+        hops.push({ name: dst.name, ttl, ip: dstIp });
+        return { ok: true, hops };
+      }
+      const probeEvents = this.core.eventLog.slice(logStart).filter((e) => e.traceId === traceId);
+      const ttlExpired = probeEvents.find((e) => e.type === 'TTL_EXCEEDED');
+      if (ttlExpired && ttlExpired.nodeId) {
+        const hopDev = this.ctx.nodes.get(ttlExpired.nodeId);
+        hops.push({ name: hopDev?.name || ttlExpired.nodeId, ttl, ip: hopDev?.getIpv6Address() || null });
+        continue;
+      }
+      const icmpErr = probeEvents.find((e) => e.type === 'ICMP_ERROR');
+      if (icmpErr && icmpErr.nodeId) {
+        const hopDev = this.ctx.nodes.get(icmpErr.nodeId);
+        hops.push({ name: hopDev?.name || icmpErr.nodeId, ttl, ip: hopDev?.getIpv6Address() || null });
+        return { ok: false, hops, reason: mapReason(run.reason) };
+      }
+      return { ok: false, hops, reason: mapReason(run.reason) };
+    }
+    return { ok: false, hops, reason: 'unreachable' };
+  }
+
   canReach(srcNodeId: string, dstIp: string): boolean {
     return this.simulatePing(srcNodeId, dstIp).success;
   }
@@ -378,6 +505,48 @@ export class SimulationFlows {
       };
     }
     return { ok: false, reason: mapReason(run.reason), handshake: [] };
+  }
+
+  /**
+   * Teardown TCP: klien mengirim FIN ke koneksi ESTABLISHED → server
+   * membalas FIN-ACK dan menghapus sesi (state CLOSE). Dipakai untuk
+   * mengamati teardown 4-way di netstat/event log.
+   */
+  simulateTcpClose(srcNodeId: string, dstIp: string, dstPort = 80): { ok: boolean; reason?: string } {
+    const src = this.ctx.nodes.get(srcNodeId);
+    if (!src) return { ok: false, reason: 'not-found' };
+    if (!this.configStore.isNodePowered(src.id)) return { ok: false, reason: 'power' };
+    const iface = src.getInterfaces().find((i) => i.ip && i.up);
+    if (!iface || !iface.ip) return { ok: false, reason: 'no-ip' };
+
+    const conn = (src.tcpConnections as Array<Record<string, unknown>>).find(
+      (c) => c.remoteIp === dstIp && c.remotePort === dstPort
+    );
+    if (!conn) return { ok: false, reason: 'not-established' };
+
+    const seq = Number(conn.ack) || 1;
+    const ack = Number(conn.seq) || 1;
+    const traceId = `tcp-fin-${++this.runSeq}`;
+    const run = this.runManager.beginRun(traceId);
+    const fin = this.core.createPacket({
+      protocol: 'tcp',
+      srcIp: iface.ip.address,
+      dstIp,
+      srcMac: iface.mac,
+      dstMac: '',
+      srcPort: Number(conn.localPort),
+      dstPort,
+      ttl: DEFAULT_TTL,
+      traceId,
+      flags: { dir: 'req', tcp: 'fin' },
+      // FIN murni: sisi server membalas FIN-ACK lalu kedua sesi ditutup.
+      payload: { ...buildTcpSegment(Number(conn.localPort), dstPort, seq, ack, TCP_FIN) },
+    });
+    run.rootPktId = fin.id;
+    if (!this.inject(src, fin, traceId)) return { ok: false, reason: 'unreachable' };
+    this.runManager.processUntil(traceId);
+    if (run.status === 'ok') return { ok: true, reason: run.reason || 'tcp-closed' };
+    return { ok: false, reason: mapReason(run.reason) };
   }
 
   /**
@@ -443,8 +612,8 @@ export class SimulationFlows {
       }
       return { ok: true, device: String(res.device || ''), oids: res.oids || [] };
     }
-    const raw = run.reason === 'no-agent' ? 'no-agent' : run.reason === 'auth' ? 'auth' : mapReason(run.reason);
-    const reason: SnmpQueryResult['reason'] = (raw === 'ttl' || raw === 'self' || raw === 'blocked' || raw === 'refused') ? 'timeout' : raw;
+    const raw = run.reason === 'no-agent' ? 'no-agent' : run.reason === 'auth' ? 'auth' : run.reason === 'rejected' ? 'rejected' : mapReason(run.reason);
+    const reason: SnmpQueryResult['reason'] = (raw === 'ttl' || raw === 'self' || raw === 'blocked' || raw === 'refused' || raw === 'rejected') ? 'timeout' : raw;
     return { ok: false, reason, error: run.reason === 'auth' ? 'Bad community name' : undefined };
   }
 
@@ -516,6 +685,7 @@ function mapReason(reason: string | undefined): PingSimResult['reason'] {
     case 'refused':
     case 'ttl':
     case 'unreachable':
+    case 'rejected':
       return reason;
     default:
       return 'unreachable';

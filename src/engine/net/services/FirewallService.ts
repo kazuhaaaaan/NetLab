@@ -11,6 +11,8 @@ import { parseCidr, networkOf } from '../core/ip';
 export interface AclVerdict {
   deny: boolean;
   kind: 'acl' | 'firewall';
+  /** aksi rule pemenang: 'deny' (drop senyap) atau 'reject' (balas RST/ICMP). */
+  action?: 'deny' | 'reject';
 }
 
 /**
@@ -54,7 +56,10 @@ export function aclBlocks(device: NetworkDevice, pkt: Packet, inPort?: string, o
       if (!portMatches(rule.dstPort, pkt.dstPort)) continue;
     }
     if (rule.action === 'deny') {
-      return { deny: true, kind: (rule as AclRule & { aclId?: unknown }).aclId != null ? 'acl' : 'firewall' };
+      return { deny: true, kind: (rule as AclRule & { aclId?: unknown }).aclId != null ? 'acl' : 'firewall', action: 'deny' };
+    }
+    if (rule.action === 'reject') {
+      return { deny: true, kind: (rule as AclRule & { aclId?: unknown }).aclId != null ? 'acl' : 'firewall', action: 'reject' };
     }
     // Rule permit pertama yang cocok menang — first-match-wins, evaluasi berhenti.
     return { deny: false, kind: 'firewall' };
@@ -82,6 +87,57 @@ export function applyAclDeny(
   const verdict = aclBlocks(device, pkt, inPort, outName);
   if (!verdict.deny) return false;
   const reason = verdict.kind === 'acl' ? 'acl-deny' : 'firewall';
+  if (verdict.action === 'reject') {
+    // Reject ≠ drop senyap: pengirim dibalas RST (TCP) / ICMP unreachable
+    // (UDP/ICMP) — sisi pengirim melihat koneksi ditolak, bukan timeout.
+    core.emit('FIREWALL_REJECT', traceId, { dstIp: pkt.dstIp, srcIp: pkt.srcIp, outInterface: outName }, device.id, inPort);
+    const inIface = device.getIfaceByPortId(inPort) || device.getIfaceByName(inPort);
+    if (inIface) {
+      if (pkt.protocol === 'tcp') {
+        const seg = (pkt.payload ?? {}) as Record<string, unknown> & { seq?: number; ack?: number; flags?: number };
+        const rst = core.createPacket({
+          protocol: 'tcp',
+          srcMac: inIface.mac,
+          dstMac: pkt.srcMac,
+          srcIp: pkt.dstIp,
+          dstIp: pkt.srcIp,
+          srcPort: pkt.dstPort,
+          dstPort: pkt.srcPort,
+          ttl: 64,
+          traceId,
+          payload: {
+            seq: 0,
+            ack: (seg.seq ?? 0) + 1,
+            ackNum: (seg.ack ?? 0) + 1,
+            flags: 4,
+          },
+        });
+        rst.vlan = pkt.vlan;
+        core.transmit(device, rst, inIface.name, traceId);
+      } else if (pkt.protocol === 'icmp' || pkt.protocol === 'udp') {
+        const unreach = core.createPacket({
+          protocol: 'icmp',
+          srcMac: inIface.mac,
+          dstMac: pkt.srcMac,
+          srcIp: pkt.dstIp,
+          dstIp: pkt.srcIp,
+          ttl: 64,
+          traceId,
+          payload: { type: 3, code: 13, seq: 0, id: 0, detail: 'communication-administratively-prohibited' },
+        });
+        unreach.vlan = pkt.vlan;
+        core.transmit(device, unreach, inIface.name, traceId);
+      }
+    }
+    const run = core.getRun(traceId);
+    if (run && run.status === 'running') {
+      run.blocked = true;
+      run.status = 'fail';
+      run.reason = 'rejected';
+    }
+    core.drop(device, pkt, 'firewall-reject', traceId);
+    return true;
+  }
   core.emit('FIREWALL_BLOCK', traceId, { dstIp: pkt.dstIp, srcIp: pkt.srcIp, outInterface: outName }, device.id, inPort);
   const run = core.getRun(traceId);
   if (run && run.status === 'running') {

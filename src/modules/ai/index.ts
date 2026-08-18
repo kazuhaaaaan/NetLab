@@ -31,3 +31,6 @@ export { analyzePackets } from './PacketAnalyzer';
 export { buildChecks, probeIssues } from './NetworkAnalyzer';
 
 export type * from './types';
+
+// ── AI Network Agent (tool system + shared verification) ──────
+export * from './agent';

@@ -44,3 +44,6 @@ export function isAck(seg: TcpSegment): boolean {
 export function isFin(seg: TcpSegment): boolean {
   return seg.flags.includes('FIN');
 }
+export function isRst(seg: TcpSegment): boolean {
+  return seg.flags.includes('RST');
+}

@@ -22,6 +22,8 @@ export interface IcmpPayload {
   id: number;
   /** alasan ICMP error */
   detail?: string;
+  /** true = pesan ICMPv6 (tipe error 1/3, bukan 3/11 IPv4). */
+  v6?: boolean;
 }
 
 /** Bangun ICMP echo request/reply sebagai payload struktur. */

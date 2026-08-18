@@ -6,12 +6,24 @@
 import { NetworkDevice } from './NetworkDevice';
 import { SimulatorCore } from './DeviceProcessor';
 import { Packet } from '../core/types';
-import { solicitedNodeMac } from '../core/ipv6';
+import { solicitedNodeMac, macToIpv6 } from '../core/ipv6';
 
 export const NDP_NS = 135;
 export const NDP_NA = 136;
 export const ICMPV6_ECHO_REQUEST = 128;
 export const ICMPV6_ECHO_REPLY = 129;
+export const ICMPV6_RS = 133;
+export const ICMPV6_RA = 134;
+export const ALL_ROUTERS_MCAST_IP = 'ff02::2';
+export const ALL_ROUTERS_MCAST_MAC = '33:33:00:00:00:02';
+
+/**
+ * Alamat SLAAC (EUI-64) untuk sebuah MAC di dalam prefix — dipakai oleh
+ * pemroses Router Advertisement dan fallback statis ConfigStore.
+ */
+export function slaacAddressFor(mac: string, prefix: string, prefixLength: number): string | null {
+  return macToIpv6(mac, prefix, Math.min(prefixLength, 64));
+}
 
 /**
  * Kirim `pkt` lewat `outPortName` menuju next-hop IPv6 `nextHopIp6`.

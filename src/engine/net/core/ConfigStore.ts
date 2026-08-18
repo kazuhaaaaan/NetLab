@@ -245,6 +245,16 @@ export class ConfigStore {
         // sudah lama (MAC master lama) → bersihkan supaya host melakukan
         // ARP ulang dan menemukan master baru.
         for (const dev of devices) dev.arpCache.clear();
+        // Transisi master terlihat di event log (observability failover).
+        const now = this.ctx.time.now();
+        this.ctx.bus.emit({
+          id: `evt-vrrp-${now}-${oldMaster}-${newMaster}`,
+          traceId: `vrrp-${vip}`,
+          type: 'VRRP_TRANSITION',
+          time: now,
+          nodeId: newMaster,
+          data: { vip, from: oldMaster, to: newMaster },
+        });
       }
     }
   }
@@ -504,6 +514,8 @@ export class ConfigStore {
     const dev = this.ctx.nodes.get(nodeId);
     if (dev) {
       dev.snmpAgent = cfg && cfg.enabled ? { enabled: true, community: cfg.community || 'public', communityRW: cfg.communityRW || 'private', sysContact: cfg.sysContact || '', sysLocation: cfg.sysLocation || '' } : null;
+      // Agent (aktif) memulai penghitung sysUpTime dari momen ini.
+      dev.snmpUptimeBase = dev.snmpAgent ? this.ctx.time.now() : null;
     }
   }
 

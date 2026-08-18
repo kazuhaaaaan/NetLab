@@ -21,7 +21,7 @@ import {
   OspfNeighborInfo,
   TcpConnectionInfo,
 } from '../compat';
-import { BgpRibEntry, OspfLsa } from '../services/RoutingProtocolEngine';
+import { BgpRibEntry, EigrpNeighborView, EigrpTopologyEntry, OspfLsa } from '../services/RoutingProtocolEngine';
 import { qosStatsOf } from '../services/QosService';
 
 export class Observation {
@@ -114,10 +114,12 @@ export class Observation {
     return out;
   }
 
-  getLeaseFor(nodeId: string): DhcpLeaseGrant | null {
+  getLeaseFor(nodeId: string, ifaceName?: string): DhcpLeaseGrant | null {
     const dev = this.ctx.nodes.get(nodeId);
     if (!dev) return null;
-    for (const lease of dev.leases.values()) return lease;
+    for (const [iface, lease] of dev.leases.entries()) {
+      if (!ifaceName || iface === ifaceName) return lease;
+    }
     return null;
   }
 
@@ -193,6 +195,14 @@ export class Observation {
   /** Loc-RIB BGP (hasil best-path selection) untuk observasi/verifikasi. */
   getBgpRib(nodeId: string): BgpRibEntry[] {
     return this.ctx.routingProtocols.getBgpRib(nodeId);
+  }
+
+  /** Tetangga EIGRP + tabel topologi DUAL untuk observasi/verifikasi. */
+  getEigrpInfo(nodeId: string): { neighbors: EigrpNeighborView[]; topology: EigrpTopologyEntry[] } {
+    return {
+      neighbors: this.ctx.routingProtocols.getEigrpNeighbors(nodeId),
+      topology: this.ctx.routingProtocols.getEigrpTopology(nodeId),
+    };
   }
 
   getTcpConnections(nodeId: string): TcpConnectionInfo[] {

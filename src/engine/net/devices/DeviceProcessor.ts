@@ -21,6 +21,8 @@ export interface SimulatorCore {
   usedIps(): Set<string>;
   /** True bila lease dengan IP itu dimiliki klien MAC ini (renewal DHCP). */
   isIpLeasedTo?(ip: string, mac: string): boolean;
+  /** Hapus semua lease dengan IP itu (DHCP release — IP kembali ke pool). */
+  releaseLease?(ip: string): void;
   /** Status flow yang sedang berjalan (dibaca processor untuk menandai sukses/gagal). */
   getRun(traceId: string): RunResult;
 }
@@ -29,6 +31,10 @@ export interface DeviceProcessor {
   handlePacket(pkt: Packet, inPort: string, core: SimulatorCore, traceId: string): void;
   /** Inisiasi DHCP client (hanya host). */
   startDhcp?(traceId: string, core: SimulatorCore): boolean;
+  /** Renew lease (DHCPREQUEST dengan requestedIp miliknya, T1 = 50% lease). */
+  startDhcpRenew?(traceId: string, core: SimulatorCore, lease: { ip: string; gateway?: string; prefix?: number }): boolean;
+  /** Release lease (DHCPRELEASE → server hapus lease, IP kembali ke pool). */
+  startDhcpRelease?(traceId: string, core: SimulatorCore, lease: { ip: string }): boolean;
 }
 
 export function processorKind(device: NetworkDevice): string {

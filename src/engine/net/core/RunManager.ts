@@ -93,6 +93,15 @@ export class RunManager {
     const dir = pkt.flags['dir'] === 'reply' ? 'rev' : 'fwd';
     pkt.hops.push({ nodeId: device.id, port: evt.port || '', time: this.ctx.time.now(), direction: dir });
 
+    // Penghitung ingress per interface (SNMP ifInOctets/ifInUcastPkts).
+    const inIface = device.getIfaceByPortId(evt.port || '') || device.getIfaceByName(evt.port || '');
+    if (inIface) {
+      const c = device.ifaceCounters.get(inIface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0 };
+      c.inPkts += 1;
+      c.inOctets += Math.max(pkt.size, 64);
+      device.ifaceCounters.set(inIface.name, c);
+    }
+
     if (run && dir === 'fwd' && pkt.correlationId === d.traceId && pkt.flags['dir'] === 'req') {
       if (run.fwdPath[run.fwdPath.length - 1] !== device.name) run.fwdPath.push(device.name);
     }
@@ -107,6 +116,13 @@ export class RunManager {
       if (agedMac.length > 0) this.core.emit('MAC_AGED', `aging-${dev.id}`, { macs: agedMac }, dev.id);
       const agedArp = dev.arpCache.age(now);
       if (agedArp.length > 0) this.core.emit('DEBUG_TRACE', `aging-${dev.id}`, { arpAged: agedArp }, dev.id);
+      // Neighbor cache IPv6 (NDP) ikut di-age — entry stale tidak menempel.
+      const agedNdp = dev.ipv6Neighbors.age(now);
+      if (agedNdp.length > 0) this.core.emit('DEBUG_TRACE', `aging-${dev.id}`, { ndpAged: agedNdp }, dev.id);
+      // Cache DNS klien (TTL 300s) di-age bersama siklus aging.
+      for (const [name, entry] of [...dev.dnsCache.entries()]) {
+        if (entry.expiresAt <= now) dev.dnsCache.delete(name);
+      }
       // Lease DHCP yang kedaluwarsa dikembalikan ke pool.
       for (const [iface, lease] of [...dev.leases.entries()]) {
         if (lease.expiresAt <= now) dev.leases.delete(iface);

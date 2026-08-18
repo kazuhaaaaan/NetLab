@@ -179,7 +179,7 @@ export function snmpCommand(raw: string, vendorId: string, mem: NodeMemory, cont
 export function setSnmpPairs(t: string, mem: NodeMemory): boolean {
   const body = t.replace(/^\/snmp\s+set/i, '').trim();
   const pairs = body.split(/\s+/).filter(Boolean);
-  let any = false;
+  let touched = false;
   for (const p of pairs) {
     const eq = p.indexOf('=');
     if (eq <= 0) continue;
@@ -197,9 +197,9 @@ export function setSnmpPairs(t: string, mem: NodeMemory): boolean {
     } else {
       return false;
     }
-    any = true;
+    touched = true;
   }
-  return any;
+  return touched;
 }
 
 export function matchSnmpQuery(t: string): {

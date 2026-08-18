@@ -8,6 +8,30 @@
 //   ingress → interface validation (up/shutdown) → VLAN tag subinterface
 //   → link/neighbor/powered check → QoS (mangle + simple queue)
 //   → transmission delay → scheduler (PACKET_SEND) → event log.
+//
+// PIPELINE PAKET KANONIK (seluruh engine — ingress di DeviceProcessor,
+// egress di sini; urutan persis implementasi lama, tidak diubah):
+//
+//   Ingress (DeviceProcessor.handlePacket per jenis perangkat)
+//    ↓ powered check
+//    ↓ interface validation (up/shutdown)
+//    ↓ ARP/NDP (router) — diproses di jalur tersendiri
+//    ↓ STP port state (switch/wireless: blocking/alternate tidak meneruskan)
+//    ↓ ACL/firewall ingress (applyAclDeny; DHCP bootstrap dikecualikan)
+//    ↓ L2 processing (switch: VLAN classification access/trunk/native,
+//    ↓   VlanTable otoritatif, MAC learning, port security)
+//    ↓ L3 lookup (router: LPM routing table; firewall/NAT chain)
+//    ↓ NAT (dstnat → masquerade/unmasquerade)
+//    ↓ TTL / ICMP error
+//    ↓ Egress (SimulationCore.transmit)
+//    ↓ interface validation (up/shutdown) + VLAN tag subinterface
+//    ↓ link/neighbor/powered check
+//    ↓ QoS (mangle + simple queue token bucket)
+//    ↓ transmission delay → scheduler (PACKET_SEND)
+//    ↓ Destination processing (handlePacket hop berikutnya)
+//
+// Urutan ini diverifikasi oleh run_all_tests.mts (1498 assertions) dan
+// TIDAK BOLEH diubah tanpa membuktikan bug networking semantics lebih dulu.
 // ============================================================
 
 import { NetworkDevice } from '../devices/NetworkDevice';
@@ -139,6 +163,7 @@ export class SimulationCore {
     if (!pkt.edgeIds.includes(neighbor.linkId)) pkt.edgeIds.push(neighbor.linkId);
 
     const frame = clonePacket(pkt);
+    this.countEgress(device, portId, pkt);
     this.ctx.scheduler.schedule(
       { type: 'PACKET_SEND', traceId, nodeId: neighbor.nodeId, port: neighbor.port, data: { pkt: frame, traceId } },
       this.ctx.time.now() + delay
@@ -199,6 +224,25 @@ export class SimulationCore {
       }
     }
     return false;
+  }
+
+  /** Hapus semua lease dengan IP itu (DHCP release — IP kembali ke pool). */
+  releaseLease(ip: string): void {
+    for (const dev of this.ctx.nodes.values()) {
+      for (const [iface, lease] of [...dev.leases.entries()]) {
+        if (lease.ip === ip) dev.leases.delete(iface);
+      }
+    }
+  }
+
+  /** Catat paket keluar pada penghitung interface (SNMP ifOutOctets/ifOutUcastPkts). */
+  private countEgress(device: NetworkDevice, outPort: string, pkt: Packet): void {
+    const iface = device.getIfaceByName(outPort) || device.getIfaceByPortId(outPort);
+    if (!iface) return;
+    const c = device.ifaceCounters.get(iface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0 };
+    c.outPkts += 1;
+    c.outOctets += Math.max(pkt.size, 64);
+    device.ifaceCounters.set(iface.name, c);
   }
 
   /** Status flow yang sedang berjalan — run yang belum ada dibuat (semantik SimulatorCore lama). */

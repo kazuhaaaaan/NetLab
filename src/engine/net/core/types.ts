@@ -98,6 +98,12 @@ export type SimEventType =
   | 'ROUTING_UPDATE'
   | 'NAT_REWRITE'
   | 'FIREWALL_BLOCK'
+  | 'FIREWALL_REJECT'
+  | 'VRRP_TRANSITION'
+  | 'NDP_RS'
+  | 'NDP_RA'
+  | 'TCP_FIN'
+  | 'TCP_RST'
   | 'TTL_EXCEEDED'
   | 'ICMP_ERROR'
   | 'TCP_SYN'
@@ -169,7 +175,8 @@ export interface DnsRecord {
 }
 
 export interface AclRule {
-  action: 'permit' | 'deny';
+  /** permit = izinkan (first-match), deny = drop senyap, reject = drop + balas RST/ICMP unreachable. */
+  action: 'permit' | 'deny' | 'reject';
   /** Nomor/nama rule vendor (mis. ACL number Cisco 100) — pembeda ACL vs firewall. */
   aclId?: number | string;
   proto?: string;
@@ -230,7 +237,8 @@ export interface RunResult {
   handshake?: { seq: number; ack: number; flags: string }[];
   statusCode?: number;
   body?: string;
-  snmp?: any;
+  /** Hasil query SNMP (payload respons agent: oids/device/ok/error/reason). */
+  snmp?: Record<string, unknown>;
 }
 
 export const MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff';

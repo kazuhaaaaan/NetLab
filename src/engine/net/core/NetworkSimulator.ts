@@ -60,7 +60,7 @@ import {
   TracerouteResult,
   WebServerInfo,
 } from '../compat';
-import { OspfLsa, BgpRibEntry } from '../services/RoutingProtocolEngine';
+import { OspfLsa, BgpRibEntry, EigrpNeighborView, EigrpTopologyEntry } from '../services/RoutingProtocolEngine';
 import { FhrpState } from '../services/FhrpService';
 import { SimulationContext, SimRunOptions } from './SimulationContext';
 import { SimulationCore } from './SimulationCore';
@@ -324,6 +324,16 @@ export class NetworkSimulator implements SimulatorCore {
     return this.flows.grantDhcpLease(nodeId, ifaceName);
   }
 
+  /** Renew lease (T1): DHCPREQUEST dengan IP milik klien → ACK server. */
+  simulateDhcpRenew(nodeId: string, ifaceName?: string): DhcpLeaseGrant | null {
+    return this.flows.simulateDhcpRenew(nodeId, ifaceName);
+  }
+
+  /** Release lease: DHCPRELEASE → lease dihapus server, IP kembali ke pool. */
+  simulateDhcpRelease(nodeId: string, ifaceName?: string): boolean {
+    return this.flows.simulateDhcpRelease(nodeId, ifaceName);
+  }
+
   dhcpLeaseFor(nodeId: string, ifaceName?: string): DhcpLeaseGrant | null {
     return this.flows.dhcpLeaseFor(nodeId, ifaceName);
   }
@@ -361,6 +371,11 @@ export class NetworkSimulator implements SimulatorCore {
     return this.flows.simulateTcpConnect(srcNodeId, dstIp, dstPort);
   }
 
+  /** Teardown TCP (FIN): server balas FIN-ACK + hapus sesi ESTABLISHED. */
+  simulateTcpClose(srcNodeId: string, dstIp: string, dstPort = 80): { ok: boolean; reason?: string } {
+    return this.flows.simulateTcpClose(srcNodeId, dstIp, dstPort);
+  }
+
   simulateSnmpQuery(
     srcNodeId: string,
     dstIp: string,
@@ -390,6 +405,11 @@ export class NetworkSimulator implements SimulatorCore {
 
   getBgpRib(nodeId: string): BgpRibEntry[] {
     return this.observation.getBgpRib(nodeId);
+  }
+
+  /** Tetangga EIGRP + tabel topologi DUAL (successor/feasible successor). */
+  getEigrpInfo(nodeId: string): { neighbors: EigrpNeighborView[]; topology: EigrpTopologyEntry[] } {
+    return this.observation.getEigrpInfo(nodeId);
   }
 
   getTcpConnections(nodeId: string): TcpConnectionInfo[] {

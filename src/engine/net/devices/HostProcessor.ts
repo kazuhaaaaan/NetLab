@@ -85,6 +85,54 @@ export class HostProcessor extends RouterProcessor {
     return true;
   }
 
+  /** Renew (T1): host mengirim DHCPREQUEST dengan requestedIp miliknya.
+   *  Server menjawab ACK (perpanjang) — NAK hanya bila IP diambil klien lain. */
+  startDhcpRenew(traceId: string, core: SimulatorCore, lease: { ip: string; gateway?: string; prefix?: number }): boolean {
+    const dev = this.device;
+    const iface = this.pickClientIface();
+    if (!iface || !iface.ip) return false;
+    const xid = Math.floor(Math.random() * 0xffffffff) >>> 0;
+    dev.dhcpClient = { xid, state: 'renew', ifaceName: iface.name, offered: { ip: lease.ip, gateway: String(lease.gateway || ''), prefix: Number(lease.prefix) || 24 } };
+    const req = core.createPacket({
+      protocol: 'udp',
+      srcMac: iface.mac,
+      dstMac: MAC_BROADCAST,
+      srcIp: iface.ip.address,
+      dstIp: '255.255.255.255',
+      srcPort: 68,
+      dstPort: 67,
+      ttl: 64,
+      traceId,
+      payload: { type: 'request', xid, requestedIp: lease.ip, renew: true },
+    });
+    core.emit('DHCP_REQUEST', traceId, { xid, renew: true, ip: lease.ip }, dev.id, iface.name);
+    core.transmit(dev, req, iface.name, traceId);
+    return true;
+  }
+
+  /** Release: host mengirim DHCPRELEASE; server menghapus lease, IP kembali ke pool. */
+  startDhcpRelease(traceId: string, core: SimulatorCore, lease: { ip: string }): boolean {
+    const dev = this.device;
+    const iface = this.pickClientIface();
+    if (!iface) return false;
+    dev.dhcpClient = { xid: Math.floor(Math.random() * 0xffffffff) >>> 0, state: 'released', ifaceName: iface.name };
+    const rel = core.createPacket({
+      protocol: 'udp',
+      srcMac: iface.mac,
+      dstMac: MAC_BROADCAST,
+      srcIp: lease.ip,
+      dstIp: '255.255.255.255',
+      srcPort: 68,
+      dstPort: 67,
+      ttl: 64,
+      traceId,
+      payload: { type: 'release', xid: Math.floor(Math.random() * 0xffffffff) >>> 0, ip: lease.ip },
+    });
+    core.emit('DHCP_RELEASE', traceId, { ip: lease.ip, mac: iface.mac }, dev.id, iface.name);
+    core.transmit(dev, rel, iface.name, traceId);
+    return true;
+  }
+
   protected override handleUdpLocal(
     pkt: Packet,
     inPort: string,
@@ -140,7 +188,7 @@ export class HostProcessor extends RouterProcessor {
         target.ip = { address: String(p.ip), prefix: Number(p.prefix) || state.offered.prefix };
         target.up = true;
         const lease = buildLease(target.name, state.offered, core.now, Number(p.leaseTimeMs) || undefined);
-        dev.leases.set(target.name, lease);
+        dev.leases.set(target.name, { ...lease, poolNodeId: state.offered.poolNodeId || lease.poolNodeId });
         // DNS server dari option 6 — klien memakainya untuk resolve hostname.
         if (Array.isArray(p.dnsServers) && (p.dnsServers as unknown[]).length > 0) {
           dev.dnsServers = (p.dnsServers as string[]).filter((s) => typeof s === 'string');

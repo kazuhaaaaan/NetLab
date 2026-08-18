@@ -555,17 +555,23 @@ export const ciscoiosEntries: ChainEntry[] = [
             let proto = 'ip';
             if (tokens.length > 0 && /^(ip|icmp|tcp|udp|any)$/i.test(tokens[0])) proto = tokens.shift()!.toLowerCase();
     
-    // Wildcard valid: 0.0.0.0 (host), 0.0.0.x, 0.0.x.255, 0.x.255.255, x.255.255.255
+    // Wildcard valid: 0.0.0.0 (host), 0.0.0.255 (CANONICAL /24!),
+    // 0.0.x.255, 0.x.255.255, x.255.255.255, serta pola parsial
+    // 2^n-1 / 256-2^n (mis. 0.0.0.1, 0.0.0.127, 0.0.0.254).
             const isWildcard = (s: string): boolean => {
               if (!/^\d+\.\d+\.\d+\.\d+$/.test(s)) return false;
               const os = s.split('.').map(Number);
               if (os.some((o) => o < 0 || o > 255)) return false;
               if (s === '0.0.0.0' || s === '255.255.255.255') return true;
-              if (os[0] === 0 && os[1] === 0 && os[2] === 0 && os[3] !== 0 && os[3] !== 255) return true;
-              if (os[0] === 0 && os[1] === 0 && os[2] !== 0 && os[3] === 255) return true;
-              if (os[0] === 0 && os[1] !== 0 && os[2] === 255 && os[3] === 255) return true;
-              if (os[0] !== 0 && os[0] !== 255 && os[1] === 255 && os[2] === 255 && os[3] === 255) return true;
-              return false;
+              const octetOk = (o: number): boolean => {
+                if (o === 0 || o === 255) return true;
+                // 2^n - 1 (1,3,7,15,31,63,127)
+                if ((o & (o + 1)) === 0) return true;
+                // 256 - 2^n (128,192,224,240,248,252,254)
+                if ((o | (o - 1)) === 255) return true;
+                return false;
+              };
+              return os.every(octetOk) && os.some((o) => o !== 0);
             };
             const wildcardToCidr = (ip: string, wc: string): string => {
               if (!wc || wc === '0.0.0.0' || wc === '255.255.255.255' || ip === 'any') return ip;

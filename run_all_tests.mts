@@ -32,6 +32,8 @@ import { runCommandTreeTests } from './tests/unit/commandTree.test';
 import { runPortInspectorTests } from './tests/unit/portInspector.test';
 import { runMentorTests } from './tests/unit/mentorCreator.test';
 import { runProductionEngineTests } from './tests/unit/productionEngine.test';
+import { runProtocolFidelityTests } from './tests/unit/protocolFidelity.test';
+import { runAiAgentTests } from './tests/unit/aiAgent.test';
 import { dropCodeOf } from './src/engine/net/core/dropReasons';
 import { NatTranslator } from './src/engine/net/layer4/Nat';
 import type { Packet } from './src/engine/net/core/types';
@@ -1900,7 +1902,8 @@ console.log('\n== 15. Engine correctness (host IP, traceroute, power, DHCP, NAT/
   const ifaceIps = (sim: NetworkSimulator, nodeId: string) =>
     (sim.getDeviceStats(nodeId)?.interfaces || []).map((i) => i.ip).filter((x): x is string => !!x);
 
-  // 15a. Alamat network/broadcast/prefix>30 DITOLAK sebagai host IP
+  // 15a. Alamat network/broadcast DITOLAK sebagai host IP; /31 (point-to-point,
+  // RFC 3021) dan /32 (loopback) DITERIMA — keduanya alamat host yang sah.
   {
     const sim = new NetworkSimulator();
     const project: LabProjectLike = { nodes: [eNode('r1', 'R1', 'router', 4, 'a1')], edges: [] };
@@ -1908,15 +1911,15 @@ console.log('\n== 15. Engine correctness (host IP, traceroute, power, DHCP, NAT/
     sim.applyNodeConfig('r1', {
       ether1: '192.168.1.0/24',    // alamat network — bukan host valid
       ether2: '192.168.2.255/24',  // alamat broadcast
-      ether3: '192.168.3.1/32',    // /32 — tidak ada ruang host
+      ether3: '192.168.3.1/32',    // /32 loopback — alamat host sah
       ether4: '192.168.4.1/24',    // host valid
     }, []);
     const ips = ifaceIps(sim, 'r1');
     check('15a alamat network ditolak', !ips.includes('192.168.1.0/24'), JSON.stringify(ips));
     check('15a alamat broadcast ditolak', !ips.includes('192.168.2.255/24'), JSON.stringify(ips));
-    check('15a prefix /32 ditolak', !ips.includes('192.168.3.1/32'), JSON.stringify(ips));
+    check('15a prefix /32 loopback diterima', ips.includes('192.168.3.1/32'), JSON.stringify(ips));
     check('15a host valid diterima', ips.includes('192.168.4.1/24'), JSON.stringify(ips));
-    check('15a hanya 1 IP terpasang', ips.length === 1, JSON.stringify(ips));
+    check('15a hanya 2 IP terpasang', ips.length === 2, JSON.stringify(ips));
   }
 
   // 15b. Traceroute per-TTL hop-by-hop (bukan satu ping): sukses, putus tengah, unreachable
@@ -2767,6 +2770,21 @@ const pep = runProductionEngineTests();
 passed += pep.passed;
 failed += pep.failed;
 fails.push(...pep.fails);
+
+// ── 31. Protocol fidelity (Prompt 4): TCP RST/FIN, ICMPv6, DHCP renew/
+//       release, DNS CNAME/cache, firewall reject, SNMP counters, EIGRP DUAL
+console.log('\n== 31. Protocol fidelity (TCP/L4, ICMPv6, DHCP, DNS, FW reject, SNMP, EIGRP DUAL) ==');
+const pfrep = runProtocolFidelityTests();
+passed += pfrep.passed;
+failed += pfrep.failed;
+fails.push(...pfrep.fails);
+
+// ── 32. AI Network Agent + Shared Verification Engine (Prompt 2 & 3) ────
+console.log('\n== 32. AI Network Agent & Shared Verification Engine ==');
+const airep = runAiAgentTests();
+passed += airep.passed;
+failed += airep.failed;
+fails.push(...airep.fails);
 
 // ── 28. Routing protocol fidelity: OSPF FSM/LSDB/SPF + BGP FSM/selection ──
 // State machine berbasis round: compute({rounds:n}) menjalankan tepat n

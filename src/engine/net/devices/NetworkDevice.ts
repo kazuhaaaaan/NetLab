@@ -105,7 +105,7 @@ export class NetworkDevice {
   /** Agent SNMP (community, hidup/mati) — diisi via CLI + engine. */
   snmpAgent: SnmpAgentConfig | null = null;
   /** Basis uptime (ticks) untuk sysUpTime.0. */
-  snmpUptimeBase = 0;
+  snmpUptimeBase: number | null = null;
 
   // ── STP/RSTP ──────────────────────────────────────────────────
   stpConfig: StpConfig = { enabled: true, priority: DEFAULT_STP_PRIORITY, mode: DEFAULT_STP_MODE };
@@ -118,6 +118,8 @@ export class NetworkDevice {
   fhrpGroups: FhrpGroup[] = [];
   /** Virtual IP yang "dimiliki" perangkat ini (hanya master, diisi computeFhrp). */
   virtualIps: string[] = [];
+  /** virtual IP → MAC virtual VRRP (00:00:5e:00:01:xx) milik master (diisi computeFhrp). */
+  virtualMacs = new Map<string, string>();
 
   // ── DHCP relay & port-security & SLAAC ──────────────────────
   /** port (nama interface) → alamat server DHCP (ip helper-address). */
@@ -144,14 +146,18 @@ export class NetworkDevice {
 
   /** Lease DHCP yang aktif: iface → lease */
   leases = new Map<string, NetLease>();
+  /** Cache DNS klien: nama → { ip, expiresAt } (TTL tetap 300s, diisi resolveHostname). */
+  dnsCache = new Map<string, { ip: string; expiresAt: number }>();
+  /** Penghitung paket per interface (untuk ifTable SNMP ifIn/ifOutOctets). */
+  ifaceCounters = new Map<string, { inPkts: number; outPkts: number; inOctets: number; outOctets: number }>();
   /** Koneksi TCP yang tercatat (netstat) */
   tcpConnections: Record<string, unknown>[] = [];
   /** State DHCP client (host): xid, fase, IP yang ditawarkan */
   dhcpClient: {
     xid: number;
-    state: 'idle' | 'discover' | 'offer' | 'request' | 'bound';
+    state: 'idle' | 'discover' | 'offer' | 'request' | 'bound' | 'renew' | 'released';
     ifaceName?: string;
-    offered?: { ip: string; gateway: string; prefix: number; poolNodeId: string };
+    offered?: { ip: string; gateway: string; prefix: number; poolNodeId?: string };
   } | null = null;
 
   constructor(id: string, name: string, deviceType: string, kind: DeviceKind, vendor = deviceType) {
