@@ -22,18 +22,23 @@ export const WinNetworkSettings: React.FC<WinHostProps> = ({ nodeId, nodeName, s
   const currentIp = iface?.ip ?? null;
   const routes = stats?.routes ?? [];
   const defaultRoute = routes.find((r) => r.dst === '0.0.0.0/0' || r.dst === '0.0.0.0');
-  const dnsServers = mem.dnsServers ?? [];
+  // Satu sumber kebenaran: engine dulu (DHCP option 6 / static), memory sebagai cermin.
+  const dnsServers = (sim.getDevice(nodeId)?.dnsServers ?? mem.dnsServers ?? []);
 
   const doDhcp = () => {
     setBusy(true);
     setFlash(null);
     // DHCP lewat engine: lease di-grant lewat jalur yang sama dengan CLI
-    // (dhcpClientGrant) — server DHCP menentukan IP/gateway.
+    // (dhcpClientGrant) — server DHCP menentukan IP/gateway/DNS.
     const lease = sim.grantDhcpLease(nodeId, iface?.name ?? 'eth0');
     if (lease) {
-      const withDns = [...dnsServers];
-      mem.dnsServers = withDns;
-      setFlash(`DHCP berhasil: IP ${lease.ip}/${lease.prefix}, gateway ${lease.gateway}`);
+      // DNS option 6 dari server DHCP → memory Windows (satu sumber kebenaran:
+      // engine memberi, memory mencerminkan, sync berikutnya tidak menimpa).
+      if (lease.dnsServers && lease.dnsServers.length > 0) {
+        mem.dnsServers = [...lease.dnsServers];
+        sim.setDnsServers(nodeId, mem.dnsServers);
+      }
+      setFlash(`DHCP berhasil: IP ${lease.ip}/${lease.prefix}, gateway ${lease.gateway}${lease.dnsServers?.length ? `, DNS ${lease.dnsServers.join(', ')}` : ''}`);
     } else {
       setFlash('DHCP gagal — tidak ada server DHCP yang merespons di segmen ini.');
     }

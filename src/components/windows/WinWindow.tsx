@@ -12,6 +12,10 @@ export interface WinWindowFrameProps {
   children: React.ReactNode;
   width?: number;
   height?: number;
+  /** Posisi relatif terhadap area desktop (single source of truth). */
+  pos?: { x: number; y: number };
+  /** Z-index dari window manager (bukan kelas statis). */
+  zIndex?: number;
 }
 
 export const WinWindowFrame: React.FC<WinWindowFrameProps> = ({
@@ -25,14 +29,22 @@ export const WinWindowFrame: React.FC<WinWindowFrameProps> = ({
   children,
   width,
   height,
+  pos,
+  zIndex,
 }) => {
   if (minimized) return null;
   return (
     <div
       className={`absolute flex flex-col rounded-t-lg shadow-2xl border overflow-hidden ${
-        active ? 'border-sky-400/60 z-20' : 'border-slate-600/60 z-10 opacity-90'
+        active ? 'border-sky-400/60' : 'border-slate-600/60 opacity-90'
       }`}
-      style={{ width: width ?? 640, height: height ?? 420 }}
+      style={{
+        width: width ?? 640,
+        height: height ?? 420,
+        left: pos?.x ?? 0,
+        top: pos?.y ?? 0,
+        zIndex: zIndex ?? 10,
+      }}
       onMouseDown={onFocus}
     >
       <div
@@ -42,25 +54,27 @@ export const WinWindowFrame: React.FC<WinWindowFrameProps> = ({
             : 'bg-gradient-to-r from-slate-700 to-slate-600 text-slate-200'
         }`}
       >
-        <Icon className="w-3.5 h-3.5" />
+        <Icon className="w-3.5 h-3.5 shrink-0" />
         <span className="text-[11px] font-semibold tracking-wide flex-1 truncate">{title}</span>
         <button
-          className="p-0.5 rounded hover:bg-white/20 text-white/80"
+          className="p-1 rounded hover:bg-white/20 text-white/80"
           onClick={(e) => {
             e.stopPropagation();
             onMinimize();
           }}
           title="Minimize"
+          aria-label={`Minimalkan ${title}`}
         >
           <Minus className="w-3 h-3" />
         </button>
         <button
-          className="p-0.5 rounded hover:bg-rose-600 text-white/80"
+          className="p-1 rounded hover:bg-rose-600 text-white/80"
           onClick={(e) => {
             e.stopPropagation();
             onClose();
           }}
           title="Close"
+          aria-label={`Tutup ${title}`}
         >
           <X className="w-3 h-3" />
         </button>

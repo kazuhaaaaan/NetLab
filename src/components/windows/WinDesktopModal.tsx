@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, FileText, Folder, Globe, Power, Settings, X } from 'lucide-react';
+import { Code2, FileText, Folder, Globe, Power, Settings, TerminalSquare, X } from 'lucide-react';
 import type { NetworkSimulator } from '../../engine/net/core/NetworkSimulator';
 import type { NodeMemory } from '../../../packages/vendors/src/common/types';
 import { WinWindowFrame } from './WinWindow';
@@ -8,7 +8,9 @@ import { WinNetworkSettings } from './WinNetworkSettings';
 import { WinWebsiteEditor } from './WinWebsiteEditor';
 import { WinFileExplorer } from './WinFileExplorer';
 import { WinNotepad } from './WinNotepad';
+import { WinTerminal } from './WinTerminal';
 import type { WinWindowDef } from './types';
+import { cascadePos, closeWin, fitWindow, focusWin, minimizeWin, openWin, topWin, toggleWin } from '../../modules/windows/windowManager';
 
 interface WinDesktopModalProps {
   nodeId: string;
@@ -19,21 +21,17 @@ interface WinDesktopModalProps {
   onChanged: () => void;
   onTogglePower: () => void;
   onClose: () => void;
+  /** Jalur CLI yang SAMA dengan terminal utama (runCliCommand engine). */
+  runCommand?: (cmd: string) => string;
 }
 
 interface OpenWin {
+  id: string;
   def: WinWindowDef;
   minimized: boolean;
   z: number;
+  pos: { x: number; y: number };
 }
-
-const ICON_DEFS = [
-  { id: 'browser', label: 'NetBrowser', icon: Globe, color: 'text-sky-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'browser', title: 'NetBrowser', icon: Globe, width: 700, height: 440, content: <WinNetBrowser {...p} /> }) },
-  { id: 'editor', label: 'Website Editor', icon: Code2, color: 'text-emerald-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'editor', title: 'Website Editor', icon: Code2, width: 640, height: 460, content: <WinWebsiteEditor {...p} /> }) },
-  { id: 'network', label: 'Network Settings', icon: Settings, color: 'text-amber-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'network', title: 'Network Settings', icon: Settings, width: 620, height: 400, content: <WinNetworkSettings {...p} /> }) },
-  { id: 'docs', label: 'My Documents', icon: Folder, color: 'text-cyan-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'docs', title: 'My Documents', icon: Folder, width: 620, height: 400, content: <WinFileExplorer {...p} /> }) },
-  { id: 'notepad', label: 'Notepad', icon: FileText, color: 'text-slate-200', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'notepad', title: 'Notepad', icon: FileText, width: 480, height: 360, content: <WinNotepad {...p} /> }) },
-];
 
 type WinHostPropsLike = {
   nodeId: string;
@@ -41,6 +39,7 @@ type WinHostPropsLike = {
   sim: NetworkSimulator;
   getMem: () => NodeMemory;
   onChanged: () => void;
+  runCommand?: (cmd: string) => string;
 };
 
 export const WinDesktopModal: React.FC<WinDesktopModalProps> = ({
@@ -52,70 +51,136 @@ export const WinDesktopModal: React.FC<WinDesktopModalProps> = ({
   onChanged,
   onTogglePower,
   onClose,
+  runCommand,
 }) => {
-  const hostProps: WinHostPropsLike = useMemo(() => ({ nodeId, nodeName, sim, getMem, onChanged }), [nodeId, nodeName, sim, getMem, onChanged]);
+  const hostProps: WinHostPropsLike = useMemo(
+    () => ({ nodeId, nodeName, sim, getMem, onChanged, runCommand }),
+    [nodeId, nodeName, sim, getMem, onChanged, runCommand]
+  );
   const [windows, setWindows] = useState<OpenWin[]>([]);
   const [startOpen, setStartOpen] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   const zCounter = useRef(10);
+  const desktopRef = useRef<HTMLDivElement>(null);
+  const [area, setArea] = useState({ w: 1024, h: 600 });
 
   useEffect(() => {
     const t = setInterval(() => setClock(new Date()), 15000);
     return () => clearInterval(t);
   }, []);
 
-  const openWindow = (def: WinWindowDef) => {
-    setStartOpen(false);
-    setWindows((prev) => {
-      const existing = prev.find((w) => w.def.id === def.id);
-      const z = ++zCounter.current;
-      if (existing) {
-        return prev.map((w) => (w.def.id === def.id ? { ...w, minimized: false, z } : w));
-      }
-      return [...prev, { def, minimized: false, z }];
-    });
-  };
+  // Ukuran area desktop nyata → lebar jendela adaptif (desktop & mobile).
+  useEffect(() => {
+    const measure = () => {
+      const el = desktopRef.current;
+      if (el) setArea({ w: el.clientWidth, h: el.clientHeight });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+
+  // Ukuran jendela adaptif: min(def, area) — mobile ≈ fullscreen, tanpa overflow.
+  const fitSize = (def: WinWindowDef) => fitWindow(def.width, def.height, area);
 
   const closeWindow = (id: string) => {
-    setWindows((prev) => prev.filter((w) => w.def.id !== id));
+    setWindows((prev) => closeWin(prev, id));
   };
 
   const minimizeWindow = (id: string) => {
-    setWindows((prev) => prev.map((w) => (w.def.id === id ? { ...w, minimized: true } : w)));
+    setStartOpen(false);
+    setWindows((prev) => minimizeWin(prev, id));
   };
 
+  // Satu-satunya jalur fokus: restore (jika diminimalkan) + z tertinggi.
   const focusWindow = (id: string) => {
+    setStartOpen(false);
+    setWindows((prev) => focusWin(prev, id, zCounter));
+  };
+
+  const toggleWindow = (id: string) => {
+    setStartOpen(false);
+    setWindows((prev) => toggleWin(prev, id, zCounter));
+  };
+
+  const openWindow = (def: WinWindowDef) => {
+    setStartOpen(false);
     setWindows((prev) => {
-      const z = ++zCounter.current;
-      return prev.map((w) => (w.def.id === id ? { ...w, z } : w));
+      const size = fitSize(def);
+      const pos = cascadePos(prev.length, size, area);
+      return openWin(prev, { id: def.id, def, minimized: false, z: 0, pos }, zCounter);
     });
   };
 
-  const active = [...windows].sort((a, b) => b.z - a.z)[0];
+  // ── Definisi aplikasi — semua memakai window manager yang sama ────────
+  const appDefs = useMemo(() => {
+    const defs: Array<{
+      id: string;
+      label: string;
+      icon: React.ElementType;
+      color: string;
+      window: (p: WinHostPropsLike) => WinWindowDef;
+    }> = [
+      { id: 'browser', label: 'NetBrowser', icon: Globe, color: 'text-sky-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'browser', title: 'NetBrowser', icon: Globe, width: 700, height: 440, content: <WinNetBrowser {...p} /> }) },
+      { id: 'terminal', label: 'Terminal', icon: TerminalSquare, color: 'text-purple-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'terminal', title: 'Terminal', icon: TerminalSquare, width: 640, height: 420, content: <WinTerminal {...p} /> }) },
+      { id: 'editor', label: 'Website Editor', icon: Code2, color: 'text-emerald-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'editor', title: 'Website Editor', icon: Code2, width: 640, height: 460, content: <WinWebsiteEditor {...p} /> }) },
+      { id: 'network', label: 'Network Settings', icon: Settings, color: 'text-amber-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'network', title: 'Network Settings', icon: Settings, width: 620, height: 400, content: <WinNetworkSettings {...p} /> }) },
+      { id: 'docs', label: 'My Documents', icon: Folder, color: 'text-cyan-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'docs', title: 'My Documents', icon: Folder, width: 620, height: 400, content: <WinFileExplorer {...p} /> }) },
+      {
+        id: 'notepad',
+        label: 'Notepad',
+        icon: FileText,
+        color: 'text-slate-200',
+        window: (p: WinHostPropsLike): WinWindowDef => ({
+          id: 'notepad',
+          title: 'Notepad',
+          icon: FileText,
+          width: 480,
+          height: 360,
+          content: (
+            <WinNotepad
+              {...p}
+              onCancel={() => closeWindow('notepad')}
+              onSave={(name, content) => {
+                const mem = p.getMem();
+                const files = Array.isArray(mem.files) ? (mem.files as Array<{ name: string; content: string }>) : [];
+                mem.files = [...files.filter((f) => f.name !== name), { name, content }];
+                p.onChanged();
+              }}
+            />
+          ),
+        }),
+      },
+    ];
+    return defs;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostProps]);
+
+  const active = topWin(windows);
   const sorted = [...windows].sort((a, b) => a.z - b.z);
 
-  const icon = (def: (typeof ICON_DEFS)[number]) => (
+  const icon = (def: (typeof appDefs)[number]) => (
     <button
       key={def.id}
-      className="flex flex-col items-center gap-1 w-20 p-1 rounded hover:bg-white/10 active:bg-white/20"
+      className="flex flex-col items-center gap-1 w-16 sm:w-20 p-1 rounded hover:bg-white/10 active:bg-white/20"
       onDoubleClick={() => openWindow(def.window(hostProps))}
     >
-      <def.icon className={`w-8 h-8 ${def.color}`} />
+      <def.icon className={`w-7 h-7 sm:w-8 sm:h-8 ${def.color}`} />
       <span className="text-[9px] text-white text-center leading-tight drop-shadow">{def.label}</span>
     </button>
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-1 sm:p-3" onMouseDown={onClose}>
       <div
-        className="relative w-full max-w-4xl h-[86vh] rounded-xl overflow-hidden border border-slate-700 shadow-2xl flex flex-col"
+        className="relative w-full h-[92dvh] sm:h-[86vh] max-w-4xl rounded-lg sm:rounded-xl overflow-hidden border border-slate-700 shadow-2xl flex flex-col"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* ── Desktop ── */}
-        <div className="relative flex-1 win-wallpaper overflow-hidden">
+        <div ref={desktopRef} className="relative flex-1 win-wallpaper overflow-hidden">
           {!powered ? (
-            <div className="absolute inset-0 bg-black flex flex-col items-center justify-center gap-3 text-center">
-              <div className="text-slate-600 text-3xl font-bold select-none">[Komputer dimatikan]</div>
+            <div className="absolute inset-0 bg-black flex flex-col items-center justify-center gap-3 text-center px-4">
+              <div className="text-slate-600 text-2xl sm:text-3xl font-bold select-none">[Komputer dimatikan]</div>
               <button
                 onClick={onTogglePower}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs"
@@ -126,67 +191,74 @@ export const WinDesktopModal: React.FC<WinDesktopModalProps> = ({
           ) : (
             <>
               {/* Ikon desktop */}
-              <div className="absolute top-2 left-2 flex flex-col gap-1">{ICON_DEFS.map(icon)}</div>
+              <div className="absolute top-2 left-2 flex flex-col gap-1">{appDefs.map(icon)}</div>
 
               {/* Jendela */}
-              {sorted.map((w) => (
-                <WinWindowFrame
-                  key={w.def.id}
-                  title={w.def.title}
-                  icon={w.def.icon}
-                  minimized={w.minimized}
-                  active={active?.def.id === w.def.id}
-                  onFocus={() => focusWindow(w.def.id)}
-                  onMinimize={() => minimizeWindow(w.def.id)}
-                  onClose={() => closeWindow(w.def.id)}
-                  width={w.def.width}
-                  height={w.def.height}
-                >
-                  {w.def.content}
-                </WinWindowFrame>
-              ))}
+              {sorted.map((w) => {
+                const size = fitSize(w.def);
+                return (
+                  <WinWindowFrame
+                    key={w.id}
+                    title={w.def.title}
+                    icon={w.def.icon}
+                    minimized={w.minimized}
+                    active={active?.id === w.id}
+                    onFocus={() => focusWindow(w.id)}
+                    onMinimize={() => minimizeWindow(w.id)}
+                    onClose={() => closeWindow(w.id)}
+                    width={size.width}
+                    height={size.height}
+                    pos={w.pos}
+                    zIndex={w.z}
+                  >
+                    {w.def.content}
+                  </WinWindowFrame>
+                );
+              })}
             </>
           )}
         </div>
 
         {/* ── Taskbar ── */}
-        <div className="h-10 bg-slate-800/95 border-t border-slate-700 flex items-center px-2 gap-1 relative">
+        <div className="h-10 bg-slate-800/95 border-t border-slate-700 flex items-center px-2 gap-1 relative shrink-0">
           <button
             onClick={() => setStartOpen((o) => !o)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded hover:bg-slate-700 text-slate-200 text-[11px] font-semibold"
           >
             <span className="win-logo inline-block w-4 h-4" />
-            Mulai
+            <span className="hidden sm:inline">Mulai</span>
           </button>
 
-          {windows.map((w) => (
-            <button
-              key={w.def.id}
-              onClick={() => (w.minimized ? focusWindow(w.def.id) : minimizeWindow(w.def.id))}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded text-[10px] border ${
-                active?.def.id === w.def.id && !w.minimized
-                  ? 'bg-slate-700 border-sky-600 text-white'
-                  : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              <w.def.icon className="w-3 h-3" />
-              {w.def.title}
-            </button>
-          ))}
+          <div className="flex-1 flex items-center gap-1 overflow-x-auto">
+            {windows.map((w) => (
+              <button
+                key={w.id}
+                onClick={() => toggleWindow(w.id)}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded text-[10px] border whitespace-nowrap ${
+                  active?.id === w.id && !w.minimized
+                    ? 'bg-slate-700 border-sky-600 text-white'
+                    : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-700'
+                }`}
+                title={w.def.title}
+              >
+                <w.def.icon className="w-3 h-3" />
+                {w.def.title}
+              </button>
+            ))}
+          </div>
 
-          <div className="flex-1" />
-          <div className="text-[10px] text-slate-300 font-mono px-2">
+          <div className="text-[10px] text-slate-300 font-mono px-2 shrink-0">
             {clock.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
           </div>
-          <button onClick={onClose} className="p-1.5 rounded hover:bg-rose-700 text-slate-300" title="Tutup desktop">
+          <button onClick={onClose} className="p-1.5 rounded hover:bg-rose-700 text-slate-300 shrink-0" title="Tutup desktop">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {/* Start menu */}
         {startOpen && powered && (
-          <div className="absolute bottom-12 left-2 w-56 bg-slate-800/95 border border-slate-600 rounded-lg shadow-2xl p-1.5">
-            {ICON_DEFS.map((def) => (
+          <div className="absolute bottom-12 left-2 w-52 sm:w-56 max-h-[60%] overflow-y-auto bg-slate-800/95 border border-slate-600 rounded-lg shadow-2xl p-1.5">
+            {appDefs.map((def) => (
               <button
                 key={def.id}
                 onClick={() => openWindow(def.window(hostProps))}

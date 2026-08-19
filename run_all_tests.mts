@@ -35,6 +35,7 @@ import { runProductionEngineTests } from './tests/unit/productionEngine.test';
 import { runProtocolFidelityTests } from './tests/unit/protocolFidelity.test';
 import { runAiAgentTests } from './tests/unit/aiAgent.test';
 import { runWindowsClientTests } from './tests/unit/windowsClient.test';
+import { runWindowsMasterFixTests } from './tests/unit/windowsMasterFix.test';
 import { dropCodeOf } from './src/engine/net/core/dropReasons';
 import { NatTranslator } from './src/engine/net/layer4/Nat';
 import type { Packet } from './src/engine/net/core/types';
@@ -2793,6 +2794,13 @@ const winrep = runWindowsClientTests();
 passed += winrep.passed;
 failed += winrep.failed;
 fails.push(...winrep.fails);
+
+// ── 34. Master Fix — Windows + AI + UI (Prompt 5) ───────────────────────
+console.log('\n== 34. Master Fix — Windows + AI + UI ==');
+const fixrep = runWindowsMasterFixTests();
+passed += fixrep.passed;
+failed += fixrep.failed;
+fails.push(...fixrep.fails);
 
 // ── 28. Routing protocol fidelity: OSPF FSM/LSDB/SPF + BGP FSM/selection ──
 // State machine berbasis round: compute({rounds:n}) menjalankan tepat n

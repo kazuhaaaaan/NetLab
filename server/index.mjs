@@ -113,7 +113,16 @@ const SYSTEM_PROMPT = [
   'Ardhana (KazuDev) dan bisa dihubungi lewat www.kazudev.my.id.',
   '',
   'Aturan:',
-  '- Jawab dalam Bahasa Indonesia, ringkas dan praktis, maksimal ~150 kata.',
+  '- Jawab dalam Bahasa Indonesia, jelas dan praktis. Panjang jawaban ADAPTIF mengikuti',
+  '  kompleksitas pertanyaan (jangan dipotong paksa):',
+  '  * Pertanyaan sederhana → 50–150 kata, langsung ke inti.',
+  '  * Troubleshooting / diagnosis → 200–500 kata.',
+  '  * Konfigurasi perangkat → 300–800 kata bila perlu (perintah CLI lengkap + penjelasan singkat).',
+  '  * Tutorial atau diagnosis kompleks → sepanjang yang diperlukan.',
+  '- Jangan memanjangkan jawaban hanya demi panjang — tetap padat dan relevan.',
+  '- Untuk troubleshooting, gunakan struktur: (1) Diagnosis, (2) Kemungkinan penyebab,',
+  '  (3) Penjelasan singkat, (4) Langkah perbaikan, (5) Cara verifikasi,',
+  '  (6) Hal yang perlu diperiksa bila masih gagal. Struktur ini opsional untuk pertanyaan sederhana.',
   '- Fokus pada langkah perbaikan yang bisa langsung dicoba di simulator (perintah CLI vendor).',
   '- Jika diberi "KONTEKS JARINGAN", gunakan sebagai fakta kondisi jaringan saat ini — jangan berasumsi.',
   '- Jika tidak tahu atau konteks tidak cukup, bilang jujur dan minta info tambahan.',
@@ -193,7 +202,7 @@ app.post('/api/ai', async (req, res) => {
     const call = ai.models.generateContent({
       model: MODEL,
       contents: buildPrompt(question, context, cleanHistory),
-      config: { maxOutputTokens: 1000 },
+      config: { maxOutputTokens: 2048 },
     });
     const response = await Promise.race([
       call,

@@ -13,6 +13,34 @@ const WIN = 'windows';
 
 export const windowsEntries: ChainEntry[] = [
   {
+    // help khusus windows — order 0 agar menang atas generic b1 (order 1)
+    // yang membungkus help dengan { type: 'help' } → output kosong.
+    name: 'w9',
+    order: 0,
+    vendors: 'all',
+    match: ({ vendorId, rawInput }) => vendorId === WIN && (/^help\b/i.test(rawInput.trim()) || rawInput.trim() === '?'),
+    run: () => ({
+      raw: [
+        'Perintah yang tersedia:',
+        '  ipconfig [/all]     Tampilkan konfigurasi IP (seperti Status Jaringan)',
+        '  ping <host>         Uji konektivitas via engine',
+        '  tracert <host>      Lacak rute paket via engine',
+        '  nslookup <host>     Resolusi DNS via engine',
+        '  curl <url>          Ambil halaman web via engine (jalur paket nyata)',
+        '  arp -a              Tabel ARP perangkat (state engine)',
+        '  route print         Tabel rute perangkat (state engine)',
+        '  netstat             Koneksi TCP aktif (state engine)',
+        '  hostname            Nama komputer',
+        '  ver                 Versi Windows',
+        '  systeminfo          Ringkasan sistem',
+        '  dir                 Daftar file (My Documents)',
+        '  type <file>         Isi file teks',
+        '  cls                 Bersihkan layar',
+        '  echo <teks>         Cetak teks',
+      ].join('\r\n'),
+    }),
+  },
+  {
     name: 'w10',
     order: 10,
     vendors: 'all',
@@ -23,20 +51,9 @@ export const windowsEntries: ChainEntry[] = [
       const action = (input.match(/^(\S+)/) || [])[1]?.toLowerCase() || '';
 
       if (action === 'help') {
-        cmdResult = { raw: [
-          'Perintah yang tersedia:',
-          '  ipconfig [/all]     Tampilkan konfigurasi IP (seperti Status Jaringan)',
-          '  ping <host>         Uji konektivitas via engine',
-          '  nslookup <host>     Resolusi DNS via engine',
-          '  curl <url>          Ambil halaman web via engine (jalur paket nyata)',
-          '  hostname            Nama komputer',
-          '  ver                 Versi Windows',
-          '  systeminfo          Ringkasan sistem',
-          '  dir                 Daftar file (My Documents)',
-          '  type <file>         Isi file teks',
-          '  cls                 Bersihkan layar',
-          '  echo <teks>         Cetak teks',
-        ].join('\r\n') };
+        // Normalnya tidak pernah tercapai (entry w9 order 0 menang), dijaga
+        // untuk ketahanan bila urutan chain berubah.
+        cmdResult = { raw: 'Ketik: ipconfig, ping, tracert, nslookup, curl, arp -a, route print, netstat, hostname, ver, systeminfo, dir, type, cls, echo' };
       } else if (action === 'ipconfig') {
         const all = /\/all/i.test(input);
         const rows: string[] = [];
@@ -91,6 +108,61 @@ export const windowsEntries: ChainEntry[] = [
           if (m[2]) port = Number(m[2]);
         }
         cmdResult = { raw: context?.connectivitySimulator ? context.connectivitySimulator(target, WIN, port) : `curl: tidak ada simulator` };
+      } else if (action === 'arp') {
+        // arp -a: tabel ARP nyata dari engine (state perangkat, bukan teks palsu).
+        const entries = (context?.arpProvider ? context.arpProvider() : []) as Array<{ ip?: string; mac?: string }>;
+        if (entries.length === 0) {
+          cmdResult = { raw: 'Tidak ada entri ARP — lakukan ping/curl dulu agar tabel terisi (paket nyata).' };
+        } else {
+          const rows = entries.map((e) => `  ${String(e.ip || '-').padEnd(18)}${String(e.mac || '-').padEnd(22)}dynamic`);
+          cmdResult = {
+            raw: [
+              'Interface: ' + (mem.configuredIps ? Object.values(mem.configuredIps)[0]?.split('/')[0] ?? '-' : '-'),
+              '',
+              '  Internet Address      Physical Address      Type',
+              rows.join('\r\n'),
+            ].join('\r\n'),
+          };
+        }
+      } else if (action === 'route') {
+        // route print: tabel rute nyata dari engine.
+        const routes = (context?.routeProvider ? context.routeProvider() : []) as Array<{ dst?: string; gateway?: string; iface?: string; kind?: string }>;
+        if (routes.length === 0) {
+          cmdResult = { raw: 'Tidak ada rute aktif — konfigurasi IP/route dulu (Network Settings).' };
+        } else {
+          const rows = routes.map((r) => `  ${String(r.dst || '-').padEnd(16)}${String(r.gateway || '-').padEnd(14)}${String(r.iface || '-').padEnd(8)}${String(r.kind || '')}`);
+          cmdResult = {
+            raw: [
+              'Route aktif:',
+              '===========================================================================',
+              '  Tujuan           Gateway          Interface  Sumber',
+              rows.join('\r\n'),
+              '===========================================================================',
+            ].join('\r\n'),
+          };
+        }
+      } else if (action === 'tracert' || action === 'traceroute') {
+        const host = input.replace(/^(tracert|traceroute)\s+/i, '').split(/\s+/)[0] || '';
+        cmdResult = { raw: context?.tracerouteSimulator ? context.tracerouteSimulator(host, WIN) : `% Tidak dapat menemukan host ${host}. Periksa ejaan dan coba lagi.` };
+      } else if (action === 'netstat') {
+        const conns = (context?.tcpProvider ? context.tcpProvider() : []) as Array<{ localIp?: string; localPort?: number; remoteIp?: string; remotePort?: number; state?: string; proto?: string }>;
+        if (conns.length === 0) {
+          cmdResult = { raw: 'Tidak ada koneksi TCP aktif.' };
+        } else {
+          const rows = conns.map((c) => {
+            const local = `${c.localIp ?? '0.0.0.0'}:${c.localPort ?? 0}`;
+            const remote = `${c.remoteIp ?? '0.0.0.0'}:${c.remotePort ?? 0}`;
+            return `  ${String(c.proto ?? 'TCP').padEnd(6)}${local.padEnd(28)}${remote.padEnd(28)}${String(c.state ?? '')}`;
+          });
+          cmdResult = {
+            raw: [
+              'Koneksi Aktif',
+              '',
+              '  Proto  Alamat Lokal                  Alamat Asing                 Status',
+              rows.join('\r\n'),
+            ].join('\r\n'),
+          };
+        }
       } else if (action === 'hostname') {
         cmdResult = { raw: context?.name || mem.hostname || 'windows-client' };
       } else if (action === 'ver') {

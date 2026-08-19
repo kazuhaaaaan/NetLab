@@ -118,7 +118,17 @@ export class Observation {
     const dev = this.ctx.nodes.get(nodeId);
     if (!dev) return null;
     for (const [iface, lease] of dev.leases.entries()) {
-      if (!ifaceName || iface === ifaceName) return lease;
+      if (!ifaceName || iface === ifaceName) {
+        return {
+          ip: lease.ip,
+          gateway: lease.gateway,
+          prefix: lease.prefix,
+          poolNodeId: lease.poolNodeId,
+          // DNS option 6 yang diterima klien saat ACK — satu sumber kebenaran
+          // (dev.dnsServers di-set dari payload ACK oleh HostProcessor).
+          dnsServers: dev.dnsServers.length > 0 ? [...dev.dnsServers] : undefined,
+        };
+      }
     }
     return null;
   }

@@ -10,8 +10,9 @@
  * dikirim sebagai system instruction / contents.
  */
 
-const env = (typeof import.meta !== 'undefined' ? (import.meta as any).env : {}) as Record<string, string | undefined>;
-const IS_DEV = typeof import.meta !== 'undefined' && Boolean((import.meta as any).env?.DEV);
+const meta = (typeof import.meta !== 'undefined' ? import.meta : {}) as any;
+const env = (meta.env ?? {}) as Record<string, string | undefined>;
+const IS_DEV = Boolean(meta.env?.DEV);
 // Mode langsung hanya diizinkan saat development; produksi selalu lewat proxy.
 const DIRECT_KEY = IS_DEV ? (env.VITE_GEMINI_API_KEY || '').trim() : '';
 const DIRECT_MODEL = (env.VITE_GEMINI_MODEL || 'gemini-3.5-flash').trim();
@@ -35,7 +36,7 @@ export function isDirectLlmEnabled(): boolean {
   return Boolean(DIRECT_KEY);
 }
 
-function systemPrompt(context?: string): string {
+export function systemPrompt(context?: string): string {
   return [
     'Kamu adalah Aikari, asisten AI untuk simulator jaringan multi-vendor',
     '(MikroTik, Cisco IOS/NX-OS, Juniper, Huawei, Fortinet, VyOS/Ubiquiti, OpenWrt, Linux).',
@@ -45,7 +46,16 @@ function systemPrompt(context?: string): string {
     'Ardhana (KazuDev) dan bisa dihubungi lewat www.kazudev.my.id.',
     '',
     'Aturan:',
-    '- Jawab dalam Bahasa Indonesia, ringkas dan praktis, maksimal ~150 kata.',
+    '- Jawab dalam Bahasa Indonesia, jelas dan praktis. Panjang jawaban ADAPTIF mengikuti',
+    '  kompleksitas pertanyaan (jangan dipotong paksa):',
+    '  * Pertanyaan sederhana → 50–150 kata, langsung ke inti.',
+    '  * Troubleshooting / diagnosis → 200–500 kata.',
+    '  * Konfigurasi perangkat → 300–800 kata bila perlu (perintah CLI lengkap + penjelasan singkat).',
+    '  * Tutorial atau diagnosis kompleks → sepanjang yang diperlukan.',
+    '- Jangan memanjangkan jawaban hanya demi panjang — tetap padat dan relevan.',
+    '- Untuk troubleshooting, gunakan struktur: (1) Diagnosis, (2) Kemungkinan penyebab,',
+    '  (3) Penjelasan singkat, (4) Langkah perbaikan, (5) Cara verifikasi,',
+    '  (6) Hal yang perlu diperiksa bila masih gagal. Struktur ini opsional untuk pertanyaan sederhana.',
     '- Fokus pada langkah perbaikan yang bisa langsung dicoba di simulator (perintah CLI vendor).',
     '- Jika diberi "KONTEKS JARINGAN", gunakan sebagai fakta kondisi jaringan saat ini — jangan berasumsi.',
     '- Jika tidak tahu atau konteks tidak cukup, bilang jujur dan minta info tambahan.',
@@ -77,7 +87,7 @@ async function askGeminiDirect(question: string, context?: string, history?: Llm
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt(context) }] },
           contents,
-          generationConfig: { maxOutputTokens: 1000 },
+          generationConfig: { maxOutputTokens: 2048 },
         }),
         signal: controller.signal,
       }

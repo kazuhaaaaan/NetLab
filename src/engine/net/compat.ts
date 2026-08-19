@@ -102,6 +102,8 @@ export interface DhcpLeaseGrant {
   gateway: string;
   prefix: number;
   poolNodeId: string;
+  /** DNS server (option 6) yang dikirim server DHCP bersama lease. */
+  dnsServers?: string[];
 }
 
 export interface RoutingMemoryShape {

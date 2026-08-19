@@ -1322,6 +1322,102 @@ export default function App() {
     return outcome;
   }, [agent, pushAiNote, setStatsVersion]);
 
+  // Konteks CLI per node — SATU sumber kebenaran untuk semua jalur terminal
+  // (terminal utama & Windows Terminal memakai jalur engine yang sama).
+  const buildCliContext = (nodeId: string) => {
+    const node = project.nodes.find((n) => n.id === nodeId);
+    return {
+      nodeId,
+      name: node?.name || nodeId,
+      ports: node?.ports || [],
+      portLinks: portLinksOfNode(node, project.edges),
+      pingSimulator: (host: string, vendorId: string) => {
+        const result = simEngineRef.current.simulatePing(nodeId, host);
+        return formatPingOutput(vendorId, host, result);
+      },
+      tracerouteSimulator: (host: string, vendorId: string) => {
+        const result = simEngineRef.current.simulateTraceroute(nodeId, host);
+        return formatTracerouteOutput(vendorId, host, result);
+      },
+      routeProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.routes || [],
+      dhcpClientGrant: (iface: string, _addDefaultRoute?: boolean) => {
+        const granted = simEngineRef.current.grantDhcpLease(nodeId, iface);
+        return granted
+          ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId, dnsServers: granted.dnsServers }
+          : null;
+      },
+      connectivitySimulator: (host: string, vendorId: string, port?: number) => {
+        // curl ke hostname → resolve via DNS yang dikonfigurasi perangkat
+        let target = host;
+        let label = host;
+        if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
+          const res = simEngineRef.current.resolveHostname(nodeId, host);
+          if (!res.resolved) {
+            return `curl: (6) Could not resolve host: ${host}`;
+          }
+          target = res.resolved;
+          label = host;
+        }
+        // Real 3-way TCP handshake (SYN → SYN-ACK → ACK) — port-forward
+        // (dstnat) translates the destination before the handshake begins.
+        const conn = simEngineRef.current.simulateTcpConnect(nodeId, target, port || 80);
+        if (!conn.ok) {
+          const reason = conn.reason;
+          if (reason === 'no-ip') return 'curl: (6) Could not resolve host: ' + host;
+          if (reason === 'ttl') return 'curl: (28) Timeout: TTL exceeded menuju ' + label;
+          return `curl: (7) Failed to connect to ${label} port ${port || 80} after 3000 ms: Connection refused`;
+        }
+        setStatsVersion((v) => v + 1);
+        const body =
+          conn.body ||
+          `<html><head><title>Welcome to ${label}</title></head><body><h1>It works!</h1></body></html>`;
+        return `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\n\r\n${body}`;
+      },
+      dnsResolver: (name: string) => simEngineRef.current.resolveHostname(nodeId, name),
+      neighborProvider: (proto: 'cdp' | 'lldp') => simEngineRef.current.getLldpNeighbors(nodeId),
+      ospfNeighborProvider: () => simEngineRef.current.getOspfNeighbors(nodeId),
+      fhrpProvider: () => simEngineRef.current.getFhrpInfo(nodeId),
+      ipv6Provider: () => simEngineRef.current.getIpv6Info(nodeId),
+      bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
+      tcpProvider: () => simEngineRef.current.getTcpConnections(nodeId),
+      arpProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.arp || [],
+      macTableProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.macTable || [],
+      stpProvider: () => simEngineRef.current.getStpInfo(nodeId),
+      wirelessProvider: () => simEngineRef.current.getWirelessInfo(nodeId),
+      qosProvider: () => simEngineRef.current.getQosStats(nodeId),
+      snmpQueryProvider: (host: string, community: string, oid: string, opts?: { walk?: boolean; setValue?: string }) => {
+        // hostname → resolve via DNS konfigurasi perangkat (seperti curl)
+        let target = host;
+        if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
+          const res = simEngineRef.current.resolveHostname(nodeId, host);
+          if (!res.resolved) return { ok: false, reason: 'not-found' };
+          target = res.resolved;
+        }
+        return simEngineRef.current.simulateSnmpQuery(nodeId, target, community, oid, opts || {});
+      },
+    };
+  };
+
+  // Windows Terminal (aplikasi Desktop): jalur engine yang SAMA dengan terminal utama.
+  const handleWindowsTerminalCommand = (nodeId: string, cmd: string): string => {
+    const node = project.nodes.find((n) => n.id === nodeId);
+    if (!node) return 'Error: Node not found.';
+    syncNodeToEngine(nodeId);
+    const out = runCliCommand({
+      bridge: appBridgeRef.current,
+      vendor: node.vendor,
+      nodeId,
+      cmd,
+      mode: 'exec',
+      context: buildCliContext(nodeId),
+    }).output;
+    syncNodeToEngine(nodeId);
+    syncDhcpPools();
+    setStatsVersion((v) => v + 1);
+    StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory());
+    return out;
+  };
+
   const handleSendTerminalCommand = (nodeId: string, cmd: string, mode?: CliMode) => {
     const node = project.nodes.find((n) => n.id === nodeId);
     const vendor = node?.vendor || 'mikrotik';
@@ -1382,76 +1478,7 @@ export default function App() {
         nodeId,
         cmd,
         mode: mode || 'exec',
-        context: {
-        nodeId,
-        name: node.name,
-        ports: node.ports,
-        portLinks: portLinksOfNode(node, project.edges),
-        pingSimulator: (host: string, vendorId: string) => {
-          const result = simEngineRef.current.simulatePing(nodeId, host);
-          return formatPingOutput(vendorId, host, result);
-        },
-        tracerouteSimulator: (host: string, vendorId: string) => {
-          const result = simEngineRef.current.simulateTraceroute(nodeId, host);
-          return formatTracerouteOutput(vendorId, host, result);
-        },
-        routeProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.routes || [],
-        dhcpClientGrant: (iface: string, addDefaultRoute: boolean) => {
-          const granted = simEngineRef.current.grantDhcpLease(nodeId, iface);
-          return granted
-            ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId }
-            : null;
-        },
-        connectivitySimulator: (host: string, vendorId: string, port?: number) => {
-          // curl ke hostname → resolve via DNS yang dikonfigurasi perangkat
-          let target = host;
-          let label = host;
-          if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
-            const res = simEngineRef.current.resolveHostname(nodeId, host);
-            if (!res.resolved) {
-              return `curl: (6) Could not resolve host: ${host}`;
-            }
-            target = res.resolved;
-            label = host;
-          }
-          // Real 3-way TCP handshake (SYN → SYN-ACK → ACK) — port-forward
-          // (dstnat) translates the destination before the handshake begins.
-          const conn = simEngineRef.current.simulateTcpConnect(nodeId, target, port || 80);
-          if (!conn.ok) {
-            const reason = conn.reason;
-            if (reason === 'no-ip') return 'curl: (6) Could not resolve host: ' + host;
-            if (reason === 'ttl') return 'curl: (28) Timeout: TTL exceeded menuju ' + label;
-            return `curl: (7) Failed to connect to ${label} port ${port || 80} after 3000 ms: Connection refused`;
-          }
-          setStatsVersion((v) => v + 1);
-          const body =
-            conn.body ||
-            `<html><head><title>Welcome to ${label}</title></head><body><h1>It works!</h1></body></html>`;
-          return `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\n\r\n${body}`;
-        },
-        dnsResolver: (name: string) => simEngineRef.current.resolveHostname(nodeId, name),
-        neighborProvider: (proto: 'cdp' | 'lldp') => simEngineRef.current.getLldpNeighbors(nodeId),
-        ospfNeighborProvider: () => simEngineRef.current.getOspfNeighbors(nodeId),
-        fhrpProvider: () => simEngineRef.current.getFhrpInfo(nodeId),
-        ipv6Provider: () => simEngineRef.current.getIpv6Info(nodeId),
-        bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
-        tcpProvider: () => simEngineRef.current.getTcpConnections(nodeId),
-        arpProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.arp || [],
-        macTableProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.macTable || [],
-        stpProvider: () => simEngineRef.current.getStpInfo(nodeId),
-        wirelessProvider: () => simEngineRef.current.getWirelessInfo(nodeId),
-        qosProvider: () => simEngineRef.current.getQosStats(nodeId),
-        snmpQueryProvider: (host: string, community: string, oid: string, opts?: { walk?: boolean; setValue?: string }) => {
-          // hostname → resolve via DNS konfigurasi perangkat (seperti curl)
-          let target = host;
-          if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
-            const res = simEngineRef.current.resolveHostname(nodeId, host);
-            if (!res.resolved) return { ok: false, reason: 'not-found' };
-            target = res.resolved;
-          }
-          return simEngineRef.current.simulateSnmpQuery(nodeId, target, community, oid, opts || {});
-        },
-      },
+        context: buildCliContext(nodeId),
       }).output;
 
       // Pick up config changes made by this command (IP, routes, routing, ACL, NAT, VLAN)
@@ -1924,6 +1951,7 @@ onOpenTerminal={handleOpenTerminal}
               }}
               onTogglePower={() => handleTogglePower(winNode.id)}
               onClose={() => setWinDesktopNodeId(null)}
+              runCommand={(cmd) => handleWindowsTerminalCommand(winNode.id, cmd)}
             />
           );
         })()}
