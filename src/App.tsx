@@ -41,7 +41,11 @@ import type { CliMode } from './engine/cli/commandTree';
 import type { NetLabBridge } from './engine/state/bridge';
 import { ConfigExportModal } from './components/ConfigExportModal';
 import { VendorCapabilitiesModal } from './components/VendorCapabilitiesModal';
+import { AiActionPlanModal } from './components/AiActionPlanModal';
 import { portLinksOfNode } from './utils/configExport';
+import { useAgentEngine } from './hooks/useAgentEngine';
+import { formatExecuteOutcome, formatPlanPreview, formatDiagnostic, formatVerification } from './modules/ai/agent/format';
+import type { ActionPlan, AiPermissionMode, ExecuteOutcome } from './modules/ai/agent/types';
 
 const vendorDispatcher = new VendorDispatcher();
 
@@ -292,6 +296,13 @@ export default function App() {
   const [isDonateOpen, setIsDonateOpen] = useState(false);
   const [isMonorepoOpen, setIsMonorepoOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
+  // Pesan yang disuntikkan ke panel chat AI dari luar (mis. hasil eksekusi agent)
+  const [injectedAiNote, setInjectedAiNote] = useState<{ id: number; text: string } | null>(null);
+  const injectedAiNoteIdRef = useRef(0);
+  const pushAiNote = useCallback((text: string) => {
+    injectedAiNoteIdRef.current += 1;
+    setInjectedAiNote({ id: injectedAiNoteIdRef.current, text });
+  }, []);
   // Status server Gemini (panel chat): online → Gemini, offline → rule-based
   const [llmOnline, setLlmOnline] = useState(false);
   // Riwayat percakapan panel chat (hanya untuk Gemini, multi-turn)
@@ -582,6 +593,24 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // ── AI Network Agent ──────────────────────────────────────────
+  // AgentEngine (tool registry + transaction + verification) dengan
+  // runtime yang terikat React: applyProject → setProjectWithHistory
+  // → useEffect [project] → engine sync → canvas render. Mode izin
+  // default 'propose' — eksekusi butuh persetujuan eksplisit user.
+  const { agent, mode: agentMode, setMode: setAgentMode } = useAgentEngine({
+    project,
+    setProjectWithHistory,
+    simRef: simEngineRef,
+    dispatcher: vendorDispatcher,
+    syncNodeToEngine,
+    syncDhcpPools,
+    persistMemory: () => StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory()),
+  });
+  const [pendingPlan, setPendingPlan] = useState<ActionPlan | null>(null);
+  const agentModeRef = useRef<AiPermissionMode>('propose');
+  agentModeRef.current = agentMode;
 
   const handleUndo = useCallback(() => {
     if (historyIndexRef.current <= 0) return;
@@ -1217,6 +1246,34 @@ export default function App() {
     const t = question.trim();
     if (!t) return '';
     syncAllNodesToEngine();
+
+    // ── 1) AI Network Agent: diagnosa koneksi spesifik ──────────
+    // "kenapa X tidak bisa ping Y" / "diagnosa X ke Y" → rantai
+    // diagnostik terstruktur (ping → bukti → packet trace → root cause).
+    const diagMatch =
+      t.match(/kenapa\s+(\S+)\s+(?:tidak\s+bisa|gagal|susah)\s+(?:ping\s+|connect\s+|terhubung\s+)?(?:ke\s+)?(\S+)/i) ??
+      t.match(/diagnosa\s+(\S+)\s+(?:ke|menuju|->|ke\s+)\s+(\S+)/i) ??
+      t.match(/diagnose\s+(\S+)\s+(?:to|->)\s+(\S+)/i);
+    if (diagMatch) {
+      return formatDiagnostic(agent.diagnoseConnectivity(diagMatch[1], diagMatch[2]));
+    }
+
+    // ── 2) AI Network Agent: plan terstruktur (lab/topologi/config) ──
+    const planOut = agent.plan(t, agentModeRef.current);
+    if (planOut.ok && planOut.plan) {
+      setPendingPlan(planOut.plan);
+      const preview = formatPlanPreview(planOut.plan);
+      if (agentModeRef.current === 'read_only') {
+        return `${preview}\n\nMode Read Only — ubah mode ke Propose/Execute di panel chat untuk menjalankan.`;
+      }
+      return `${preview}\n\nRencana siap. Klik "Eksekusi" di panel AI Action Plan untuk menerapkan (mode otomatis dialihkan ke Execute).`;
+    }
+    if (planOut.intent === 'unknown') {
+      // tidak terdeteksi → biarkan LLM/Mentor menjawab bebas
+      void planOut;
+    }
+
+    // ── 3) Fallback: LLM (Gemini) → rule-based Mentor ────────────
     const mentor = getAiMentor();
     const llm = await askLlm(t, mentor.context(), aiHistoryRef.current);
     if (llm.ok) {
@@ -1233,6 +1290,23 @@ export default function App() {
     if (lower.includes('ringkasan') || lower.includes('summary')) return renderResponse(mentor.summary());
     return renderResponse(mentor.ask(t));
   };
+
+  /** Persetujuan eksekusi plan (dari AiActionPlanModal) — pindah ke
+   *  mode execute (izin eksplisit user), jalankan, lalu laporkan. */
+  const handleAgentExecute = useCallback(async (plan: ActionPlan): Promise<ExecuteOutcome> => {
+    if (agentModeRef.current !== 'execute') {
+      agent.setPermissionMode('execute');
+      agentModeRef.current = 'execute';
+      setAgentMode('execute');
+    }
+    const outcome = agent.executePlan(plan);
+    if (outcome.verifications.length > 0) {
+      const last = outcome.verifications[outcome.verifications.length - 1];
+      pushAiNote(`${outcome.ok ? '✓' : '✗'} ${formatVerification(last)}`);
+    }
+    setStatsVersion((v) => v + 1);
+    return outcome;
+  }, [agent, pushAiNote, setStatsVersion]);
 
   const handleSendTerminalCommand = (nodeId: string, cmd: string, mode?: CliMode) => {
     const node = project.nodes.find((n) => n.id === nodeId);
@@ -1785,7 +1859,34 @@ onOpenTerminal={handleOpenTerminal}
       />
 
       {/* AI Mentor Chat Panel */}
-      <AiChatPanel isOpen={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} onAsk={handleAiAsk} llmOnline={llmOnline} />
+      <AiChatPanel
+        isOpen={isAiChatOpen}
+        onClose={() => setIsAiChatOpen(false)}
+        onAsk={handleAiAsk}
+        llmOnline={llmOnline}
+        mode={agentMode}
+        onModeChange={(m) => {
+          setAgentMode(m);
+          agentModeRef.current = m;
+        }}
+        injectedMessage={injectedAiNote}
+        onInjectedConsumed={() => setInjectedAiNote(null)}
+      />
+
+      {/* AI Action Plan — pratinjau sebelum eksekusi (mode propose) */}
+      <AiActionPlanModal
+        plan={pendingPlan}
+        onClose={() => setPendingPlan(null)}
+        onExecute={async (plan) => {
+          const outcome = await handleAgentExecute(plan);
+          return outcome;
+        }}
+        onRequestExecuteMode={() => {
+          setAgentMode('execute');
+          agentModeRef.current = 'execute';
+          agent.setPermissionMode('execute');
+        }}
+      />
 
       {/* Mobile desktop-optimization warning */}
       <MobileWarning />

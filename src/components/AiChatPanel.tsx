@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Send, Sparkles, X, Eraser } from 'lucide-react';
+import { Bot, Send, Sparkles, X, Eraser, Shield, ShieldAlert, ShieldCheck } from 'lucide-react';
+import type { AiPermissionMode } from '../modules/ai/agent/types';
 
 interface ChatMsg {
   id: string;
@@ -12,25 +13,49 @@ interface AiChatPanelProps {
   onClose: () => void;
   onAsk: (question: string) => string | Promise<string>;
   llmOnline?: boolean;
+  /** Mode izin AI Network Agent (canvas). */
+  mode?: AiPermissionMode;
+  onModeChange?: (mode: AiPermissionMode) => void;
+  /** Pesan yang disuntikkan dari luar (hasil eksekusi agent). */
+  injectedMessage?: { id: number; text: string } | null;
+  onInjectedConsumed?: () => void;
 }
 
 const WELCOME =
   'Halo! Saya Aikari, AI Mentor NetLab.\n' +
-  'Tanyakan apa saja tentang jaringan & konfigurasi — contoh:\n' +
-  '"kenapa ping PC1 ke PC2 gagal?", "jelaskan DHCP",\n' +
-  '"bagaimana cara routing bekerja?", "cara setting NAT di MikroTik?",\n' +
-  'atau "perbaiki routing". Jawaban bebas, bisa lanjut dialog lanjutan.';
+  'Saya bisa menganalisis jaringan, membuat lab, dan mengubah topologi:\n' +
+  '- "kenapa PC1 tidak bisa ping 10.0.0.1" → diagnosa root cause\n' +
+  '- "buat lab OSPF 3 router" → action plan (tinjau dulu, lalu eksekusi)\n' +
+  '- "konfigurasi IP ether1 10.0.0.1/24 di R1" → rencana konfigurasi\n' +
+  '- "jelaskan DHCP", "bagaimana cara routing bekerja" → materi\n\n' +
+  'Mode izin menentukan apa yang boleh saya lakukan:\n' +
+  'Read Only = hanya analisis · Propose = rencana (tinjau dulu) · Execute = terapkan.';
 
 const QUICK_QUESTIONS = [
-  'kenapa ping PC1 ke PC2 gagal',
+  'kenapa PC1 tidak bisa ping 10.0.0.1',
+  'buat lab OSPF 3 router',
+  'buat lab VLAN untuk pemula',
+  'konfigurasi IP ether1 10.0.0.1/24 di R1',
   'jelaskan DHCP',
-  'bagaimana cara kerja routing',
-  'perbaiki route',
   'diagnosa jaringan',
-  'ringkasan jaringan',
 ];
 
-export const AiChatPanel: React.FC<AiChatPanelProps> = ({ isOpen, onClose, onAsk, llmOnline }) => {
+const MODE_META: Record<AiPermissionMode, { icon: React.ReactNode; label: string; cls: string }> = {
+  read_only: { icon: <Shield className="w-3 h-3" />, label: 'Read Only', cls: 'text-slate-300 border-slate-500/40' },
+  propose: { icon: <ShieldAlert className="w-3 h-3" />, label: 'Propose', cls: 'text-amber-300 border-amber-500/40' },
+  execute: { icon: <ShieldCheck className="w-3 h-3" />, label: 'Execute', cls: 'text-emerald-300 border-emerald-500/40' },
+};
+
+export const AiChatPanel: React.FC<AiChatPanelProps> = ({
+  isOpen,
+  onClose,
+  onAsk,
+  llmOnline,
+  mode = 'propose',
+  onModeChange,
+  injectedMessage,
+  onInjectedConsumed,
+}) => {
   const [messages, setMessages] = useState<ChatMsg[]>([
     { id: 'welcome', role: 'ai', text: WELCOME },
   ]);
@@ -45,6 +70,13 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ isOpen, onClose, onAsk
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
     }
   }, [isOpen, messages]);
+
+  // Pesan suntikan dari luar (hasil eksekusi agent) → tampil di chat.
+  useEffect(() => {
+    if (!injectedMessage) return;
+    setMessages((prev) => [...prev, { id: `ai_${injectedMessage.id}`, role: 'ai', text: injectedMessage.text }]);
+    onInjectedConsumed?.();
+  }, [injectedMessage, onInjectedConsumed]);
 
   if (!isOpen) return null;
 
@@ -72,6 +104,8 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ isOpen, onClose, onAsk
     inputRef.current?.focus();
   };
 
+  const modeMeta = MODE_META[mode];
+
   return (
     <div className="fixed bottom-5 right-5 z-[80] flex flex-col w-[min(92vw,400px)] h-[min(76vh,560px)] bg-[#12141A] border border-[#2B2D31] rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
       {/* Header */}
@@ -92,6 +126,29 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ isOpen, onClose, onAsk
           </div>
         </div>
         <div className="flex items-center space-x-1">
+          {onModeChange && (
+            <div className="flex items-center gap-0.5 mr-1 p-0.5 rounded-lg bg-[#0F1015] border border-[#2B2D31]">
+              {(Object.keys(MODE_META) as AiPermissionMode[]).map((m) => {
+                const meta = MODE_META[m];
+                const active = m === mode;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => onModeChange(m)}
+                    title={`Mode ${meta.label}: ${m === 'read_only' ? 'hanya analisis' : m === 'propose' ? 'rencana tanpa eksekusi' : 'eksekusi aksi yang disetujui'}`}
+                    className={`flex items-center gap-1 text-[9px] font-semibold px-1.5 py-1 rounded-md border transition ${
+                      active
+                        ? `bg-slate-800 ${meta.cls}`
+                        : 'border-transparent text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {meta.icon}
+                    <span className="hidden sm:inline">{meta.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <button
             onClick={clear}
             title="Hapus percakapan"
@@ -158,7 +215,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ isOpen, onClose, onAsk
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder='Tanya AI… contoh: "cara setting NAT di MikroTik?"'
+          placeholder='Tanya AI… contoh: "buat lab OSPF 3 router"'
           className="flex-1 bg-[#0F1015] border border-[#2B2D31] rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-violet-500/60 transition font-mono"
         />
         <button

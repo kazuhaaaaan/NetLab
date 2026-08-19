@@ -386,6 +386,7 @@ export class SimulationFlows {
           name: hopDev?.name || icmpErr.nodeId,
           ttl,
           ip: hopDev?.getIpAddress() || null,
+          reason: (icmpErr.data.reason as string | undefined) ?? mapReason(run.reason),
         });
         return { ok: false, hops, reason: mapReason(run.reason) };
       }
@@ -446,7 +447,12 @@ export class SimulationFlows {
       const icmpErr = probeEvents.find((e) => e.type === 'ICMP_ERROR');
       if (icmpErr && icmpErr.nodeId) {
         const hopDev = this.ctx.nodes.get(icmpErr.nodeId);
-        hops.push({ name: hopDev?.name || icmpErr.nodeId, ttl, ip: hopDev?.getIpv6Address() || null });
+        hops.push({
+          name: hopDev?.name || icmpErr.nodeId,
+          ttl,
+          ip: hopDev?.getIpv6Address() || null,
+          reason: (icmpErr.data.reason as string | undefined) ?? mapReason(run.reason),
+        });
         return { ok: false, hops, reason: mapReason(run.reason) };
       }
       return { ok: false, hops, reason: mapReason(run.reason) };

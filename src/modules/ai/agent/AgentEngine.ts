@@ -108,7 +108,7 @@ export class AgentEngine {
     const s = input.toLowerCase();
     if (/lab|praktikum|template|generate|buat lab|scenario/.test(s)) return 'lab_generation';
     if (/apa itu|jelaskan|explain|bagaimana cara|materi|belajar|tutorial/.test(s)) return 'learn';
-    if (/buat (topologi|device|router|switch)|tambahkan (device|router|switch|pc)|tambah (router|switch)|buatkan (jaringan|topologi)/.test(s)) return 'topology_creation';
+    if (/buat (topologi|device|router|switch)|tambahkan (device|router|switch|pc)|tambah (router|switch)|buatkan (jaringan|topologi)|hapus|hubung|sambung|kabel/.test(s)) return 'topology_creation';
     if (/config|konfigur|set ip|ip address|route|vlan|ospf|bgp|dhcp|nat|firewall|wireless|trunk/.test(s)) return 'configuration';
     if (/kenapa|mengapa|tidak bisa|gagal|troubleshoot|masalah|diagnos|error/.test(s)) return 'diagnosis';
     if (/perbaiki|fix|repair|solve/.test(s)) return 'fix';
@@ -192,13 +192,15 @@ export class AgentEngine {
     };
   }
 
-  /** Fallback deterministik untuk request konfigurasi/topologi sederhana. */
+  /** Fallback deterministik untuk request konfigurasi/topologi sederhana.
+   *  Regex memakai input asli (bukan lowercase) + flag `i` agar nama
+   *  perangkat mempertahankan huruf besar (mis. "R1" ≠ "r1"). */
   private planFallback(input: string, mode: import('./types').AiPermissionMode): PlanOutcome {
-    const s = input.toLowerCase().trim();
+    const s = input.trim();
     const actions: PlanAction[] = [];
 
     // pola: konfigurasi IP <interface> <CIDR> di <device>
-    let m = s.match(/konfigurasi\s+ip\s+(\S+)\s+(\S+)\s+di\s+(\S+)/) ?? s.match(/set\s+ip\s+(\S+)\s+(\S+)\s+di\s+(\S+)/);
+    let m = s.match(/konfigurasi\s+ip\s+(\S+)\s+(\S+)\s+di\s+(\S+)/i) ?? s.match(/set\s+ip\s+(\S+)\s+(\S+)\s+di\s+(\S+)/i);
     if (m) {
       actions.push({
         id: uid('act-ip'),
@@ -212,7 +214,7 @@ export class AgentEngine {
       });
     }
 
-    m = s.match(/route\s+(\S+)\s+(?:via|gateway)\s+(\S+)\s+di\s+(\S+)/) ?? s.match(/tambah\s+route\s+(\S+)\s+(?:via|gateway)\s+(\S+)\s+di\s+(\S+)/);
+    m = s.match(/route\s+(\S+)\s+(?:via|gateway)\s+(\S+)\s+di\s+(\S+)/i) ?? s.match(/tambah\s+route\s+(\S+)\s+(?:via|gateway)\s+(\S+)\s+di\s+(\S+)/i);
     if (m) {
       actions.push({
         id: uid('act-route'),
@@ -226,7 +228,7 @@ export class AgentEngine {
       });
     }
 
-    m = s.match(/buat\s+(router|switch|firewall|pc|server|wireless)\s+(\S+)/) ?? s.match(/tambah\s+(router|switch|firewall|pc|server|wireless)\s+(\S+)/);
+    m = s.match(/buat\s+(router|switch|firewall|pc|server|wireless)\s+(\S+)/i) ?? s.match(/tambah\s+(router|switch|firewall|pc|server|wireless)\s+(\S+)/i);
     if (m) {
       actions.push({
         id: uid('act-dev'),
@@ -240,8 +242,38 @@ export class AgentEngine {
       });
     }
 
+    // pola: hubungkan/kabel X dan Y (atau X dengan Y)
+    m = s.match(/hubungkan?\s+(\S+)\s+(?:dan|dengan|ke|↔|--)\s+(\S+)/i) ?? s.match(/sambung(?:kan)?\s+(\S+)\s+(?:dan|dengan|ke|↔|--)\s+(\S+)/i) ?? s.match(/kabel(?:kan)?\s+(\S+)\s+(?:dan|dengan|ke|↔|--)\s+(\S+)/i);
+    if (m) {
+      actions.push({
+        id: uid('act-link'),
+        type: 'connect_devices',
+        target: m[1],
+        params: { sourceDeviceId: m[1], targetDeviceId: m[2] },
+        reason: `hubungkan ${m[1]} dan ${m[2]}`,
+        expectedEffect: `kabel ${m[1]} ↔ ${m[2]} terpasang`,
+        risk: 'low',
+        validation: 'kedua device ada; port tersedia',
+      });
+    }
+
+    // pola: hapus device X
+    m = s.match(/hapus\s+(device\s+)?(\S+)/i);
+    if (m && !/ip|route|vlan|kabel/.test(s.toLowerCase())) {
+      actions.push({
+        id: uid('act-del'),
+        type: 'delete_device',
+        target: m[2],
+        params: { deviceId: m[2] },
+        reason: `hapus perangkat ${m[2]}`,
+        expectedEffect: `${m[2]} tidak ada lagi di canvas`,
+        risk: 'medium',
+        validation: 'device ada',
+      });
+    }
+
     if (actions.length === 0) {
-      return { ok: false, intent: 'configuration', plan: null, message: 'Pola tidak dikenali. Coba: "konfigurasi IP ether1 10.0.0.1/24 di R1", "route 0.0.0.0/0 via 10.0.0.254 di R1", "buat lab OSPF 3 router".' };
+      return { ok: false, intent: 'configuration', plan: null, message: 'Pola tidak dikenali. Coba: "konfigurasi IP ether1 10.0.0.1/24 di R1", "route 0.0.0.0/0 via 10.0.0.254 di R1", "hubungkan R1 dan R2", "buat lab OSPF 3 router".' };
     }
 
     return {
@@ -303,6 +335,31 @@ export class AgentEngine {
     if (expected.includes('bgp')) {
       return this.verification.verifyBgp({ source: target, actionId: action.id });
     }
+    if (expected.includes('eigrp')) {
+      return this.verification.verifyEigrp({ source: target, actionId: action.id });
+    }
+    if (expected.includes('vrrp') || expected.includes('fhrp') || expected.includes('master')) {
+      const info = this.runtime.sim.getFhrpInfo(target) ?? [];
+      return this.verification.recordFrom({
+        success: info.some((s) => s.isMaster),
+        testType: 'fhrp',
+        source: this.runtime.sim.getDevice(target)?.name ?? target,
+        reason: info.some((s) => s.isMaster) ? undefined : 'not-master',
+        evidence: info.map((s) => `group ${s.vip} priority=${s.priority} ${s.isMaster ? 'MASTER' : 'backup'}`),
+        actionId: action.id,
+      });
+    }
+    if (expected.includes('ipv6') || expected.includes('v6')) {
+      const info = this.runtime.sim.getIpv6Info(target);
+      return this.verification.recordFrom({
+        success: !!info && info.addresses.length > 0,
+        testType: 'ndp',
+        source: this.runtime.sim.getDevice(target)?.name ?? target,
+        reason: info && info.addresses.length > 0 ? undefined : 'no-ipv6-address',
+        evidence: info ? info.addresses.map((a) => `${a.address}/${a.prefix}@${a.iface}`) : [],
+        actionId: action.id,
+      });
+    }
     if (expected.includes('vlan')) {
       return this.verification.verifyVlan({ source: target, actionId: action.id });
     }
@@ -325,6 +382,11 @@ export class AgentEngine {
     }
     if (expected.includes('wireless')) {
       return this.verification.verifyWireless({ source: target, actionId: action.id });
+    }
+    if (expected.includes('konfigurasi') || expected.includes('terpasang')) {
+      // CLI setup: verifikasi lemah — device ada & command sudah lewat jalur vendor.
+      // Verifikasi kuat ada di grading lab (state nyata engine).
+      return this.verification.verifyDeviceExists(target, action.id);
     }
     return null;
   }

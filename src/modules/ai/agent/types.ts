@@ -179,7 +179,8 @@ export type VerificationType =
   | 'firewall'
   | 'wireless'
   | 'topology'
-  | 'interface';
+  | 'interface'
+  | 'fhrp';
 
 /** Hasil verifikasi terstruktur — dipakai AI, grading, dan diagnostik. */
 export interface VerificationResult {

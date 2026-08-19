@@ -185,8 +185,14 @@ export function diagnoseConnectivity(
   // 7. Packet trace (alasan drop per hop)
   let packetTrace: string[] = [];
   try {
-    const simTrace = (sim as unknown as { simulateTraceroute: (a: string, b: string) => { ok: boolean; hops: { name: string; ttl: number; ip?: string; reason?: string }[]; reason?: string } }).simulateTraceroute(source, dstIp);
+    const simTrace = (sim as unknown as { simulateTraceroute: (a: string, b: string) => { ok: boolean; hops: { name: string; ttl: number; ip?: string | null; reason?: string }[]; reason?: string } }).simulateTraceroute(source, dstIp);
     packetTrace = simTrace.hops.map((h) => `hop ${h.ttl}: ${h.name}${h.ip ? ` (${h.ip})` : ''}${h.reason ? ` — DROP: ${h.reason}` : ''}`);
+    if (packetTrace.length === 0 && simTrace.reason) {
+      // Tidak ada hop yang dilaporkan engine: drop terjadi sebelum paket
+      // keluar dari sumber (mis. tanpa rute) atau di link senyap. Laporkan
+      // apa adanya — bukan hop karangan.
+      packetTrace.push(`hop 1: ${source} — DROP: ${simTrace.reason} (tidak ada hop — paket tidak keluar dari sumber)`);
+    }
     evidence.push({ step: 'packet-trace', data: packetTrace });
   } catch {
     evidence.push({ step: 'packet-trace', data: ['traceroute tidak tersedia'] });

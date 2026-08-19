@@ -364,9 +364,9 @@ export class VerificationEngine {
     );
   }
 
-  /** Verifikasi device ada di engine. */
+  /** Verifikasi device ada di engine (id atau nama). */
   verifyDeviceExists(nodeId: string, actionId?: string): VerificationResult {
-    const dev = this.sim.getDevice(nodeId);
+    const dev = this.sim.getDevice(nodeId) ?? this.sim.getDeviceByName(nodeId);
     return this.record(
       {
         success: !!dev,
@@ -382,6 +382,21 @@ export class VerificationEngine {
   }
 
   // ── Riwayat ───────────────────────────────────────────────────
+
+  /** Catat hasil verifikasi buatan (dipakai verifyAction & tool lain). */
+  recordFrom(vr: Omit<VerificationResult, 'timestamp' | 'evidence'> & { evidence?: string[]; actionId?: string; label?: string }): VerificationResult {
+    const full: VerificationResult = {
+      ...vr,
+      evidence: vr.evidence ?? [],
+      timestamp: Date.now(),
+    };
+    return this.record(full, {
+      source: full.source ?? '',
+      destination: full.destination,
+      actionId: vr.actionId,
+      label: vr.label,
+    });
+  }
 
   private record(vr: VerificationResult, params: VerifyParams): VerificationResult {
     const entry: VerificationHistoryEntry = {

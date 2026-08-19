@@ -155,6 +155,8 @@ export interface TracerouteHop {
   name: string;
   ttl: number;
   ip: string | null;
+  /** alasan drop di hop ini (mis. 'no-route') — hop terakhir yang gagal. */
+  reason?: string;
 }
 
 export interface TracerouteResult {

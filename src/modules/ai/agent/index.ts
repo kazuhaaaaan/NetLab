@@ -8,6 +8,7 @@
 export { AgentEngine } from './AgentEngine';
 export { VerificationEngine } from './verification';
 export { createHeadlessRuntime, cloneProject, uid } from './runtime';
+export { createAppRuntime } from './appRuntime';
 export { buildRegistry, registryMap, permissionOk } from './registry';
 export { captureSnapshot, restoreSnapshot, Transaction } from './transaction';
 export {
@@ -18,6 +19,7 @@ export {
   topologyPlan,
 } from './labGenerator';
 export { diagnoseConnectivity, diagnoseNetwork } from './diagnostics';
+export { formatPlanPreview, formatExecuteOutcome, formatDiagnostic, formatVerification, formatVerificationHistory } from './format';
 
 export type {
   AiPermissionMode,
