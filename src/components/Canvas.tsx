@@ -1305,16 +1305,17 @@ export const Canvas: React.FC<CanvasProps> = ({
                   wizard kabel, agar tidak menutupi titik port. */}
               {!(isWizardSource || isWizardTarget) && (
                 <>
-              {/* Open CLI button — selalu terlihat agar tidak "hilang" */}
+              {/* Open CLI button — selalu terlihat agar tidak "hilang".
+                  Windows OS → ikon desktop (buka GUI), selainnya → terminal. */}
               <button
                 className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenTerminal(node.id);
                 }}
-                title="Open CLI"
+                title={node.vendor === 'windows' ? 'Buka Desktop Windows (GUI)' : 'Open CLI'}
               >
-                <TerminalSquare className="w-3 h-3" />
+                {node.vendor === 'windows' ? <Monitor className="w-3 h-3" /> : <TerminalSquare className="w-3 h-3" />}
               </button>
 
               {/* Connect Cable button — mulai wizard kabel (klik perangkat juga bisa di mode cable) */}

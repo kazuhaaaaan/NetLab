@@ -1151,8 +1151,10 @@ export default function App() {
 
   const handleOpenTerminal = (nodeId: string) => {
     const node = project.nodes.find((n) => n.id === nodeId);
-    // Windows Client: double-click membuka Desktop GUI, bukan terminal
-    if (node && node.deviceType === 'windows-client') {
+    // Windows OS (deviceType windows-client, atau proyek lama / buatan AI yang
+    // hanya memakai vendor 'windows' + deviceType 'pc'): buka Desktop GUI,
+    // bukan CLI.
+    if (node && (node.deviceType === 'windows-client' || node.vendor === 'windows')) {
       setWinDesktopNodeId(nodeId);
       return;
     }
