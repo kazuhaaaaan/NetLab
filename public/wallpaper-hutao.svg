@@ -1,0 +1,217 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" width="1440" height="900">
+  <defs>
+    <radialGradient id="bgGlow" cx="70%" cy="22%" r="70%">
+      <stop offset="0%" stop-color="#4a1522"/>
+      <stop offset="45%" stop-color="#2b0a12"/>
+      <stop offset="100%" stop-color="#120308"/>
+    </radialGradient>
+    <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fde9c8" stop-opacity="0.9"/>
+      <stop offset="60%" stop-color="#f5cba7" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#f5cba7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lanternGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffd9a0" stop-opacity="0.95"/>
+      <stop offset="40%" stop-color="#fb923c" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#fb923c" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vignette" cx="50%" cy="45%" r="75%">
+      <stop offset="60%" stop-color="#000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0.55"/>
+    </radialGradient>
+    <linearGradient id="robe" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a1119"/>
+      <stop offset="100%" stop-color="#1c080d"/>
+    </linearGradient>
+    <linearGradient id="hatDome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c161c"/>
+      <stop offset="100%" stop-color="#180b10"/>
+    </linearGradient>
+    <radialGradient id="skin" cx="50%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#ffe9d6"/>
+      <stop offset="100%" stop-color="#f7c9a8"/>
+    </radialGradient>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <filter id="soft2" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+  </defs>
+
+  <!-- Langit malam -->
+  <rect width="1440" height="900" fill="url(#bgGlow)"/>
+
+  <!-- Bulan -->
+  <circle cx="1180" cy="190" r="160" fill="url(#moonGlow)"/>
+  <circle cx="1180" cy="190" r="72" fill="#fde9c8" opacity="0.92"/>
+  <circle cx="1152" cy="166" r="12" fill="#e8c89a" opacity="0.55"/>
+  <circle cx="1202" cy="204" r="8" fill="#e8c89a" opacity="0.5"/>
+  <circle cx="1166" cy="224" r="6" fill="#e8c89a" opacity="0.45"/>
+
+  <!-- Awan tipis -->
+  <g fill="#2b0a12" opacity="0.7">
+    <ellipse cx="900" cy="240" rx="260" ry="34"/>
+    <ellipse cx="1180" cy="300" rx="220" ry="26"/>
+    <ellipse cx="340" cy="170" rx="240" ry="30"/>
+  </g>
+
+  <!-- Ember api mengambang -->
+  <g fill="#fdba74">
+    <circle cx="240" cy="330" r="4" opacity="0.9" filter="url(#soft)"/>
+    <circle cx="300" cy="410" r="3" opacity="0.7" filter="url(#soft)"/>
+    <circle cx="420" cy="280" r="3.5" opacity="0.8" filter="url(#soft)"/>
+    <circle cx="1280" cy="420" r="4" opacity="0.8" filter="url(#soft)"/>
+    <circle cx="1340" cy="350" r="2.5" opacity="0.6" filter="url(#soft)"/>
+    <circle cx="1150" cy="480" r="3" opacity="0.7" filter="url(#soft)"/>
+    <circle cx="620" cy="180" r="3" opacity="0.65" filter="url(#soft)"/>
+    <circle cx="760" cy="150" r="2.5" opacity="0.6" filter="url(#soft)"/>
+    <circle cx="200" cy="560" r="3.5" opacity="0.75" filter="url(#soft)"/>
+    <circle cx="520" cy="520" r="3" opacity="0.6" filter="url(#soft)"/>
+  </g>
+
+  <!-- Ranting plum blossom -->
+  <g stroke="#180a0d" stroke-linecap="round" fill="none">
+    <path d="M-30,760 Q 160,640 300,560 T 640,470" stroke-width="16"/>
+    <path d="M240,620 Q 260,540 300,500" stroke-width="9"/>
+    <path d="M300,560 Q 380,520 460,470" stroke-width="8"/>
+    <path d="M420,520 Q 470,470 520,430" stroke-width="6"/>
+    <path d="M520,440 Q 600,400 680,380" stroke-width="5"/>
+    <path d="M600,410 Q 620,360 660,340" stroke-width="4"/>
+    <path d="M80,700 Q 90,620 150,580" stroke-width="7"/>
+    <path d="M150,590 Q 210,550 250,520" stroke-width="5"/>
+  </g>
+
+  <!-- Bunga plum -->
+  <g>
+    <g id="blossom">
+      <g transform="rotate(0)"><ellipse cx="0" cy="-13" rx="8" ry="13" fill="#f472b6"/></g>
+      <g transform="rotate(72)"><ellipse cx="0" cy="-13" rx="8" ry="13" fill="#ec4899"/></g>
+      <g transform="rotate(144)"><ellipse cx="0" cy="-13" rx="8" ry="13" fill="#f472b6"/></g>
+      <g transform="rotate(216)"><ellipse cx="0" cy="-13" rx="8" ry="13" fill="#ec4899"/></g>
+      <g transform="rotate(288)"><ellipse cx="0" cy="-13" rx="8" ry="13" fill="#f472b6"/></g>
+      <circle cx="0" cy="0" r="6" fill="#fde047"/>
+      <circle cx="0" cy="0" r="3" fill="#d97706"/>
+    </g>
+    <use href="#blossom" x="300" y="470" transform="scale(1.1)"/>
+    <use href="#blossom" x="460" y="470"/>
+    <use href="#blossom" x="520" y="430"/>
+    <use href="#blossom" x="680" y="380" transform="scale(0.8)"/>
+    <use href="#blossom" x="660" y="340" transform="scale(0.7)"/>
+    <use href="#blossom" x="150" y="580"/>
+    <use href="#blossom" x="250" y="520" transform="scale(0.85)"/>
+    <use href="#blossom" x="90" y="620" transform="scale(0.7)"/>
+  </g>
+
+  <!-- Kelopak jatuh -->
+  <g fill="#f472b6" opacity="0.9">
+    <ellipse cx="380" cy="360" rx="5" ry="3" transform="rotate(30 380 360)"/>
+    <ellipse cx="480" cy="400" rx="4" ry="2.5" transform="rotate(-20 480 400)"/>
+    <ellipse cx="220" cy="440" rx="4" ry="2.5" transform="rotate(50 220 440)"/>
+    <ellipse cx="560" cy="500" rx="5" ry="3" transform="rotate(-40 560 500)"/>
+    <ellipse cx="350" cy="520" rx="4" ry="2.5" transform="rotate(15 350 520)"/>
+  </g>
+
+  <!-- Hantu lucu -->
+  <g opacity="0.85">
+    <g transform="translate(780,240) scale(0.65)">
+      <path d="M-60,0 Q-60,-70 0,-70 Q60,-70 60,0 L60,30 Q45,15 30,30 Q15,15 0,30 Q-15,15 -30,30 Q-45,15 -60,30 Z" fill="#dbe7ff" opacity="0.75"/>
+      <ellipse cx="-20" cy="-30" rx="11" ry="14" fill="#1f2430"/>
+      <ellipse cx="20" cy="-30" rx="11" ry="14" fill="#1f2430"/>
+      <circle cx="-16" cy="-34" r="3.5" fill="#fff"/>
+      <circle cx="24" cy="-34" r="3.5" fill="#fff"/>
+      <ellipse cx="-20" cy="-10" rx="7" ry="4" fill="#f9a8c9" opacity="0.6"/>
+      <ellipse cx="20" cy="-10" rx="7" ry="4" fill="#f9a8c9" opacity="0.6"/>
+    </g>
+    <g transform="translate(400,140) scale(0.5)">
+      <path d="M-60,0 Q-60,-70 0,-70 Q60,-70 60,0 L60,30 Q45,15 30,30 Q15,15 0,30 Q-15,15 -30,30 Q-45,15 -60,30 Z" fill="#fde3e8" opacity="0.75"/>
+      <ellipse cx="-20" cy="-30" rx="11" ry="14" fill="#1f2430"/>
+      <ellipse cx="20" cy="-30" rx="11" ry="14" fill="#1f2430"/>
+      <circle cx="-16" cy="-34" r="3.5" fill="#fff"/>
+      <circle cx="24" cy="-34" r="3.5" fill="#fff"/>
+      <ellipse cx="0" cy="-6" rx="6" ry="4" fill="#f9a8c9" opacity="0.6"/>
+    </g>
+  </g>
+
+  <!-- ── Karakter ── -->
+  <g transform="translate(1000,300)">
+    <!-- Rambut belakang -->
+    <ellipse cx="0" cy="90" rx="128" ry="160" fill="#1f1014"/>
+
+    <!-- Ekor rambut samping -->
+    <path d="M-110,60 Q-160,140 -150,240 Q-130,250 -115,220 Q-95,140 -100,70 Z" fill="#241318"/>
+    <path d="M110,60 Q160,140 150,240 Q130,250 115,220 Q95,140 100,70 Z" fill="#241318"/>
+    <path d="M-128,120 Q-142,170 -136,215" stroke="#8f2f3a" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.85"/>
+    <path d="M128,120 Q142,170 136,215" stroke="#8f2f3a" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.85"/>
+
+    <!-- Topi -->
+    <ellipse cx="0" cy="-14" rx="236" ry="50" fill="#180b10"/>
+    <ellipse cx="0" cy="-22" rx="234" ry="48" fill="none" stroke="#3d1b24" stroke-width="3"/>
+    <path d="M-148,-26 C-140,-160 140,-160 148,-26 Z" fill="url(#hatDome)"/>
+    <path d="M-90,-40 C-80,-120 80,-120 90,-40 Z" fill="none" stroke="#6b2733" stroke-width="4"/>
+    <rect x="-160" y="-34" width="320" height="16" rx="8" fill="#b91c1c"/>
+    <rect x="-160" y="-30" width="320" height="8" rx="4" fill="#ef4444" opacity="0.55"/>
+    <text x="0" y="-78" text-anchor="middle" font-family="'Segoe UI', 'Noto Serif SC', serif" font-size="52" font-weight="700" fill="#e8b45b">王</text>
+    <ellipse cx="0" cy="-64" rx="34" ry="6" fill="#e8b45b" opacity="0.25"/>
+
+    <!-- Wajah -->
+    <ellipse cx="0" cy="78" rx="96" ry="104" fill="url(#skin)"/>
+
+    <!-- Rambut depan -->
+    <path d="M-92,30 Q-100,-50 -30,-58 Q0,-70 30,-58 Q100,-50 92,30 Q60,8 30,20 Q0,4 -30,20 Q-60,8 -92,30 Z" fill="#241318"/>
+    <path d="M-70,-10 Q-52,-52 -12,-44" stroke="#8f2f3a" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.9"/>
+    <path d="M70,-10 Q52,-52 12,-44" stroke="#8f2f3a" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.9"/>
+
+    <!-- Mata -->
+    <path d="M-92,82 Q-68,52 -44,82 Q-68,116 -92,82 Z" fill="#26151c"/>
+    <path d="M-84,80 Q-68,62 -52,80" stroke="#f9a8c9" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+    <circle cx="-74" cy="76" r="8" fill="#fff" opacity="0.95"/>
+    <circle cx="-60" cy="92" r="4" fill="#fff" opacity="0.7"/>
+    <path d="M44,82 Q68,52 92,82 Q68,116 44,82 Z" fill="#26151c"/>
+    <path d="M52,80 Q68,62 84,80" stroke="#f9a8c9" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+    <circle cx="74" cy="76" r="8" fill="#fff" opacity="0.95"/>
+    <circle cx="60" cy="92" r="4" fill="#fff" opacity="0.7"/>
+
+    <!-- Pipi -->
+    <ellipse cx="-58" cy="122" rx="20" ry="9" fill="#f9a8c9" opacity="0.5"/>
+    <ellipse cx="58" cy="122" rx="20" ry="9" fill="#f9a8c9" opacity="0.5"/>
+
+    <!-- Mulut -->
+    <path d="M-9,118 Q0,128 9,118" stroke="#a33a3a" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+    <!-- Jubah -->
+    <path d="M-96,150 Q-70,210 -150,350 L150,350 Q70,210 96,150 Z" fill="url(#robe)"/>
+    <path d="M-70,170 L0,215 L70,170" fill="none" stroke="#e8b45b" stroke-width="5" stroke-linecap="round"/>
+    <path d="M0,215 L0,340" stroke="#e8b45b" stroke-width="3" opacity="0.6"/>
+    <path d="M-150,350 L150,350" stroke="#e8b45b" stroke-width="4"/>
+    <circle cx="-96" cy="258" r="8" fill="#b91c1c"/>
+    <circle cx="96" cy="258" r="8" fill="#b91c1c"/>
+    <path d="M-120,300 Q-96,285 -72,300" stroke="#7f1d1d" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.7"/>
+    <path d="M72,300 Q96,285 120,300" stroke="#7f1d1d" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.7"/>
+
+    <!-- Lengan kiri -->
+    <path d="M-95,170 Q-150,200 -140,280 Q-110,290 -95,260" fill="url(#robe)" stroke="#1c080d" stroke-width="3"/>
+
+    <!-- Lengan kanan + lampion -->
+    <path d="M95,170 Q150,195 165,250 Q130,270 110,240" fill="url(#robe)" stroke="#1c080d" stroke-width="3"/>
+    <circle cx="212" cy="196" r="70" fill="url(#lanternGlow)" filter="url(#soft2)"/>
+    <path d="M170,128 Q190,108 210,128" stroke="#e8b45b" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path d="M190,128 L190,146" stroke="#e8b45b" stroke-width="3"/>
+    <rect x="162" y="146" width="56" height="72" rx="12" fill="#ef4444"/>
+    <rect x="162" y="146" width="56" height="72" rx="12" fill="none" stroke="#fca5a5" stroke-width="3" opacity="0.6"/>
+    <rect x="162" y="196" width="56" height="6" fill="#dc2626"/>
+    <ellipse cx="190" cy="166" rx="16" ry="10" fill="#fff7ed" opacity="0.9"/>
+    <ellipse cx="190" cy="164" rx="8" ry="12" fill="#f97316"/>
+    <ellipse cx="188" cy="160" rx="3.5" ry="6" fill="#fde68a"/>
+    <rect x="162" y="218" width="56" height="8" rx="4" fill="#7f1d1d"/>
+    <path d="M180,226 L186,262 L194,226 Z" fill="#e8b45b"/>
+    <path d="M186,226 L186,262" stroke="#7f1d1d" stroke-width="2"/>
+  </g>
+
+  <!-- Siluet tanah -->
+  <path d="M0,860 Q300,810 640,840 T1440,830 L1440,900 L0,900 Z" fill="#0c0206"/>
+  <path d="M0,878 Q400,850 780,868 T1440,860 L1440,900 L0,900 Z" fill="#060103"/>
+
+  <!-- Vignette -->
+  <rect width="1440" height="900" fill="url(#vignette)"/>
+</svg>

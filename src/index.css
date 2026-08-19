@@ -147,6 +147,7 @@ body {
 
 .win-wallpaper {
   background:
+    url('/wallpaper-hutao.svg') center / cover no-repeat,
     radial-gradient(ellipse at 20% 10%, rgba(56, 189, 248, 0.25), transparent 55%),
     radial-gradient(ellipse at 80% 90%, rgba(129, 140, 248, 0.2), transparent 55%),
     linear-gradient(160deg, #1e3a8a 0%, #155e75 45%, #0f172a 100%);
