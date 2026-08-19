@@ -18,6 +18,7 @@ import { FortinetVendorAdapter } from '../fortinet/adapter';
 import { ArubaVendorAdapter } from '../aruba/adapter';
 import { OpenwrtVendorAdapter } from '../openwrt/adapter';
 import { LinuxDebianVendorAdapter } from '../linux/adapter';
+import { WindowsVendorAdapter } from '../windows/adapter';
 
 // ============================================================
 // VendorDispatcher — ROUTER MURNI.
@@ -47,6 +48,7 @@ export class VendorDispatcher {
     this.register(new ArubaVendorAdapter());
     this.register(new OpenwrtVendorAdapter());
     this.register(new LinuxDebianVendorAdapter());
+    this.register(new WindowsVendorAdapter());
   }
 
   register(adapter: _IV) {

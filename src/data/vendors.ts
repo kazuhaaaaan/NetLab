@@ -88,5 +88,13 @@ export const VENDOR_MAP: Record<VendorType, VendorInfo> = {
     defaultPrompt: 'root@server:~#',
     badgeColor: 'bg-orange-700 border-orange-600 text-white',
     description: 'Debian GNU/Linux server with standard networking tools (ip, ss, systemctl, apt).'
+  },
+  windows: {
+    id: 'windows',
+    name: 'Windows',
+    osName: 'Windows 11 Pro',
+    defaultPrompt: 'C:\\Users\\admin>',
+    badgeColor: 'bg-sky-700 border-sky-600 text-white',
+    description: 'Windows desktop client dengan GUI lengkap: NetBrowser, Website Editor, Network Settings, File Explorer & Notepad.'
   }
 };

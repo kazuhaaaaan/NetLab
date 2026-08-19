@@ -14,10 +14,10 @@ import { cloneProject, uid } from './runtime';
 import { getPortsForModel, getDefaultModel } from '../../../data/deviceModels';
 import { inferCableType } from '../../../connection';
 
-const DEVICE_TYPES = ['router', 'switch', 'firewall', 'pc', 'server', 'wireless'] as const;
+const DEVICE_TYPES = ['router', 'switch', 'firewall', 'pc', 'server', 'wireless', 'windows-client'] as const;
 type DeviceType = (typeof DEVICE_TYPES)[number];
 
-const VENDORS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux'] as const;
+const VENDORS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux', 'windows'] as const;
 type VendorId = (typeof VENDORS)[number];
 
 function projectOf(ctx: ToolExecCtx): { project: LabProject } | { error: ToolResult } {
@@ -82,8 +82,8 @@ export function toolCreateDevice(ctx: ToolExecCtx, p: Record<string, unknown>): 
       { id: 'wlan1', name: 'wlan1', speedMbps: 300, status: 'up', macAddress: `52:54:00:AA:BB:02`, type: 'copper' },
       { id: 'wlan2', name: 'wlan2', speedMbps: 300, status: 'down', macAddress: `52:54:00:AA:BB:03`, type: 'copper' },
     ];
-  } else if (deviceType === 'pc' || deviceType === 'server') {
-    ports = basePorts.slice(0, deviceType === 'pc' ? 1 : 1);
+  } else if (deviceType === 'pc' || deviceType === 'server' || deviceType === 'windows-client') {
+    ports = basePorts.slice(0, 1);
   } else {
     ports = basePorts;
   }

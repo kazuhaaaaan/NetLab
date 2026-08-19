@@ -131,6 +131,10 @@ export function buildRegistry(): ToolDef[] {
     def('get_packet_trace', 'Telusuri paket hop-by-hop (dengan alasan drop)', 'read', 'read_only', false,
       { source: 'device sumber', destination: 'IP tujuan' },
       { source: devId(), destination: dst() }, (ctx, p) => readTools.toolGetPacketTrace(ctx, p)),
+    def('get_website', 'Baca web server (situs simulasi) yang dilayani sebuah device', 'read', 'read_only', false,
+      { deviceId: 'id atau nama device' }, { deviceId: devId() }, (ctx, p) => readTools.toolGetWebsite(ctx, p)),
+    def('get_windows_state', 'State Windows Client: file, situs web, daya', 'read', 'read_only', false,
+      { deviceId: 'id atau nama device' }, { deviceId: devId() }, (ctx, p) => readTools.toolGetWindowsState(ctx, p)),
     def('get_ping_result', 'Jalankan ping via engine dan baca hasil', 'read', 'read_only', false,
       { source: 'device sumber', destination: 'IP tujuan' },
       { source: devId(), destination: dst() }, (ctx, p) => readTools.toolGetPingResult(ctx, p)),
@@ -167,6 +171,13 @@ export function buildRegistry(): ToolDef[] {
       { source: devId(), destination: dst(), port: { optional: true, check: vInt, label: 'port' } },
       (ctx, p) => {
         const r = ctx.verification.verifyTcp({ source: String(p.source), destination: String(p.destination), port: p.port as number | undefined, actionId: ctx.actionId });
+        return verifyResultToTool(r);
+      }),
+    def('verify_http', 'Verifikasi situs web: TCP + konten HTML yang disajikan server', 'verification', 'read_only', false,
+      { source: 'device sumber', destination: 'IP tujuan', port: 'port HTTP (default 80)' },
+      { source: devId(), destination: dst(), port: { optional: true, check: vInt, label: 'port' } },
+      (ctx, p) => {
+        const r = ctx.verification.verifyHttp({ source: String(p.source), destination: String(p.destination), port: p.port as number | undefined, actionId: ctx.actionId });
         return verifyResultToTool(r);
       }),
     def('verify_route', 'Verifikasi rute statis/dinamis ke sebuah jaringan', 'verification', 'read_only', false,
@@ -227,8 +238,8 @@ export function buildRegistry(): ToolDef[] {
     def('create_device', 'Buat perangkat baru (router/switch/pc/server/firewall/wireless)', 'topology', 'execute', true,
       { type: 'jenis perangkat', vendor: 'vendor', name: 'nama (opsional)', position: '{x,y} (opsional)', id: 'id (opsional)', seed: 'seed id (opsional)' },
       {
-        type: { optional: false, check: vEnum(['router', 'switch', 'firewall', 'pc', 'server', 'wireless'] as const), label: 'jenis perangkat' },
-        vendor: { optional: false, check: vEnum(['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux'] as const), label: 'vendor' },
+        type: { optional: false, check: vEnum(['router', 'switch', 'firewall', 'pc', 'server', 'wireless', 'windows-client'] as const), label: 'jenis perangkat' },
+        vendor: { optional: false, check: vEnum(['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux', 'windows'] as const), label: 'vendor' },
         name: { optional: true, check: vStr, label: 'nama device' },
         position: { optional: true, check: vPos, label: 'posisi canvas' },
         id: { optional: true, check: vStr, label: 'id device' },

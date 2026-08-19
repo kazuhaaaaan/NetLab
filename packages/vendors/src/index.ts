@@ -22,6 +22,7 @@ export { FortinetVendorAdapter } from './fortinet/adapter';
 export { ArubaVendorAdapter } from './aruba/adapter';
 export { OpenwrtVendorAdapter } from './openwrt/adapter';
 export { LinuxDebianVendorAdapter } from './linux/adapter';
+export { WindowsVendorAdapter } from './windows/adapter';
 
 export { VENDOR_CAPABILITIES, getVendorCapabilities, CAPABILITY_LABELS } from './capabilities';
 export type { VendorCapabilities, CapabilityKey, CapabilityStatus } from './capabilities';
@@ -57,3 +58,4 @@ import './fortinet/commands';
 import './aruba/commands';
 import './openwrt/commands';
 import './linux/commands';
+import './windows/commands';

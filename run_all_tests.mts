@@ -34,6 +34,7 @@ import { runMentorTests } from './tests/unit/mentorCreator.test';
 import { runProductionEngineTests } from './tests/unit/productionEngine.test';
 import { runProtocolFidelityTests } from './tests/unit/protocolFidelity.test';
 import { runAiAgentTests } from './tests/unit/aiAgent.test';
+import { runWindowsClientTests } from './tests/unit/windowsClient.test';
 import { dropCodeOf } from './src/engine/net/core/dropReasons';
 import { NatTranslator } from './src/engine/net/layer4/Nat';
 import type { Packet } from './src/engine/net/core/types';
@@ -2785,6 +2786,13 @@ const airep = runAiAgentTests();
 passed += airep.passed;
 failed += airep.failed;
 fails.push(...airep.fails);
+
+// ── 33. Windows Client GUI Simulator (Prompt 4) ─────────────────────────
+console.log('\n== 33. Windows Client GUI Simulator ==');
+const winrep = runWindowsClientTests();
+passed += winrep.passed;
+failed += winrep.failed;
+fails.push(...winrep.fails);
 
 // ── 28. Routing protocol fidelity: OSPF FSM/LSDB/SPF + BGP FSM/selection ──
 // State machine berbasis round: compute({rounds:n}) menjalankan tepat n

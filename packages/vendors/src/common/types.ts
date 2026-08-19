@@ -361,6 +361,10 @@ export interface NodeMemory {
   dnsServers: string[];
   dnsRecords: Array<{ name: string; address: string }>;
   webServer: { enabled: boolean; port: number; content: string };
+  /** Windows Client: file My Documents (dikelola GUI desktop). */
+  files?: Array<{ name: string; content: string }>;
+  /** Windows Client: situs web yang di-host perangkat ini (GUI Website Editor). */
+  websites?: Array<{ hostname: string; port: number; content: string; enabled: boolean }>;
   dhcpPools: DhcpPool[];
   dhcpClients: DhcpClient[];
   dhcpExcluded?: string[];

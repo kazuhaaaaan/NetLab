@@ -10,7 +10,8 @@ export type ModelDeviceType =
   | 'firewall'
   | 'pc'
   | 'server'
-  | 'wireless';
+  | 'wireless'
+  | 'windows-client';
 
 export interface PortDef {
   /** nama port; pakai {n} untuk nomor berurutan, mis. ether{n} → ether1, ether2 */
@@ -441,6 +442,24 @@ export const DEVICE_MODELS: Record<string, DeviceModel[]> = {
       types: ['pc', 'server'],
       description: 'Linux untuk Raspberry Pi: kecil, hemat listrik.',
       specs: { cpu: 'ARM Cortex-A72 1.8GHz', ram: '1-8GB', flash: 'SD Card 32GB', ports: '1x GbE' },
+      ports: [...p('eth0', 1000, 'copper')],
+    },
+  ],
+  windows: [
+    {
+      id: 'windows_11',
+      label: 'Windows 11 Pro',
+      types: ['windows-client'],
+      description: 'Windows 11 desktop: NetBrowser, Network Settings, Website Editor, File Explorer & Notepad.',
+      specs: { cpu: 'Virtual x86-64 4-core', ram: '8GB', flash: '256GB', ports: '1x GbE' },
+      ports: [...p('eth0', 1000, 'copper')],
+    },
+    {
+      id: 'windows_10',
+      label: 'Windows 10 Enterprise',
+      types: ['windows-client'],
+      description: 'Windows 10 enterprise: sama dengan Windows 11, model lama.',
+      specs: { cpu: 'Virtual x86-64 2-core', ram: '4GB', flash: '128GB', ports: '1x GbE' },
       ports: [...p('eth0', 1000, 'copper')],
     },
   ],

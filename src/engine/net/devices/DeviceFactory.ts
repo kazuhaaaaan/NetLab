@@ -26,6 +26,8 @@ export function kindOfDeviceType(deviceType: string): DeviceKind {
       return 'wireless';
     case 'pc':
       return 'pc';
+    case 'windows-client':
+      return 'pc';
     case 'server':
       return 'server';
     default:

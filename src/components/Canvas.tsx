@@ -6,6 +6,7 @@ import {
   Router,
   Server,
   Laptop,
+  Monitor,
   ShieldAlert,
   HardDrive,
   Plus,
@@ -659,6 +660,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         return <ShieldAlert className="w-4 h-4 text-rose-400" />;
       case "pc":
         return <Laptop className="w-4 h-4 text-emerald-400" />;
+      case "windows-client":
+        return <Monitor className="w-4 h-4 text-sky-400" />;
       case "server":
         return <Server className="w-4 h-4 text-purple-400" />;
       case "wireless":

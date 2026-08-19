@@ -6,6 +6,7 @@ import {
   Laptop,
   Server,
   Wifi,
+  Monitor,
   ChevronLeft,
   Check,
   Boxes,
@@ -16,7 +17,7 @@ import { VENDOR_MAP } from '../../data/vendors';
 import { getModelsForVendor, getDefaultModel } from '../../data/deviceModels';
 import { VendorType } from '../../types';
 
-type DeviceType = 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless';
+type DeviceType = 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless' | 'windows-client';
 
 const DEVICE_TYPES: { id: DeviceType; label: string; icon: React.ElementType; color: string }[] = [
   { id: 'router', label: 'Router', icon: Router, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30' },
@@ -25,6 +26,7 @@ const DEVICE_TYPES: { id: DeviceType; label: string; icon: React.ElementType; co
   { id: 'pc', label: 'PC / Client', icon: Laptop, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
   { id: 'server', label: 'Server', icon: Server, color: 'text-orange-400 bg-orange-500/10 border-orange-500/30' },
   { id: 'wireless', label: 'Wireless AP', icon: Wifi, color: 'text-violet-400 bg-violet-500/10 border-violet-500/30' },
+  { id: 'windows-client', label: 'Windows Client', icon: Monitor, color: 'text-sky-400 bg-sky-500/10 border-sky-500/30' },
 ];
 
 interface MobileAddDeviceSheetProps {
@@ -51,11 +53,14 @@ export const MobileAddDeviceSheet: React.FC<MobileAddDeviceSheetProps> = ({ open
     onClose();
   };
 
-  // Server hanya tersedia di vendor Linux; sisanya tampilkan semua vendor
+  // Server hanya tersedia di vendor Linux; Windows Client hanya di vendor Windows
   const vendors = useMemo(() => {
     const all = Object.values(VENDOR_MAP);
     if (deviceType === 'server') {
       return all.filter((v) => v.id === 'linux');
+    }
+    if (deviceType === 'windows-client') {
+      return all.filter((v) => v.id === 'windows');
     }
     return all;
   }, [deviceType]);

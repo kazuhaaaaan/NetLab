@@ -33,6 +33,7 @@ import { LAB_SCENARIOS } from './engine/lab/scenarios';
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
 import { validateProject } from './utils/projectValidation';
 import { syncNodeToEngine as syncNodeToEngineAll, syncDhcpPools as syncDhcpPoolsAll } from './utils/cliSync';
+import { WinDesktopModal } from './components/windows/WinDesktopModal';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
@@ -235,6 +236,7 @@ export default function App() {
   };
 
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(() => loadTerminalState().isOpen);
+  const [winDesktopNodeId, setWinDesktopNodeId] = useState<string | null>(null);
   const [openTerminalNodeIds, setOpenTerminalNodeIds] = useState<string[]>(() => {
     const open = loadTerminalState().open;
     return open.length > 0 ? open : ['node-1'];
@@ -634,12 +636,13 @@ export default function App() {
 
   const handleAddNode = (
     vendor: VendorType,
-    deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless',
+    deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless' | 'windows-client',
     model?: string
   ) => {
     const id = `node-${Date.now()}`;
-    // Server devices always use Debian Linux CLI
-    const effectiveVendor: VendorType = deviceType === 'server' ? 'linux' : vendor;
+    // Server devices always use Debian Linux CLI; Windows Client pakai Windows CLI
+    const effectiveVendor: VendorType =
+      deviceType === 'server' ? 'linux' : deviceType === 'windows-client' ? 'windows' : vendor;
     const vendorInfo = VENDOR_MAP[effectiveVendor];
     const defaultModel = getDefaultModel(effectiveVendor, deviceType);
     const chosenModel =
@@ -658,7 +661,7 @@ export default function App() {
           { id: 'wlan2', name: vendor === 'mikrotik' ? 'wlan2' : 'Wlan1', speedMbps: 300, status: 'down' as const, macAddress: '52:54:00:AA:BB:03', type: 'copper' as const },
         ];
       }
-      if (deviceType === 'pc') {
+      if (deviceType === 'pc' || deviceType === 'windows-client') {
         return basePorts.slice(0, 1);
       }
       return basePorts;
@@ -666,7 +669,12 @@ export default function App() {
 
     const newNode: LabNode = {
       id,
-      name: deviceType === 'server' ? `debian-server` : `${vendorInfo.name.split(' ')[0]}-${deviceType.toUpperCase()}`,
+      name:
+        deviceType === 'server'
+          ? `debian-server`
+          : deviceType === 'windows-client'
+            ? 'windows-client'
+            : `${vendorInfo.name.split(' ')[0]}-${deviceType.toUpperCase()}`,
       vendor: effectiveVendor,
       model: chosenModel,
       deviceType,
@@ -1142,6 +1150,12 @@ export default function App() {
   }, [activeTool]);
 
   const handleOpenTerminal = (nodeId: string) => {
+    const node = project.nodes.find((n) => n.id === nodeId);
+    // Windows Client: double-click membuka Desktop GUI, bukan terminal
+    if (node && node.deviceType === 'windows-client') {
+      setWinDesktopNodeId(nodeId);
+      return;
+    }
     if (!openTerminalNodeIds.includes(nodeId)) {
       setOpenTerminalNodeIds((prev) => [...prev, nodeId]);
       if (!terminalLogs[nodeId]) {
@@ -1890,6 +1904,29 @@ onOpenTerminal={handleOpenTerminal}
 
       {/* Mobile desktop-optimization warning */}
       <MobileWarning />
+
+      {/* Windows Client Desktop GUI */}
+      {winDesktopNodeId &&
+        (() => {
+          const winNode = project.nodes.find((n) => n.id === winDesktopNodeId);
+          if (!winNode) return null;
+          return (
+            <WinDesktopModal
+              nodeId={winNode.id}
+              nodeName={winNode.name}
+              powered={winNode.powered !== false}
+              sim={simEngineRef.current}
+              getMem={() => vendorDispatcher.getNodeMemory(winNode.id)}
+              onChanged={() => {
+                syncNodeToEngineAll(simEngineRef.current, vendorDispatcher, winNode.id);
+                StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory());
+                setStatsVersion((v) => v + 1);
+              }}
+              onTogglePower={() => handleTogglePower(winNode.id)}
+              onClose={() => setWinDesktopNodeId(null)}
+            />
+          );
+        })()}
 
       {/* Vendor capability matrix (Supported / Partial / Parser-only / Not Supported) */}
       <VendorCapabilitiesModal isOpen={isVendorCapsOpen} onClose={() => setIsVendorCapsOpen(false)} />

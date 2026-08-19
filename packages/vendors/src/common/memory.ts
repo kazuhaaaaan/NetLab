@@ -138,6 +138,8 @@ export class MemoryRegistryImpl implements MemoryRegistry {
       if (Array.isArray(m.dnsServers)) target.dnsServers = m.dnsServers as string[];
       if (Array.isArray(m.dnsRecords)) target.dnsRecords = m.dnsRecords as NodeMemory['dnsRecords'];
       if (m.webServer && typeof m.webServer === 'object') target.webServer = { ...target.webServer, ...(m.webServer as Record<string, unknown>) } as NodeMemory['webServer'];
+      if (Array.isArray(m.files)) target.files = m.files as NodeMemory['files'];
+      if (Array.isArray(m.websites)) target.websites = m.websites as NodeMemory['websites'];
       if (Array.isArray(m.dhcpPools)) target.dhcpPools = m.dhcpPools as NodeMemory['dhcpPools'];
       if (Array.isArray(m.dhcpClients)) target.dhcpClients = m.dhcpClients as NodeMemory['dhcpClients'];
       if (Array.isArray(m.natRules)) target.natRules = m.natRules as NodeMemory['natRules'];

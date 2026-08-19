@@ -71,6 +71,28 @@ export class VerificationEngine {
     return this.record(vr, params);
   }
 
+  /** Verifikasi situs web: TCP handshake sukses DAN server menyajikan konten HTML. */
+  verifyHttp(params: VerifyParams): VerificationResult {
+    const dst = params.destination || '';
+    const port = params.port ?? 80;
+    const r = this.sim.simulateTcpConnect(params.source, dst, port);
+    const body = r.body ?? '';
+    const success = r.ok === true && body.trim().length > 0;
+    const vr: VerificationResult = {
+      success,
+      testType: 'tcp',
+      source: params.source,
+      destination: dst,
+      reason: !r.ok ? (r.reason ?? 'tcp-fail') : body.trim().length === 0 ? 'empty-body' : undefined,
+      evidence: r.ok
+        ? [`HTTP 200 — ${body.trim().length} byte konten`, `judul: ${(body.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim() || '(tanpa <title>)'}`]
+        : [`TCP gagal: ${r.reason ?? 'unknown'}`],
+      timestamp: Date.now(),
+      actionId: params.actionId,
+    };
+    return this.record(vr, params);
+  }
+
   /** ping otomatis: IPv6 bila dst alamat v6, selain itu IPv4. */
   verifyAutoPing(params: VerifyParams): VerificationResult {
     const dst = params.destination || '';

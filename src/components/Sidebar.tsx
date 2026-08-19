@@ -16,7 +16,7 @@ import { getDefaultModel, getModelsForVendor } from '../data/deviceModels';
 
 interface SidebarProps {
   selectedNode: LabNode | null;
-  onAddNode: (vendor: VendorType, deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless', model?: string) => void;
+  onAddNode: (vendor: VendorType, deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless' | 'windows-client', model?: string) => void;
   onUpdateNodeName: (nodeId: string, name: string) => void;
   onUpdateNodeModel: (nodeId: string, model: string) => void;
   onDeleteNode: (nodeId: string) => void;
@@ -42,8 +42,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [preferredModel, setPreferredModel] = useState<Record<string, string>>({});
 
   /** Model yang cocok untuk tipe device; server selalu pakai vendor linux. */
-  const pickModel = (vendorId: VendorType, deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless'): string => {
-    const effVendor: VendorType = deviceType === 'server' ? 'linux' : vendorId;
+  const pickModel = (vendorId: VendorType, deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless' | 'windows-client'): string => {
+    const effVendor: VendorType =
+      deviceType === 'server' ? 'linux' : deviceType === 'windows-client' ? 'windows' : vendorId;
     const pre = preferredModel[effVendor];
     if (pre && getModelsForVendor(effVendor).some((m) => m.label === pre && m.types.includes(deviceType))) {
       return pre;

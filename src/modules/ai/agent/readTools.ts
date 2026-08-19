@@ -455,3 +455,34 @@ export function toolGetVerificationHistory(ctx: ToolExecCtx, p: Record<string, u
     })),
   });
 }
+
+/** Web server (situs web simulasi) yang dilayani sebuah device. */
+export function toolGetWebsite(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
+  const sim = ctx.runtime.sim;
+  const dev = sim.getDevice(p['deviceId'] as string) ?? sim.getDeviceByName(p['deviceId'] as string);
+  if (!dev) return { ok: false, message: `device tidak ditemukan: ${p['deviceId']}`, error: 'device-not-found' };
+  const web = dev.webServer;
+  return ok(web?.enabled ? `${dev.name}: situs aktif di port ${web.port}` : `${dev.name}: tidak ada situs aktif`, {
+    deviceId: dev.id,
+    webServer: web,
+  });
+}
+
+/** State Windows Client: file, situs, daya (untuk observasi + verifikasi GUI). */
+export function toolGetWindowsState(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
+  const runtime = ctx.runtime;
+  const dev = runtime.sim.getDevice(p['deviceId'] as string) ?? runtime.sim.getDeviceByName(p['deviceId'] as string);
+  if (!dev) return { ok: false, message: `device tidak ditemukan: ${p['deviceId']}`, error: 'device-not-found' };
+  const mem = runtime.dispatcher.getNodeMemory(dev.id);
+  const files = Array.isArray(mem?.files) ? (mem.files as Array<{ name: string; content: string }>) : [];
+  const websites = Array.isArray(mem?.websites) ? (mem.websites as Array<{ hostname: string; port: number; content: string; enabled: boolean }>) : [];
+  return ok(
+    `${dev.name}: ${dev.powered ? 'ON' : 'OFF'}, ${files.length} file, ${websites.length} situs`,
+    {
+      deviceId: dev.id,
+      powered: dev.powered,
+      files: files.map((f) => ({ name: f.name, size: f.content.length })),
+      websites: websites.map((w) => ({ hostname: w.hostname, port: w.port, enabled: w.enabled, size: w.content.length })),
+    }
+  );
+}

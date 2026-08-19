@@ -28,6 +28,7 @@ const KNOWN_VENDORS = [
   'aruba',
   'openwrt',
   'linux',
+  'windows',
 ];
 
 export const SCHEMA_VERSION = '1.0';

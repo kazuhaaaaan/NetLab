@@ -14,7 +14,8 @@ export type VendorType =
   | 'fortinet'
   | 'aruba'
   | 'openwrt'
-  | 'linux';
+  | 'linux'
+  | 'windows';
 
 export interface VendorInfo {
   id: VendorType;
@@ -44,7 +45,7 @@ export interface LabNode {
   name: string;
   vendor: VendorType;
   model: string;
-  deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless';
+  deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless' | 'windows-client';
   position: { x: number; y: number };
   ports: PortSpec[];
   selected?: boolean;

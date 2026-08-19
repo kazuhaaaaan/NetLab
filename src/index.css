@@ -142,3 +142,54 @@ body {
     background-color: rgba(71, 85, 105, 0.8);
   }
 }
+
+/* ── Windows Client Desktop ─────────────────────────────── */
+
+.win-wallpaper {
+  background:
+    radial-gradient(ellipse at 20% 10%, rgba(56, 189, 248, 0.25), transparent 55%),
+    radial-gradient(ellipse at 80% 90%, rgba(129, 140, 248, 0.2), transparent 55%),
+    linear-gradient(160deg, #1e3a8a 0%, #155e75 45%, #0f172a 100%);
+}
+
+.win-logo {
+  background: linear-gradient(135deg, #38bdf8 25%, transparent 25%) 0 0 / 50% 50% no-repeat,
+    linear-gradient(45deg, #f97316 25%, transparent 25%) 0 50% / 50% 50% no-repeat,
+    linear-gradient(45deg, transparent 75%, #facc15 75%) 50% 0 / 50% 50% no-repeat,
+    linear-gradient(-45deg, transparent 75%, #22c55e 75%) 50% 50% / 50% 50% no-repeat;
+  background-color: #0f172a;
+  border-radius: 2px;
+}
+
+/* NetBrowser: halaman HTML simulasi (render aman, tanpa iframe/eval) */
+.win-page {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: #1f2937;
+  padding: 16px 24px;
+  line-height: 1.5;
+  font-size: 13px;
+  max-width: 760px;
+  margin: 0 auto;
+  background: #ffffff;
+  min-height: 100%;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.08);
+}
+.win-html-h1 { font-size: 22px; font-weight: 700; margin: 0.6em 0 0.4em; color: #111827; }
+.win-html-h2 { font-size: 18px; font-weight: 700; margin: 0.6em 0 0.3em; color: #111827; }
+.win-html-h3 { font-size: 15px; font-weight: 600; margin: 0.6em 0 0.3em; color: #1f2937; }
+.win-html-h4, .win-html-h5, .win-html-h6 { font-size: 13px; font-weight: 600; margin: 0.5em 0 0.2em; }
+.win-html-p { margin: 0.5em 0; }
+.win-html-a { color: #0e7490; text-decoration: underline; cursor: pointer; }
+.win-html-a:hover { color: #0c4a6e; }
+.win-html-hr { border: none; border-top: 1px solid #e5e7eb; margin: 1em 0; }
+.win-html-pre { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; overflow-x: auto; }
+.win-html-ul, .win-html-ol { padding-left: 24px; margin: 0.5em 0; }
+.win-html-li { margin: 0.2em 0; }
+.win-html-table { border-collapse: collapse; margin: 0.6em 0; }
+.win-html-td, .win-html-th { border: 1px solid #d1d5db; padding: 4px 10px; font-size: 12px; }
+.win-html-th { background: #f3f4f6; font-weight: 600; }
+.win-html-img { background: #e5e7eb; border: 1px dashed #9ca3af; border-radius: 6px; padding: 18px; text-align: center; color: #6b7280; font-size: 11px; margin: 0.5em 0; }
+.win-html-input { border: 1px solid #9ca3af; border-radius: 4px; padding: 3px 8px; font-size: 12px; margin: 0 4px 0 0; background: #fff; color: #111827; }
+.win-html-btn { background: #0e7490; color: #fff; border: none; border-radius: 4px; padding: 4px 14px; font-size: 12px; cursor: pointer; }
+.win-html-btn:hover { background: #155e75; }
+.win-html-form { margin: 0.6em 0; }
