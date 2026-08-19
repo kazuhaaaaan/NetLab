@@ -148,6 +148,15 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
     notes:
       'Linux host: tidak menjalankan protokol routing dinamis (OSPF/BGP) di simulator ini.',
   },
+  windows: {
+    vendorId: 'windows',
+    caps: {
+      ipv4: P, ipv6: NS, vlan: NS, dhcp: P, nat: NS, ospf: NS, bgp: NS, vrrp: NS,
+      staticRoute: P, firewall: NS, dns: P, commit: NS,
+    },
+    notes:
+      'Windows 11 client (GUI Simulator): IP/DNS/rute dikonfigurasi via GUI + lease DHCP (teruji end-to-end), CLI jujur read-only (ipconfig/nslookup/curl). Tidak ada routing dinamis / NAT / VLAN tagging.',
+  },
 };
 
 export function getVendorCapabilities(vendorId: string): VendorCapabilities | null {

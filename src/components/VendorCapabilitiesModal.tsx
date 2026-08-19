@@ -51,7 +51,7 @@ const CAP_ORDER: CapabilityKey[] = [
   'commit',
 ];
 
-const VENDOR_ORDER = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux'];
+const VENDOR_ORDER = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux', 'windows'];
 
 const VENDOR_NAMES: Record<string, string> = {
   mikrotik: 'MikroTik RouterOS',

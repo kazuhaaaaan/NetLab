@@ -625,6 +625,21 @@ export class SimulationFlows {
 
   /** Suntik paket dari perangkat sumber ke jaringan (rute + ARP). */
   private inject(src: NetworkDevice, pkt: Packet, traceId: string): boolean {
+    // Self-destination: dstIp milik perangkat itu sendiri (mis. buka situs yang
+    // di-host sendiri, atau ping IP sendiri) → proses lokal langsung. Meneruskannya
+    // ke routing akan memilih next-hop = diri sendiri → ARP untuk IP sendiri →
+    // 'arp-not-for-me' (jalur buntu, tidak pernah berhasil).
+    if (src.hasIp(pkt.dstIp)) {
+      const selfIface = src.getInterfaces().find((i) => i.ip && i.up);
+      if (!selfIface) return false;
+      pkt.srcIp = selfIface.ip!.address;
+      pkt.srcMac = selfIface.mac;
+      pkt.dstMac = selfIface.mac;
+      const proc = this.ctx.processors.get(src.id);
+      if (proc) proc.handlePacket(pkt, selfIface.name, this.core, traceId);
+      return true;
+    }
+
     const candidates = src.getInterfaces().filter((i) => i.ip && i.up);
     const sameSub = candidates.find((i) => inSameSubnet(i.ip!.address, i.ip!.prefix, pkt.dstIp));
 

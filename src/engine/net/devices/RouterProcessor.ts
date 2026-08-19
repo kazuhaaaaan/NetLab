@@ -593,10 +593,18 @@ export class RouterProcessor implements DeviceProcessor {
     core.drop(dev, pkt, 'unsupported', traceId);
   }
 
+  /** Self-connect: srcIp milik perangkat ini → balasan harus lokal, bukan kabel. */
+  private isSelfSrc(pkt: Packet): boolean {
+    return !!this.device.hasIp(pkt.srcIp);
+  }
+
   protected handleTcp(pkt: Packet, inPort: string, iface: { name: string; mac: string; ip?: { address: string; prefix: number } }, core: SimulatorCore, traceId: string): void {
     const dev = this.device;
     const seg = (pkt.payload ?? {}) as unknown as TcpSegment;
     const run = core.getRun(traceId);
+
+    /** Self-connect: srcIp milik perangkat ini → balasan harus lokal, bukan kabel. */
+    const selfSrc = this.isSelfSrc(pkt);
 
     if (isSyn(seg) && !isAck(seg)) {
       core.emit('TCP_SYN', traceId, { port: pkt.dstPort }, dev.id, iface.name);
@@ -646,7 +654,13 @@ export class RouterProcessor implements DeviceProcessor {
       reply.flags['serverSeq'] = iseq;
       reply.flags['webContent'] = dev.webServer?.content || '';
       reply.vlan = pkt.vlan;
-      core.transmit(dev, reply, iface.name, traceId);
+      if (selfSrc) {
+        // Self-connect (client == server): balas secara lokal — mengirim lewat
+        // kabel akan memantul dan macet di ARP diri sendiri.
+        this.localDelivery(reply, inPort, iface.name, core, traceId);
+      } else {
+        core.transmit(dev, reply, iface.name, traceId);
+      }
       core.emit('TCP_SYN_ACK', traceId, { seq: iseq, ack: seg.seq + 1 }, dev.id, iface.name);
     } else if (isAck(seg) && isSyn(seg)) {
       // Client menerima SYN-ACK → 3-way handshake selesai, kirim ACK balik.
@@ -662,6 +676,18 @@ export class RouterProcessor implements DeviceProcessor {
           proto: 'tcp',
         });
       }
+      // Catat hasil handshake SEBELUM mengirim ACK: pada self-connect, pengiriman
+      // ACK berjalan sinkron (localDelivery) dan server menuntaskan run ('ok')
+      // lebih dulu — jika ditulis setelahnya, blok ini tak pernah terjalankan.
+      if (run && run.status === 'running') {
+        run.statusCode = 200;
+        run.body = String(pkt.flags['webContent'] ?? '');
+        run.handshake = [
+          { seq: seg.ack - 1, ack: 0, flags: 'SYN' },
+          { seq: seg.seq, ack: seg.ack, flags: 'SYN-ACK' },
+          { seq: seg.ack, ack: seg.seq + 1, flags: 'ACK' },
+        ];
+      }
       const ack = core.createPacket({
         protocol: 'tcp',
         srcMac: iface.mac,
@@ -676,7 +702,9 @@ export class RouterProcessor implements DeviceProcessor {
         payload: { ...buildTcpSegment(pkt.dstPort, pkt.srcPort, seg.ack, seg.seq + 1, TCP_ACK) },
       });
       ack.vlan = pkt.vlan;
-      if (iface.ip && inSameSubnet(iface.ip.address, iface.ip.prefix, pkt.srcIp)) {
+      if (selfSrc) {
+        this.localDelivery(ack, inPort, iface.name, core, traceId);
+      } else if (iface.ip && inSameSubnet(iface.ip.address, iface.ip.prefix, pkt.srcIp)) {
         arpResolveAndSend(dev, ack, iface.name, pkt.srcIp, core, traceId);
       } else {
         core.transmit(dev, ack, iface.name, traceId);
@@ -739,7 +767,11 @@ export class RouterProcessor implements DeviceProcessor {
         payload: { ...buildTcpSegment(pkt.dstPort, pkt.srcPort, seg.ack, seg.seq + 1, TCP_FIN | TCP_ACK) },
       });
       finAck.vlan = pkt.vlan;
-      core.transmit(dev, finAck, iface.name, traceId);
+      if (selfSrc) {
+        this.localDelivery(finAck, inPort, iface.name, core, traceId);
+      } else {
+        core.transmit(dev, finAck, iface.name, traceId);
+      }
       this.teardownTcp(dev, pkt.dstIp, pkt.dstPort, pkt.srcIp, pkt.srcPort);
       if (run && run.status === 'running') {
         run.status = 'ok';

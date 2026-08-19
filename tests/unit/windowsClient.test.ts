@@ -135,6 +135,21 @@ export function runWindowsClientTests(): Report {
     check('W3.4 jalur paket nyata (ping) sampai', ping.success === true && ping.path.includes('WIN1'), JSON.stringify(ping));
   }
 
+  // ── W3b. SELF-HOST: browser membuka situs miliknya sendiri (localhost) ───
+  {
+    const { sim } = makeTopology();
+    sim.applyNodeConfig('r1', { ether1: '10.0.0.1/24', ether2: '192.168.1.1/24' }, []);
+    sim.applyNodeConfig('win1', { eth0: '10.0.0.5/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.0.1' }]);
+    sim.setWebServer('win1', { enabled: true, port: 80, content: '<html><head><title>Website Saya</title></head><body><h1>Halo</h1></body></html>' });
+    // Win1 membuka situs di IP-nya sendiri — handshake harus lokal (tanpa loop kabel).
+    const selfConn = sim.simulateTcpConnect('win1', '10.0.0.5', 80);
+    check('W3b.1 self-host TCP sukses', selfConn.ok === true && selfConn.status === 200, JSON.stringify(selfConn));
+    check('W3b.2 handshake 3-way lengkap', (selfConn.handshake ?? []).length === 3, JSON.stringify(selfConn.handshake ?? null));
+    check('W3b.3 body situs dikirim', (selfConn.body ?? '').includes('Website Saya'), JSON.stringify(selfConn.body?.slice(0, 60)));
+    const selfClose = sim.simulateTcpClose('win1', '10.0.0.5', 80);
+    check('W3b.4 self-host TCP close ok', selfClose.ok === true, JSON.stringify(selfClose));
+  }
+
   // ── W4. Vendor CLI windows: ipconfig / dir / type / ping / nslookup / curl ─
   {
     const { sim, dispatcher } = makeTopology();

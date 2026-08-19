@@ -24,7 +24,7 @@ const VENDOR_IDS = Object.keys(VENDOR_CAPABILITIES);
 const CAP_ORDER: CapabilityKey[] = [
   'ipv4', 'ipv6', 'staticRoute', 'vlan', 'dhcp', 'nat', 'ospf', 'bgp', 'vrrp', 'firewall', 'dns', 'commit',
 ];
-const VENDOR_ORDER = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux'];
+const VENDOR_ORDER = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux', 'windows'];
 
 interface Report {
   passed: number;

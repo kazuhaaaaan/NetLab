@@ -252,3 +252,73 @@ CLI kini jujur).
 7. ARP buffer timeout → deterministik `ARP_UNRESOLVED` (bukan menggantung).
 8. Abbreviation CLI hanya untuk command tree vendor facade; input parsial
    diteruskan ke engine (jujur).
+
+---
+
+## 8. Audit penuh engine/CLI/vendor (2026-08-19) — probe 87 titik + regresi
+
+> Status: **COMPLETE**. Audit fungsional menyeluruh via probe live
+> (engine, CLI, vendor, AI agent, windows client, mlab, parser HTML) →
+> 3 bug nyata diperbaiki + matriks kapabilitas windows dilengkapi.
+> **1774 passed, 0 failed** · typecheck ✓ · build prod ✓.
+
+### Metode (Deliverable A)
+
+Probe sementara (`tests/audit_probe.mts`, dihapus setelah hijau) menjalankan
+**87 pemeriksaan** lintas 9 area terhadap implementasi nyata (bukan klaim):
+A. L2/L3 + VLAN trunk + router-on-a-stick inter-VLAN
+B. OSPF converge/down/recover, eBGP, VRRP (via switch shared L2), STP loop
+C. NAT (session persistensi jujur), ACL, DHCP, DNS, SNMP, web server, wireless, IPv6
+D. Lifecycle paket + drop reason (consumed/arp-consumed/no-route)
+E. Facade CLI: set-IP, memory, perintah baca, invalid → tidak mutasi
+F. AI agent: create/connect/delete/config/verify/rollback/diagnose/lab generator
+G. Windows client end-to-end: DHCP lease, DNS, self-host TCP, CLI, power off, memory round-trip
+H. Mlab validasi + topology warnings · I. safeHtml parser
+
+### Bugs ditemukan & diperbaiki
+
+| # | File | Temuan (sebelum) | Perbaikan (sesudah) | Verifikasi |
+|---|------|------------------|---------------------|------------|
+| P1 | `src/engine/net/devices/RouterProcessor.ts` + `src/engine/net/core/SimulationFlows.ts` | **Self-connect TCP buntu**: perangkat membuka situs yang di-host sendiri (dst = IP sendiri) selalu `unreachable`. Tiga akar: (1) reply SYN-ACK/ACK/FIN-ACK dikirim ke kabel (via switch) alih-alih delivery lokal; (2) penyelesaian run (body/handshake) ditulis SETELAH kirim ACK — saat deliveri lokal sinkron, status run sudah berubah sebelum run body diisi; (3) `inject` meneruskan paket self-dst ke routing → next-hop = diri sendiri → ARP untuk IP sendiri → `arp-not-for-me` + l2-filter menolak dstMac kosong | (1) `isSelfSrc(pkt)` → reply self-dst via `localDelivery` di jalur SYN-ACK, ACK, FIN-ACK; blok penyelesaian run dipindah SEBELUM kirim ACK; (2) `inject`: jika `src.hasIp(dstIp)` → proses lokal langsung (`handlePacket` dengan dstMac = MAC interface sendiri), tanpa ARP loop | W3b.1–W3b.4 (4 test baru): handshake 3-way, status 200, body lengkap, close ok; jalur remote (via router) tidak berubah |
+| P2 | `packages/vendors/src/mikrotik/commands.ts` (b92 nat add) | `/ip firewall nat add … out-interface=etherX` (interface tidak ada) **diterima diam-diam + memori termutasi** — RouterOS nyata menolak | Validasi `out-interface` terhadap `context.ports` → `% Error: no such interface X`, tanpa mutasi | Probe E5 + suite V/C (NAT valid tetap jalan) |
+| P3 | `packages/vendors/src/capabilities.ts` + `tests/unit/vendorInterop.test.ts` + `src/components/VendorCapabilitiesModal.tsx` | **windows tidak ada di matriks kapabilitas** (registry + urutan UI) padahal fitur windows client sudah shipped — klaim terluput dari enforcement V0–V5 | Entri windows jujur: ipv4/dhcp/staticRoute/dns = partial (konfigurasi via GUI + lease, CLI read-only), sisanya not-supported; `VENDOR_ORDER` kedua list ditambah `'windows'` | V0–V5 loop memvalidasi windows konsisten (tanpa klaim supported tanpa bukti test) |
+
+### Perilaku engine yang diverifikasi BENAR (bukan bug)
+
+- **No-route dari sumber**: ping → `reason:'unreachable'`, hanya event
+  `PACKET_CREATED` (tanpa `PACKET_DROPPED`); no-route di tengah jalur →
+  `PACKET_DROPPED` dengan reason. Ping sukses menghasilkan drop benih
+  `consumed`/`arp-consumed` (desain).
+- **NAT**: sesi bertahan setelah aturan dihapus (persistensi realistis;
+  aliran baru dengan 5-tuple baru gagal → sudah tidak ada aturan).
+- **VRRP/FHRP**: grup dikunci per segmen L2 (harus berbagi switch);
+  perubahan master mengosongkan seluruh ARP cache; `setNodePowered` memicu
+  recompute protocol. Berperilaku seperti perangkat nyata, bukan bug.
+- **AI agent**: rencana dengan perangkat yang tidak ada → error jujur
+  `source-not-found` + rollback; "buat lab ospf 2 router" → template
+  ospf-3-router (fallback wajar); konfigurasi OSPF via agent membentuk
+  adjacency nyata di engine.
+- **Facade CLI**: input ambigu → error vendor-autentik tanpa mutasi;
+  IP duplikat/interface hantu → ditolak; set-IP → tersimpan di memory +
+  diterapkan ke engine (sync dua arah).
+- **Windows client**: lease DHCP → IP engine + rute via gateway;
+  DNS resolve; self-host; power off → trafik berhenti (interfaces down);
+  memory round-trip GUI → CLI → export utuh.
+
+### Hasil pengujian (Deliverable D)
+
+- Suite penuh: **1774 passed, 0 failed** (sebelumnya 1759; +4 W3b
+  self-host + V0 windows checks; E5/P2/P3 regresi di section V/C).
+- Probe audit: **87/87** sebelum file probe dihapus.
+- `npm run typecheck` (tsc --noEmit strict) ✓ · `npm run build` (Vite prod) ✓.
+
+### Keterbatasan tersisa (jujur)
+
+1. Windows CLI read-only (ipconfig/nslookup/curl/hostname) — konfigurasi
+   dilakukan via GUI Simulator; tidak ada `netsh` (tidak dibuatkan data palsu).
+2. `configuredIps` (Map di NetworkDevice) adalah field mati — IP nyata
+   tersimpan di interface; tidak dipakai, tidak dibersihkan (kosmetik).
+3. BGP/OSPF adjacency pada segmen broadcast >2 router masih pairwise
+   (tanpa DR/BDR election) — batas simulasi yang diterima.
+4. Probe audit dihapus setelah hijau (file sementara); regresi permanen
+   ada di suite (W3b, V0, section 30).

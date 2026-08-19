@@ -450,11 +450,14 @@ export const mikrotikEntries: ChainEntry[] = [
           if (action) {
             const toAddresses = raw.match(/to-addresses=(\S+)/i)?.[1];
             const toPorts = raw.match(/to-ports=(\S+)/i)?.[1];
-    // RouterOS: to-addresses/to-ports hanya valid untuk aksi dst-nat (chain=dstnat)
+            // RouterOS: to-addresses/to-ports hanya valid untuk aksi dst-nat (chain=dstnat)
             if (chain !== 'dstnat' && (toAddresses || toPorts)) {
               cmdResult = { raw: '% Error: to-addresses/to-ports hanya berlaku pada chain=dstnat' };
             } else if (action === 'dst-nat' && chain !== 'dstnat') {
               cmdResult = { raw: '% Error: action=dst-nat hanya berlaku pada chain=dstnat' };
+            } else if (outIface && !((context?.ports ?? []).some((p: any) => String(p.name ?? '').toLowerCase() === outIface.toLowerCase()))) {
+              // RouterOS: out-interface harus interface nyata pada perangkat.
+              cmdResult = { raw: `% Error: no such interface ${outIface}` };
             } else {
               const rule: Record<string, string | number | boolean> = {
                 chain,
