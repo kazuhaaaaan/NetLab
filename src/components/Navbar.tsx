@@ -22,7 +22,11 @@ import {
   X,
   ChevronDown,
   Bot,
-  Table2
+  Table2,
+  Wand2,
+  BookOpen,
+  FlaskConical,
+  Play
 } from 'lucide-react';
 import { LabProject } from '../types';
 
@@ -36,6 +40,10 @@ interface NavbarProps {
   onOpenGrading: () => void;
   onOpenVendorCaps: () => void;
   onOpenAiChat: () => void;
+  onOpenConfigGen: () => void;
+  onOpenConfigLib: () => void;
+  onOpenPresetLabs: () => void;
+  onOpenNetSim: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
   onLoadTemplate: (templateName: string) => void;
@@ -103,6 +111,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenGrading,
   onOpenVendorCaps,
   onOpenAiChat,
+  onOpenConfigGen,
+  onOpenConfigLib,
+  onOpenPresetLabs,
+  onOpenNetSim,
   theme,
   onToggleTheme,
   onLoadTemplate,
@@ -248,6 +260,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <MobileItem icon={<ClipboardCheck className="w-4 h-4 text-violet-400" />} label="Auto-Grading" onClick={() => { onOpenGrading(); closeMobile(); }} />
                   <MobileItem icon={<Table2 className="w-4 h-4 text-emerald-400" />} label="Kemampuan Vendor" sub="Matriks dukungan fitur per vendor" onClick={() => { onOpenVendorCaps(); closeMobile(); }} />
                   <MobileItem icon={<PackageCheck className="w-4 h-4 text-blue-400" />} label="Monorepo Docs" onClick={() => { onOpenMonorepo(); closeMobile(); }} />
+                  <MobileItem icon={<Wand2 className="w-4 h-4 text-amber-400" />} label="Config Generator" sub="Buat konfigurasi router otomatis" onClick={() => { onOpenConfigGen(); closeMobile(); }} />
+                  <MobileItem icon={<BookOpen className="w-4 h-4 text-cyan-400" />} label="Config Library" sub="Snippet konfigurasi siap salin" onClick={() => { onOpenConfigLib(); closeMobile(); }} />
+                  <MobileItem icon={<FlaskConical className="w-4 h-4 text-emerald-400" />} label="Preset Labs" sub="Topologi siap pakai, 1 klik" onClick={() => { onOpenPresetLabs(); closeMobile(); }} />
+                  <MobileItem icon={<Play className="w-4 h-4 text-orange-400" />} label="Network Simulation" sub="Uji jalur & latensi di canvas" onClick={() => { onOpenNetSim(); closeMobile(); }} />
                 </div>
 
                 <div className="space-y-0.5">
@@ -463,6 +479,46 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <Table2 className="w-3.5 h-3.5 text-emerald-400" />
           <span className="hidden xl:inline">Vendor Caps</span>
+        </button>
+
+        {/* Config Generator */}
+        <button
+          onClick={onOpenConfigGen}
+          title="Config Generator — buat konfigurasi router otomatis dari form"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-amber-950 hover:bg-amber-900 text-amber-200 border border-amber-800 transition"
+        >
+          <Wand2 className="w-3.5 h-3.5 text-amber-400" />
+          <span className="hidden xl:inline">Config Gen</span>
+        </button>
+
+        {/* Config Library */}
+        <button
+          onClick={onOpenConfigLib}
+          title="Config Library — snippet konfigurasi siap salin (MikroTik/Cisco)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-cyan-950 hover:bg-cyan-900 text-cyan-200 border border-cyan-800 transition"
+        >
+          <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="hidden xl:inline">Config Lib</span>
+        </button>
+
+        {/* Preset Labs */}
+        <button
+          onClick={onOpenPresetLabs}
+          title="Preset Labs — topologi siap pakai (1 klik langsung digambar)"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-emerald-950 hover:bg-emerald-900 text-emerald-200 border border-emerald-800 transition"
+        >
+          <FlaskConical className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden xl:inline">Preset Labs</span>
+        </button>
+
+        {/* Network Simulation */}
+        <button
+          onClick={onOpenNetSim}
+          title="Network Simulation — uji jalur & latensi antar perangkat di canvas"
+          className="flex-shrink-0 flex items-center space-x-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-orange-950 hover:bg-orange-900 text-orange-200 border border-orange-800 transition"
+        >
+          <Play className="w-3.5 h-3.5 text-orange-400" />
+          <span className="hidden xl:inline">Simulate</span>
         </button>
 
         {/* Download Foundation ZIP */}

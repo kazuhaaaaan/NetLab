@@ -4,14 +4,6 @@ import { cidrOf, bitsToMask, wildcardToCidr, maskedPair, wildcardOf } from './ip
 import { mergeIps } from './state';
 import type { NodeMemory, VendorContext, WirelessAp } from './types';
 
-export function fakeDnsIp(domain: string): string {
-  let h = 5381;
-  for (let i = 0; i < domain.length; i++) {
-    h = ((h << 5) + h + domain.charCodeAt(i)) >>> 0;
-  }
-  return `10.${String((h >>> 16) % 240 + 8)}.${String((h >>> 8) % 240 + 8)}.${String(h % 240 + 8)}`;
-}
-
 export function uciNetworkLines(mem: Partial<Pick<NodeMemory, 'configuredIps' | 'dhcpClients' | 'routes'>>): string[] {
   const lines: string[] = [];
   const keyOf = (name: string): string => name.replace(/[^A-Za-z0-9_]/g, '_') || 'iface';
@@ -289,17 +281,15 @@ export function generateRunningConfig(context: VendorContext, mem: NodeMemory, v
       lines.push(`/ip route add dst-address=${String(r.dst)} gateway=${String(r.gateway)}`);
     });
     if (mem.routing?.ospf?.enabled) {
-      lines.push(`/routing ospf instance add name=ospf1 router-id=${String(mem.routing.ospf.routerId || '1.1.1.1')}`);
+      lines.push(`/routing ospf instance add name=ospf1${mem.routing.ospf.routerId ? ` router-id=${String(mem.routing.ospf.routerId)}` : ''}`);
       lines.push('/routing ospf area add name=backbone area-id=0.0.0.0 instance=ospf1');
       const nets = mem.routing.ospf.networks || [];
       if (nets.length > 0) {
         nets.forEach((n: string) => lines.push(`/routing ospf interface-template add networks=${String(n)} area=backbone`));
-      } else {
-        lines.push('/routing ospf interface-template add networks=0.0.0.0/0 area=backbone');
       }
     }
     if (mem.bgp?.asn) {
-      lines.push(`/routing bgp instance add name=bgp1 as=${String(mem.bgp.asn)} router-id=${String(mem.bgp.routerId || '1.1.1.1')}`);
+      lines.push(`/routing bgp instance add name=bgp1 as=${String(mem.bgp.asn)}${mem.bgp.routerId ? ` router-id=${String(mem.bgp.routerId)}` : ''}`);
       (mem.bgp.peers || []).forEach((p) => {
         lines.push(`/routing bgp connection add name=conn-${String(p.remoteAddr)} remote.address=${String(p.remoteAddr)} remote.as=${String(p.remoteAs)}`);
       });
@@ -542,10 +532,17 @@ export function generateRunningConfig(context: VendorContext, mem: NodeMemory, v
     mem.vlans.forEach((v) => lines.push(`set vlans ${String(v.name || 'VLAN' + v.id)} vlan-id ${String(v.id)}`));
     mem.routes.forEach((r) => lines.push(`set protocols static route ${String(r.dst)} next-hop ${String(r.gateway)}`));
     mem.dhcpPools.forEach((p) => {
-      lines.push(`set service dhcp-server shared-network-name ${String(p.name)} subnet ${String(cidrOf(p.network || '192.168.1.0/24'))}`);
+      // Tanpa network nyata, jangan ekspor subnet karangan (no fake config).
+      if (!p.network && !p.range) return;
+      const netLine = p.network
+        ? `set service dhcp-server shared-network-name ${String(p.name)} subnet ${String(cidrOf(p.network))}`
+        : null;
+      if (netLine) lines.push(netLine);
       const rm = String(p.range || '').match(/(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)/);
-      if (rm) lines.push(`set service dhcp-server shared-network-name ${String(p.name)} subnet ${String(cidrOf(p.network || '192.168.1.0/24'))} start ${String(rm[1])} stop ${String(rm[2])}`);
-      if (p.gateway) lines.push(`set service dhcp-server shared-network-name ${String(p.name)} subnet ${String(cidrOf(p.network || '192.168.1.0/24'))} default-router ${String(p.gateway)}`);
+      if (rm && netLine) {
+        lines.push(`${netLine} start ${String(rm[1])} stop ${String(rm[2])}`);
+        if (p.gateway) lines.push(`${netLine} default-router ${String(p.gateway)}`);
+      }
     });
     mem.dnsRecords.forEach((r) => lines.push(`set system static-host-mapping host-name ${String(r.name)} inet ${String(r.address)}`));
     if (mem.routing.ospf.enabled) {
@@ -579,11 +576,13 @@ export function generateRunningConfig(context: VendorContext, mem: NodeMemory, v
     });
   } else if (vendor === 'openwrt') {
     lines.push(`uci set system.@system[0].hostname=${String(hostname)}`);
-    withIp.forEach((p) => {
-      lines.push(`uci set network.${String(p.name)}.ipaddr=${String(cidrOf(p.ipAddress).split('/')[0])}`);
-      lines.push(`uci set network.${String(p.name)}.netmask=${String(maskedPair(p.ipAddress).split(' ')[1])}`);
-      lines.push(`uci set network.${String(p.name)}.proto=static`);
-    });
+    // Semua IP terkonfigurasi (termasuk virtual bridge "lan" yang bukan port
+    // fisik) diekspor jujur — jangan hanya yang cocok nama port.
+    for (const [iface, cidr] of Object.entries(mem.configuredIps || {})) {
+      lines.push(`uci set network.${String(iface)}.ipaddr=${String(cidrOf(cidr).split('/')[0])}`);
+      lines.push(`uci set network.${String(iface)}.netmask=${String(maskedPair(cidr).split(' ')[1])}`);
+      lines.push(`uci set network.${String(iface)}.proto=static`);
+    }
     if (mem.dnsServers.length > 0) lines.push(`uci set network.wan.dns=${String(mem.dnsServers.join(' '))}`);
     mem.vlans.forEach((v) => {
       lines.push(`uci set network.vlan${String(v.id)}.vlan=${String(v.id)}`);

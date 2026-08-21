@@ -125,14 +125,9 @@ export class JuniperVendorAdapter implements _IV {
       return 'load complete\n\n[edit]';
     }
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '10.0.0.1';
+      const host = cmdResult.host || '';
       return [`PING ${String(host)}: 56 data bytes`,
-        `64 bytes from ${String(host)}: icmp_seq=0 ttl=255 time=0.412 ms`,
-        `64 bytes from ${String(host)}: icmp_seq=1 ttl=255 time=0.389 ms`,
-        ``,
-        `--- ${String(host)} ping statistics ---`,
-        `2 packets transmitted, 2 packets received, 0% packet loss`,
-        `round-trip min/avg/max/stddev = 0.389/0.400/0.412/0.011 ms`,
+        `simulation engine not available in this context. Use the NetLab ping panel.`,
       ].join('\n');
     }
     if (cmdResult.type === 'help') {

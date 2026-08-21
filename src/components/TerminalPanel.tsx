@@ -4,8 +4,9 @@ import { LabNode, TerminalLog } from '../types';
 import { VENDOR_MAP } from '../data/vendors';
 import { getHints, getTabCompletion, CliHint } from '../data/cliHints';
 import { getBeginnerGuide, VendorGuide } from '../data/beginnerGuide';
-import { completionFor, nextCliMode, sequenceModes } from '../engine/cli/commandTree';
+import { completionFor, nextCliMode, sequenceModes, resolveAbbreviation } from '../engine/cli/commandTree';
 import type { CliMode } from '../engine/cli/commandTree';
+import { treeVendor } from '../engine';
 import { hasFinePointer } from '../utils/inputCapability';
 
 interface TerminalPanelProps {
@@ -17,55 +18,20 @@ interface TerminalPanelProps {
   onSendCommand: (nodeId: string, cmd: string, mode?: CliMode) => void;
   isOpen: boolean;
   onClose: () => void;
+  /** Hostname hasil konfigurasi CLI per perangkat (state device). */
+  hostnameOf: (nodeId: string) => string | undefined;
 }
 
 /** Vendor yang memakai command tree facade (abbreviation/completion context-aware). */
 function usesCommandTree(vendor: string): boolean {
-  return (
-    vendor === 'cisco_ios' ||
-    vendor === 'cisco_nxos' ||
-    vendor === 'cisco' ||
-    vendor === 'mikrotik' ||
-    vendor === 'juniper' ||
-    vendor === 'huawei' ||
-    vendor === 'aruba' ||
-    vendor === 'vyos' ||
-    vendor === 'ubiquiti' ||
-    vendor === 'fortinet'
-  );
+  return treeVendor(vendor) !== null;
 }
 
 /**
- * Prompt mode-aware per vendor:
- * Cisco/Aruba: Router# → Router(config)# → Router(config-if)#
- * Juniper:     admin@JunOS> → admin@JunOS#  (operational vs configuration)
- * Huawei:      <R> → [R] → [R-GigabitEthernet0/0/0]
- * VyOS/EdgeOS: vyos@router:~$ → vyos@router#
- * Fortinet:    satu level (tidak ada global config mode)
+ * Prompt mode-aware per vendor — lihat src/utils/prompt.ts (murni, teruji).
+ * Hostname hasil konfigurasi CLI + deviceType/model + mode menentukan prompt.
  */
-function promptFor(vendor: string, name: string, mode: CliMode, iface?: string): string {
-  const base = VENDOR_MAP[vendor as keyof typeof VENDOR_MAP]?.defaultPrompt || `${name}#`;
-  if (vendor === 'cisco_ios' || vendor === 'cisco_nxos' || vendor === 'cisco' || vendor === 'aruba') {
-    if (mode === 'exec') return base.replace(/#$/, '#');
-    if (mode === 'config') return base.replace(/#$/, '(config)#');
-    return base.replace(/#$/, '(config-if)#');
-  }
-  if (vendor === 'juniper') {
-    if (mode === 'config') return base.replace(/>$/, '#');
-    return base;
-  }
-  if (vendor === 'vyos' || vendor === 'ubiquiti') {
-    if (mode === 'config') return base.replace(/:~\$$/, '#');
-    return base;
-  }
-  if (vendor === 'huawei') {
-    if (mode === 'exec') return base;
-    if (mode === 'config') return base.replace(/^</, '[').replace(/>$/, ']');
-    const shown = iface || 'GigabitEthernet0/0/0';
-    return `[${base.replace(/^<|>$/g, '')}-${shown}]`;
-  }
-  return base;
-}
+import { promptFor } from '../utils/prompt';
 
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   openNodes,
@@ -75,7 +41,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   logs,
   onSendCommand,
   isOpen,
-  onClose
+  onClose,
+  hostnameOf
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [isMaximized, setIsMaximized] = useState(false);
@@ -98,6 +65,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const logsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const desktopCapable = useRef(hasFinePointer());
+  /** Timer paste aktif — dibersihkan saat unmount agar tidak menembak setelah panel ditutup. */
+  const pasteTimersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      pasteTimersRef.current.forEach((t) => window.clearTimeout(t));
+      pasteTimersRef.current = [];
+    };
+  }, []);
 
   const activeNode = openNodes.find((n) => n.id === activeNodeId) || openNodes[0];
   const activeLogs = activeNode ? logs[activeNode.id] || [] : [];
@@ -172,17 +148,25 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
    *  update mode CLI & riwayat per-perangkat agar abbreviation & completion
    *  selalu context-aware. */
   const execute = (nodeId: string, raw: string) => {
-    const cmd = raw.replace(/\?$/, '').trim();
+    const cmd = raw.replace(/\?$/, '').trim().slice(0, 4000);
     if (!cmd || !activeNode) return;
     const curMode: CliMode = modes[nodeId] || 'exec';
-    setHistoryByNode((prev) => ({ ...prev, [nodeId]: [...(prev[nodeId] || []), cmd] }));
+    pushHistory(nodeId, cmd);
     setHistoryIdx(-1);
-    const nx = nextCliMode(vendor, curMode, cmd);
+    // Mode dihitung dari perintah yang DIEXPAND engine (bukan input mentah),
+    // sehingga `co t`/`sys`/`conf` juga memindahkan mode dengan benar.
+    const tv = treeVendor(vendor);
+    let effective = cmd;
+    if (tv) {
+      const resolution = resolveAbbreviation(tv, curMode, cmd);
+      if (resolution.kind === 'expanded') effective = resolution.command;
+    }
+    const nx = nextCliMode(vendor, curMode, effective);
     if (nx !== curMode) setModes((prev) => ({ ...prev, [nodeId]: nx }));
     // Pelacakan interface aktif (Cisco/Huawei interface view) untuk prompt.
-    const c = cmd.toLowerCase();
+    const c = effective.toLowerCase();
     const ifaceMatch = c.startsWith('interface ') || c.startsWith('int ')
-      ? cmd.slice(c.indexOf(' ') + 1).trim().split(/\s+/)[0]
+      ? effective.slice(c.indexOf(' ') + 1).trim().split(/\s+/)[0]
       : null;
     if (ifaceMatch) {
       setIfaceByNode((prev) => ({ ...prev, [nodeId]: ifaceMatch }));
@@ -192,6 +176,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     onSendCommand(nodeId, cmd, curMode);
     setInputVal('');
     dismissHints();
+  };
+
+  /** Riwayat per-perangkat: dedup beruntun + cap 100 entri (mencegah tumbuh tanpa batas). */
+  const pushHistory = (nodeId: string, cmd: string) => {
+    setHistoryByNode((prev) => {
+      const list = prev[nodeId] || [];
+      if (list[list.length - 1] === cmd) return prev;
+      return { ...prev, [nodeId]: [...list.slice(-99), cmd] };
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -334,31 +327,40 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     const lines = pasteText
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith('#') && !l.startsWith('!'));
+      .filter((l) => l && !l.startsWith('#') && !l.startsWith('!'))
+      .slice(0, 200);
     if (lines.length === 0) return;
     dismissHints();
-    setHistoryByNode((prev) => ({ ...prev, [nodeId]: [...(prev[nodeId] || []), ...lines] }));
+    lines.forEach((cmd) => pushHistory(nodeId, cmd));
     setShowPasteModal(false);
     // Mode tiap perintah dihitung SEKALIGUS dan memakai mode SEBELUM eksekusi
     // (konsisten dengan execute() per satu perintah) — bukan mode hasil transisi.
     // Menghindari bug lama: 'conf t' ikut dikirim sebagai mode 'config'.
     const modeSeq = sequenceModes(vendor, modes[nodeId] || 'exec', lines);
+    const timers: number[] = [];
     lines.forEach((cmd, i) => {
-      setTimeout(() => {
-        onSendCommand(nodeId, cmd, modeSeq[i]);
-        const next = modeSeq[i + 1] ?? modeSeq[i];
-        setModes((prev) => ({ ...prev, [nodeId]: next }));
-        const cc = cmd.toLowerCase();
-        const im = cc.startsWith('interface ') || cc.startsWith('int ')
-          ? cmd.slice(cc.indexOf(' ') + 1).trim().split(/\s+/)[0]
-          : null;
-        if (im) {
-          setIfaceByNode((prev) => ({ ...prev, [nodeId]: im }));
-        } else if (next === 'exec' && modeSeq[i] !== 'exec') {
-          setIfaceByNode((prev) => ({ ...prev, [nodeId]: '' }));
-        }
-      }, i * 350);
+      timers.push(
+        window.setTimeout(() => {
+          onSendCommand(nodeId, cmd, modeSeq[i]);
+          // Mode setelah baris terakhir = transisi baris terakhir (bukan
+          // mode sebelum-eksekusi) — perbaikan mode akhir paste yang salah.
+          const next = i === lines.length - 1
+            ? sequenceModes(vendor, modeSeq[i], [cmd])[1]
+            : modeSeq[i + 1];
+          setModes((prev) => ({ ...prev, [nodeId]: next }));
+          const cc = cmd.toLowerCase();
+          const im = cc.startsWith('interface ') || cc.startsWith('int ')
+            ? cmd.slice(cc.indexOf(' ') + 1).trim().split(/\s+/)[0]
+            : null;
+          if (im) {
+            setIfaceByNode((prev) => ({ ...prev, [nodeId]: im }));
+          } else if (next === 'exec' && modeSeq[i] !== 'exec') {
+            setIfaceByNode((prev) => ({ ...prev, [nodeId]: '' }));
+          }
+        }, i * 350)
+      );
     });
+    pasteTimersRef.current.push(...timers);
     setPasteText('');
   };
 
@@ -370,7 +372,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   };
 
   const prompt = activeNode
-    ? promptFor(activeNode.vendor, activeNode.name, mode, ifaceByNode[activeNode.id])
+    ? promptFor(
+        activeNode.vendor,
+        activeNode.name,
+        hostnameOf(activeNode.id),
+        activeNode.deviceType,
+        activeNode.model,
+        mode,
+        ifaceByNode[activeNode.id]
+      )
     : vendorInfo?.defaultPrompt || '> ';
 
   return (

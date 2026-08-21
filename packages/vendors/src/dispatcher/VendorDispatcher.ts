@@ -146,7 +146,7 @@ export class VendorDispatcher {
       cmdResult?.type === 'ping' &&
       typeof context.pingSimulator === 'function'
     ) {
-      response = context.pingSimulator(cmdResult.host || '', vendorId);
+      response = context.pingSimulator(cmdResult.host || '', vendorId, cmdResult.size);
     }
     if (
       cmdResult?.type === 'traceroute' &&

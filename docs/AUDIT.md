@@ -322,3 +322,132 @@ H. Mlab validasi + topology warnings · I. safeHtml parser
    (tanpa DR/BDR election) — batas simulasi yang diterima.
 4. Probe audit dihapus setelah hijau (file sementara); regresi permanen
    ada di suite (W3b, V0, section 30).
+
+---
+
+## Audit Ronda 2 — Vendor Hardening (Deliverable A–E)
+
+> Status: **COMPLETE**. Suite penuh **2148 passed, 0 failed**; `tsc --noEmit` ✓; `npm run build` ✓.
+
+### Metode (Deliverable A)
+
+Audit menyasar kejujuran jalur vendor: registry kapabilitas → guard →
+parser/chain → NodeMemory → cliSync → ConfigStore → Observation, dengan
+deliverable:
+A. **H1–H4**: status kapabilitas = satu-satunya sumber kebenaran; guard
+   `isCapabilityBlocked` (not-supported/parser-only) menolak jujur tanpa
+   mutasi; tanpa engine, ping/traceroute/http menjawab jujur.
+B. **H5–H8**: Windows ipconfig dari kondisi link nyata; pool OpenWrt dari IP
+   interface; regex BGP ASN/router-id tidak menelan group; export config
+   tidak mengarang nilai.
+C. **H9–H10**: hostname stateful (CLI → NodeMemory → engine device state,
+   persist lintas syncTopology); prompt CLI dibangun dari identitas device
+   (hostname + deviceType + mode) via modul murni `src/utils/prompt.ts`.
+D. **H11 negative generator**: untuk SETIAP (vendor × cap) berstatus
+   terblokir dari registry — probe command sintaks nyata vendor, assert
+   jawaban jujur + state tidak berubah + tidak ada fake markers.
+E. **Interop matrix**: V3 diperluas — pool DHCP tiap vendor muncul di
+   `getDeviceStats().dhcpPools` (jalur Observation utuh), lease + ping
+   lintas vendor tetap hijau.
+
+### Bugs ditemukan & diperbaiki (ronda ini)
+
+| # | File | Temuan (sebelum) | Perbaikan (sesudah) | Verifikasi |
+|---|------|------------------|---------------------|------------|
+| Q1 | `packages/vendors/src/common/generic.ts` (b141 set_config) | **Partial-apply**: `set interfaces ether1 unit 0 family inet address 192.168.9.1 vrrp-group 1` menerapkan IP dan diam-diam menelan `vrrp-group 1` (state bermutasi, output kosong) | Token di luar grammar `… address <ip/mask>` ditolak jujur (`% Unknown "set" path: '…'`) tanpa mutasi | H11 juniper.vrrp (2 checks) |
+| Q2 | `packages/vendors/src/common/generic.ts` (b173 write_mem/save) | `write memory`/`save` sukses palsu `[OK]` walau registry menyatakan commit NS (snapshot tidak dijamin) | b173 diberi `cap: 'commit'` → guard jujur untuk vendor NS; registry dikoreksi: commit = **S** untuk cisco_ios/huawei/aruba (snapshot startup-config + reload TERBUKTI round-trip di 12f/14a), tetap NS untuk nxos/fortinet/mikrotik/linux/windows (tidak punya alur itu) | 12f, 14a, V0 commit cases baru (3), H11 |
+| Q3 | `packages/vendors/src/huawei/commands.ts` (b86) | `dhcp enable` membuat pool dummy `global` (kosong) yang mencemari daftar pool | `dhcp enable` hanya no-op; pool dibuat oleh `ip pool <nama>` saja | V3 huawei (2 checks) |
+| Q4 | `packages/vendors/src/mikrotik/commands.ts` (b79/b80) | `network` pool = **range start** (`192.168.9.100`), bukan subnet | network diturunkan dari IP interface NYATA saat dhcp-server di-ikat (networkOfMask); tanpa IP interface → kosong (jujur) | V3 mikrotik |
+| Q5 | `packages/vendors/src/fortinet/commands.ts` | `finalizeFortiPool` menebak subnet dari range start + mask default `255.255.255.0` — salah untuk subnet non-/24 | network dari IP interface; mask default dihapus (tanpa IP interface → network kosong, jujur) | V3 fortinet |
+| Q6 | `packages/vendors/src/aruba/adapter.ts` | `write memory` merender string **kosong** | `Configuration updated successfully.` (AOS-CX asli) | H11 + V0 aruba commit |
+
+### Perilaku diverifikasi BENAR (bukan bug)
+
+- H11: 189 pemeriksaan negatif (dari registry) — semua jawaban jujur
+  (`not supported`, `not currently simulated`, `Unknown "set" path`,
+  `command not found`, error vendor asli) tanpa mutasi state.
+- V3: 11 vendor DHCP server — pool muncul di Observation dengan data nyata
+  (network/gateway/range), lease ter-grant, ping gateway sukses.
+- V0: setiap `supported` punya feature case (commit kini punya bukti
+  round-trip snapshot→reload untuk 3 vendor baru).
+- Audit grep: tidak ada fake markers (`Success rate`/`Reply from`/`200 OK`/
+  `packets transmitted`), tidak ada IP hardcoded di output (hanya komentar),
+  tidak ada `catch {}` yang menelan error.
+
+### Hasil pengujian (Deliverable D)
+
+- Suite penuh: **2148 passed, 0 failed** (sebelumnya 2040; +H11 generator,
+  +V3 Observation, +V0 commit cases).
+- `npm run typecheck` ✓ · `npm run build` ✓.
+
+### Keterbatasan tersisa (jujur)
+
+1. Commit NS tetap untuk cisco_nxos/fortinet/mikrotik/linux/windows:
+   tidak ada command save nyata di adapter tersebut → CLI menjawab jujur
+   (unknown/blocked), bukan data palsu.
+2. `network` pool beberapa vendor hanya terisi bila IP interface dikonfigurasi
+   SEBELUM pool di-ikat — urutan konfigurasi terbalik menghasilkan network
+   kosong (jujur, bukan tebakan).
+3. VRRP Junos/EdgeOS: penolakan baris `set` yang memuat token di luar
+   grammar menghasilkan `% Unknown "set" path` generik (belum menyebut
+   nama fitur), tetapi jujur dan tanpa mutasi.
+
+---
+
+## Audit Ronda 3 — VLAN Hardening (16 poin enforcement)
+
+> Status: **COMPLETE**. Suite penuh **2162 passed, 0 failed**; `tsc --noEmit` ✓; `npm run build` ✓.
+
+### Metode (Deliverable A)
+
+Enforcement 802.1Q pada SwitchProcessor (sumber kebenaran = state switch:
+`portVlans` / `trunkPorts` / `trunkAllowedVlans` / `trunkNativeVlans` /
+`vlanTable`) + validasi id VLAN di CLI semua vendor + database VlanTable +
+MAC learning per VLAN:
+
+1. **Trunk ingress allowed-list**: frame (bertag/untagged) hanya diterima bila
+   VLAN-nya terdaftar — tidak bocor ke access port VLAN lain di switch sama.
+2. **Native VLAN TIDAK bypass allowed-list**: native harus terdaftar juga.
+3. **Access port menolak frame BERTAG** (802.1Q nyata).
+4. **`allowed vlan none`**: daftar kosong TETAP dibedakan dari "tanpa
+   konfigurasi" (semua) di seluruh jalur CLI → NodeMemory → ConfigStore → engine.
+5. **Egress tagging** trunk/native (native untagged, non-native tagged) —
+   sudah benar, diverifikasi ulang.
+6. **VLAN ID 1..4094** divalidasi di CLI (cisco/mikrotik/juniper/huawei/
+   openwrt sudah; **fortinet `set vlanid` diperbaiki**) dan VlanTable.
+7. **MAC learning VLAN-aware** (sudah per-VLAN dengan aging) — diverifikasi P13.
+8. **Windows tetap not-supported** untuk vlan — registry NS.
+
+### Bugs ditemukan & diperbaiki (ronda ini)
+
+| # | File | Temuan (sebelum) | Perbaikan (sesudah) | Verifikasi |
+|---|------|------------------|---------------------|------------|
+| R1 | `packages/vendors/src/fortinet/commands.ts` | `set vlanid 0` / `4095` diterima diam-diam | `% Error: VLAN ID must be in range 1..4094.` tanpa mutasi | P18d |
+| R2 | `src/engine/net/devices/SwitchProcessor.ts` | Trunk ingress TIDAK menegakkan allowed-list — frame VLAN terlarang diteruskan ke access port VLAN itu di switch yang sama | Ingress drop `reason:'vlan'` bila VLAN tidak terdaftar | P18a |
+| R3 | `src/engine/net/devices/SwitchProcessor.ts` | Native VLAN selalu boleh keluar trunk walau tidak di allowed-list (bypass) | native harus terdaftar di allowed-list | P16c (dikoreksi) |
+| R4 | `src/engine/net/devices/SwitchProcessor.ts` | Access port MENGABAIKAN tag frame bertag (tag asing di-merge) | Frame bertag di access port DITOLAK | P18c |
+| R5 | `tests/unit/productionEngine.test.ts` P16c | Test lama meng-encode perilaku native-bypass yang melanggar 802.1Q | Dikoreksi: native TIDAK bypass; +P18b `allowed none` diblokir total | suite hijau |
+
+### Perilaku diverifikasi BENAR (bukan bug)
+
+- P18a: trunk allowed mengatur trunk SAJA — access port same-VLAN di switch
+  yang sama tetap komunikasi (tidak over-block).
+- P18b: `allowed vlan none` membawa nol VLAN; daftar kosong ≠ tanpa daftar.
+- P18c: misconfig access-vs-trunk terputus total; perbaikan konfigurasi
+  memulihkan komunikasi (behavior nyata, bukan drop permanen).
+- P18d: id VLAN di luar 1..4094 ditolak jujur di 6 family CLI; setelan valid
+  tetap diterima (regresi mikrotik v10).
+
+### Hasil pengujian (Deliverable D)
+
+- Suite penuh: **2162 passed, 0 failed** (sebelumnya 2149; +P18 engine 12
+  checks + P16c 2 checks).
+- `npm run typecheck` ✓ · `npm run build` ✓.
+
+### Keterbatasan tersisa (jujur)
+
+1. Router meng-echo tag ingress frame (reply memakai vlan frame masuk),
+   bukan menandai ulang berdasar subinterface egress — wajar untuk simulasi,
+   tetapi frame bertag hanya lahir dari trunk egress non-native / subinterface.
+2. VlanTable memvalidasi 1..4094, tetapi `vlan batch` Huawei (multi-range)
+   belum didukung — CLI menjawab jujur (unknown) untuk perintah itu.

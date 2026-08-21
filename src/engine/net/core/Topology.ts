@@ -26,17 +26,22 @@ export interface Neighbor {
   linkId: string;
 }
 
-/** Peta: nodeId → port → peer (nodeId, port, linkId). */
+/** Peta: nodeId → port → daftar peer (nodeId, port, linkId).
+ *  Satu port boleh memiliki BANYAK kabel (segment hub): SEMUA frame yang
+ *  keluar dari port itu direplikasi ke setiap kabel, dan host yang tidak
+ *  ber-MAC cocok menolak frame via l2-filter. */
 export class LinkTable {
-  private map = new Map<string, Map<string, Neighbor>>();
+  private map = new Map<string, Map<string, Neighbor[]>>();
   private links = new Map<string, LinkSpec>();
   private portsOf = new Map<string, Set<string>>();
 
   addLink(link: LinkSpec): void {
     this.links.set(link.id, link);
     const set = (nodeId: string, port: string) => {
-      const m = this.map.get(nodeId) || new Map<string, Neighbor>();
-      m.set(port, { ...link.b, linkId: link.id });
+      const m = this.map.get(nodeId) || new Map<string, Neighbor[]>();
+      const list = m.get(port) || [];
+      list.push({ ...link.b, linkId: link.id });
+      m.set(port, list);
       this.map.set(nodeId, m);
       const ps = this.portsOf.get(nodeId) || new Set<string>();
       ps.add(port);
@@ -44,18 +49,28 @@ export class LinkTable {
     };
     set(link.a.nodeId, link.a.port);
     // sisi kedua memakai ujung b (port b pada node b terhubung ke a)
-    const m = this.map.get(link.b.nodeId) || new Map<string, Neighbor>();
-    m.set(link.b.port, { ...link.a, linkId: link.id });
+    const m = this.map.get(link.b.nodeId) || new Map<string, Neighbor[]>();
+    const list = m.get(link.b.port) || [];
+    list.push({ ...link.a, linkId: link.id });
+    m.set(link.b.port, list);
     this.map.set(link.b.nodeId, m);
     const ps = this.portsOf.get(link.b.nodeId) || new Set<string>();
     ps.add(link.b.port);
     this.portsOf.set(link.b.nodeId, ps);
   }
 
-  neighborOf(nodeId: string, port: string): Neighbor | null {
+  /** Semua peer sebuah port (segment hub: bisa lebih dari satu). */
+  neighborsOf(nodeId: string, port: string): Neighbor[] {
     const m = this.map.get(nodeId);
-    if (!m) return null;
-    return m.get(port) || null;
+    if (!m) return [];
+    return m.get(port) || [];
+  }
+
+  /** Peer pertama sebuah port — kompatibilitas dengan pemakaian lama
+   *  (port point-to-point selalu punya tepat satu peer). */
+  neighborOf(nodeId: string, port: string): Neighbor | null {
+    const all = this.neighborsOf(nodeId, port);
+    return all.length > 0 ? all[0] : null;
   }
 
   linksOf(nodeId: string): LinkSpec[] {
@@ -85,8 +100,8 @@ export class LinkTable {
     const m = this.map.get(nodeId);
     if (!m) return null;
     const n = m.get(port);
-    if (!n) return null;
-    return this.links.get(n.linkId) || null;
+    if (!n || n.length === 0) return null;
+    return this.links.get(n[0].linkId) || null;
   }
 }
 

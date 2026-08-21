@@ -28,6 +28,8 @@ export const DROP_CODE = {
   'no-route': 'NO_ROUTE',
   'no-route-v6': 'NO_ROUTE',
   'route-discard': 'NO_ROUTE',
+  'mtu-exceeded': 'MTU_EXCEEDED',
+  'fragment-buffered': 'CONSUMED',
   'nat-port-exhausted': 'NAT_FAILURE',
   'qos': 'QOS_DROP',
   'refused': 'TCP_REFUSED',

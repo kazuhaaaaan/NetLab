@@ -871,10 +871,18 @@ export function runProductionEngineTests(): Report {
     check('P16b native mismatch → komunikasi terputus', !sim.simulatePing('pc1', '10.0.99.3').success);
     sim.setTrunkNative('swY', { ether4: 99 });
 
-    // 16c. Allowed-list tanpa native: native tetap boleh (native ≠ tagged).
+    // 16c. Hardening: native VLAN TIDAK bypass allowed-list — dengan
+    //     allowed [10], native 99 DITOLAK; native boleh lewat hanya bila
+    //     terdaftar di allowed-list. (Test dikoreksi: versi lama meng-encode
+    //     perilaku bypass yang melanggar 802.1Q enforcement.)
     sim.setTrunkAllowed('swX', { ether4: [10] });
     sim.setTrunkAllowed('swY', { ether4: [10] });
-    check('P16c allowed [10] + native 99 → native tetap lewat', sim.simulatePing('pc1', '10.0.99.3').success);
+    check('P16c allowed [10] + native 99 → native TIDAK bypass allowed', !sim.simulatePing('pc1', '10.0.99.3').success);
+    sim.setTrunkAllowed('swX', { ether4: [10, 99] });
+    sim.setTrunkAllowed('swY', { ether4: [10, 99] });
+    check('P16c allowed [10,99] → native 99 lewat', sim.simulatePing('pc1', '10.0.99.3').success);
+    sim.setTrunkAllowed('swX', { ether4: [10] });
+    sim.setTrunkAllowed('swY', { ether4: [10] });
 
     // 16d. Tagged VLAN 10 harus lewat bila allowed; diblokir bila tidak.
     sim.setPortVlans('swX', { ether1: 10 });
@@ -938,6 +946,93 @@ export function runProductionEngineTests(): Report {
     const statsSw = sim.getDeviceStats('sw1');
     check('P17 stats STP tampil (root info)', !!statsSw?.stp, JSON.stringify(statsSw?.stp));
     check('P17 port diblokir dilaporkan bukan forwarding', blockedPort.state !== 'forwarding', JSON.stringify(blockedPort));
+  }
+
+  console.log('\n== P18. VLAN hardening enforcement (ingress/access/native/none/id-range) ==');
+  {
+    const sim = new NetworkSimulator();
+    const project: LabProjectLike = {
+      nodes: [
+        eNode('r1', 'R1', 'router', 3, 'c0', 'cisco_ios'),
+        eNode('sw1', 'SW1', 'switch', 5, 'c1', 'cisco_ios'),
+        eNode('sw2', 'SW2', 'switch', 2, 'c2', 'cisco_ios'),
+        eNode('pc1', 'PC1', 'pc', 1, 'c3'),
+        eNode('pc2', 'PC2', 'pc', 1, 'c4'),
+        eNode('pc4', 'PC4', 'pc', 1, 'c5'),
+      ],
+      edges: [
+        eEdge('e1', 'r1', 'port1', 'sw1', 'port4'),
+        eEdge('e2', 'pc1', 'port1', 'sw1', 'port1'),
+        eEdge('e3', 'pc2', 'port1', 'sw1', 'port2'),
+        eEdge('e4', 'sw1', 'port5', 'sw2', 'port2'),
+        eEdge('e5', 'pc4', 'port1', 'sw2', 'port1'),
+      ],
+    };
+    sim.syncTopology(project);
+    sim.setPortVlans('sw1', { ether1: 20, ether2: 20, ether3: 10 });
+    sim.setPortVlans('sw2', { ether1: 20 });
+    sim.setTrunkPorts('sw1', ['ether4', 'ether5']);
+    sim.setTrunkPorts('sw2', ['ether2']);
+    sim.setTrunkAllowed('sw2', { ether2: [20] });
+    sim.setSubinterfaces('r1', [{ name: 'ether1.20', parentPort: 'ether1', vlanId: 20 }]);
+    sim.applyNodeConfig('r1', { 'ether1.20': '10.0.20.1/24' }, []);
+    sim.applyNodeConfig('pc1', { ether1: '10.0.20.2/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.20.1' }]);
+    sim.applyNodeConfig('pc2', { ether1: '10.0.20.3/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.20.1' }]);
+    sim.applyNodeConfig('pc4', { ether1: '10.0.20.4/24' }, [{ dst: '0.0.0.0/0', gateway: '10.0.20.1' }]);
+
+    // P18a. Trunk ingress allowed-list: tagged VLAN 20 diblokir DI INGRESS
+    //       bila tidak ada di allowed-list — tidak bocor ke access port VLAN 20
+    //       yang ada di switch yang sama (titik bocor lama).
+    sim.setTrunkAllowed('sw1', { ether4: [10], ether5: [20] });
+    check('P18a allowed [10]: VLAN 20 dari trunk TIDAK bocor ke access 20', !sim.simulatePing('pc1', '10.0.20.1').success);
+    check('P18a same-switch access 20 tetap jalan (trunk hanya mengatur trunk)', sim.simulatePing('pc1', '10.0.20.3').success);
+    sim.setTrunkAllowed('sw1', { ether4: [20], ether5: [20] });
+    check('P18a allowed [20]: VLAN 20 dari trunk diterima', sim.simulatePing('pc1', '10.0.20.1').success);
+
+    // P18b. `allowed vlan none`: trunk membawa NOL VLAN.
+    sim.setTrunkAllowed('sw1', { ether4: [], ether5: [20] });
+    check('P18b allowed none: VLAN 20 diblokir total', !sim.simulatePing('pc1', '10.0.20.1').success);
+    sim.setTrunkAllowed('sw1', { ether4: [20], ether5: [20] });
+
+    // P18c. Access port menolak frame BERTAG (802.1Q): port sw2 yang mengikat
+    //       trunk sw1 dikonfigurasi sebagai ACCESS → frame bertag dari sw1
+    //       DITOLAK (pc1 ↔ pc4 terputus); setelah port itu dijadikan trunk
+    //       yang benar, komunikasi pulih.
+    sim.setPortVlans('sw2', { ether1: 20, ether2: 20 });
+    sim.setTrunkPorts('sw2', []);
+    check('P18c frame bertag masuk access port → ditolak (terputus)', !sim.simulatePing('pc1', '10.0.20.4').success);
+    sim.setPortVlans('sw2', { ether1: 20 });
+    sim.setTrunkPorts('sw2', ['ether2']);
+    sim.setTrunkAllowed('sw2', { ether2: [20] });
+    check('P18c port dijadikan trunk benar → komunikasi pulih', sim.simulatePing('pc1', '10.0.20.4').success);
+  }
+
+  // P18d. VLAN ID range 1..4094 diterapkan di CLI semua vendor (tidak ada
+  //       penerimaan diam-diam id 0 / 4095 / >4095, tanpa mutasi state).
+  {
+    const dis = new VendorDispatcher();
+    const ctx = { nodeId: 'n1', name: 'N1', ports: [{ id: 'ether1', name: 'ether1', status: 'up' }], pingSimulator: undefined };
+    const badCmds: Record<string, string[]> = {
+      cisco_ios: ['vlan 0', 'vlan 4095', 'vlan 5000', 'switchport trunk allowed vlan 0', 'switchport trunk native vlan 4096'],
+      mikrotik: ['/interface vlan add name=v0 vlan-id=0 interface=ether1', '/interface vlan add name=v4095 vlan-id=4095 interface=ether1'],
+      juniper: ['set vlans V0 vlan-id 0', 'set vlans V4095 vlan-id 4095'],
+      huawei: ['vlan 0', 'vlan 4095'],
+      fortinet: ['config system interface', 'edit ether1', 'set vlanid 0', 'end', 'config system interface', 'edit ether1', 'set vlanid 4095', 'end'],
+      openwrt: ['uci set network.vlan0.vlan=0', 'uci set network.vlan4095.vlan=4095'],
+    };
+    for (const [vid, cmds] of Object.entries(badCmds)) {
+      const ctxV = { nodeId: vid, name: vid, ports: [{ id: 'ether1', name: 'ether1', status: 'up' }], pingSimulator: undefined };
+      const m = dis.getNodeMemory(vid);
+      const before = JSON.stringify(m);
+      const outs: string[] = [];
+      for (const c of cmds) outs.push(String(dis.dispatch(vid, c, ctxV)));
+      check(`P18d ${vid} id VLAN di luar 1..4094 ditolak`, /error|invalid|failure/i.test(outs.join(' ')) || JSON.stringify(m) === before, JSON.stringify(m).slice(0, 160));
+    }
+    // mikrotik/juniper/openwrt: pastikan setelan valid masih jalan (regresi).
+    const m2 = dis.getNodeMemory('mikrotik');
+    const before2 = JSON.stringify(m2);
+    dis.dispatch('mikrotik', '/interface vlan add name=v10 vlan-id=10 interface=ether1', { nodeId: 'mikrotik', name: 'mikrotik', ports: [{ id: 'ether1', name: 'ether1', status: 'up' }], pingSimulator: undefined });
+    check('P18d mikrotik id valid (10) diterima', JSON.stringify(m2) !== before2 && (m2.vlans || []).some((v: any) => String(v.id) === '10'), JSON.stringify(m2.vlans));
   }
 
   console.log(`PRODUCTION ENGINE: ${rep.passed} passed, ${rep.failed} failed`);

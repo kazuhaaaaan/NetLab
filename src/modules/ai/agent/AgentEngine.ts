@@ -258,15 +258,15 @@ export class AgentEngine {
     }
 
     // pola: hapus device X
-    m = s.match(/hapus\s+(device\s+)?(\S+)/i);
+    m = s.match(/hapus\s+(?:device\s+)?(?:router|switch|firewall|pc|server|wireless|host)\s+(\S+)/i) ?? s.match(/hapus\s+(?:device\s+)?(\S+)/i);
     if (m && !/ip|route|vlan|kabel/.test(s.toLowerCase())) {
       actions.push({
         id: uid('act-del'),
         type: 'delete_device',
-        target: m[2],
-        params: { deviceId: m[2] },
-        reason: `hapus perangkat ${m[2]}`,
-        expectedEffect: `${m[2]} tidak ada lagi di canvas`,
+        target: m[1],
+        params: { deviceId: m[1] },
+        reason: `hapus perangkat ${m[1]}`,
+        expectedEffect: `${m[1]} tidak ada lagi di canvas`,
         risk: 'medium',
         validation: 'device ada',
       });
@@ -322,68 +322,94 @@ export class AgentEngine {
     const target = action.target;
     if (!target) return null;
 
-    if (expected.includes('ip') || expected.includes('address')) {
-      // verifikasi rute/ARP pasang IP — cek interface
-      return this.verification.verifyInterface({ source: target, iface: String(action.params['interface'] ?? 'ether1'), actionId: action.id });
+    // Resolusi nama → id engine: target aksi berupa NAMA device (mis. 'R1'),
+    // sedangkan verification.getDeviceStats dkk. membaca by-ID.
+    const dev = this.runtime.sim.getDevice(target) ?? this.runtime.sim.getDeviceByName(target);
+    const source = dev?.id ?? target;
+
+    // CLI setup → verifikasi LEMAH sesuai desain (device ada; command sudah
+    // lewat jalur vendor). Verifikasi kuat ada di grading lab — expectedEffect
+    // execute_cli mengutip isi command ("/ip address add … interface=ether2")
+    // sehingga pencocokan keyword memicu verifyInterface dengan iface tebakan
+    // ('ether1') yang tidak mencerminkan command → rollback palsu.
+    if (action.type === 'execute_cli') {
+      return this.verification.verifyDeviceExists(source, action.id);
     }
-    if (expected.includes('rute') || expected.includes('route')) {
-      return this.verification.verifyRoute({ source: target, dst: String(action.params['dst'] ?? '0.0.0.0/0'), actionId: action.id });
+
+    // Word-boundary match, BUKAN substring includes(): 'route' adalah substring
+    // dari 'router' — expectedEffect create_device "… dengan type router"
+    // memicu verifikasi rute yang pasti gagal (route-not-found) → rollback
+    // seluruh lab padahal aksi sukses (bug audit 19 test S4.x/S12.1).
+    const has = (kw: string): boolean => new RegExp(`\\b${kw}\\b`).test(expected);
+
+    if (has('ip') || has('address')) {
+      // verifikasi rute/ARP pasang IP — cek interface + IP yang diharapkan
+      const addr = String(action.params['address'] ?? action.params['ip'] ?? '');
+      return this.verification.verifyInterface({
+        source,
+        iface: String(action.params['interface'] ?? 'ether1'),
+        ip: addr || undefined,
+        actionId: action.id,
+      });
     }
-    if (expected.includes('adjacency') || expected.includes('ospf')) {
-      return this.verification.verifyOspf({ source: target, actionId: action.id });
+    if (has('rute') || has('route')) {
+      return this.verification.verifyRoute({ source, dst: String(action.params['dst'] ?? '0.0.0.0/0'), actionId: action.id });
     }
-    if (expected.includes('bgp')) {
-      return this.verification.verifyBgp({ source: target, actionId: action.id });
+    if (has('adjacency') || has('ospf')) {
+      return this.verification.verifyOspf({ source, actionId: action.id });
     }
-    if (expected.includes('eigrp')) {
-      return this.verification.verifyEigrp({ source: target, actionId: action.id });
+    if (has('bgp')) {
+      return this.verification.verifyBgp({ source, actionId: action.id });
     }
-    if (expected.includes('vrrp') || expected.includes('fhrp') || expected.includes('master')) {
-      const info = this.runtime.sim.getFhrpInfo(target) ?? [];
+    if (has('eigrp')) {
+      return this.verification.verifyEigrp({ source, actionId: action.id });
+    }
+    if (has('vrrp') || has('fhrp') || has('master')) {
+      const info = this.runtime.sim.getFhrpInfo(source) ?? [];
       return this.verification.recordFrom({
         success: info.some((s) => s.isMaster),
         testType: 'fhrp',
-        source: this.runtime.sim.getDevice(target)?.name ?? target,
+        source: dev?.name ?? target,
         reason: info.some((s) => s.isMaster) ? undefined : 'not-master',
         evidence: info.map((s) => `group ${s.vip} priority=${s.priority} ${s.isMaster ? 'MASTER' : 'backup'}`),
         actionId: action.id,
       });
     }
-    if (expected.includes('ipv6') || expected.includes('v6')) {
-      const info = this.runtime.sim.getIpv6Info(target);
+    if (has('ipv6') || has('v6')) {
+      const info = this.runtime.sim.getIpv6Info(source);
       return this.verification.recordFrom({
         success: !!info && info.addresses.length > 0,
         testType: 'ndp',
-        source: this.runtime.sim.getDevice(target)?.name ?? target,
+        source: dev?.name ?? target,
         reason: info && info.addresses.length > 0 ? undefined : 'no-ipv6-address',
         evidence: info ? info.addresses.map((a) => `${a.address}/${a.prefix}@${a.iface}`) : [],
         actionId: action.id,
       });
     }
-    if (expected.includes('vlan')) {
-      return this.verification.verifyVlan({ source: target, actionId: action.id });
+    if (has('vlan')) {
+      return this.verification.verifyVlan({ source, actionId: action.id });
     }
-    if (expected.includes('dhcp') || expected.includes('lease')) {
-      return this.verification.verifyDhcp({ source: target, actionId: action.id });
+    if (has('dhcp') || has('lease')) {
+      return this.verification.verifyDhcp({ source, actionId: action.id });
     }
-    if (expected.includes('nat')) {
-      return this.verification.verifyNat({ source: target, actionId: action.id });
+    if (has('nat')) {
+      return this.verification.verifyNat({ source, actionId: action.id });
     }
-    if (expected.includes('kabel') || expected.includes('terhubung')) {
+    if (has('kabel') || has('terhubung')) {
       const link = expected.match(/kabel\s+(\S+)\s*↔\s*(\S+)/);
       if (link) return this.verification.verifyLink(link[1], link[2], action.id, 'link exists');
       return null;
     }
-    if (expected.includes('canvas') || expected.includes('tersedia')) {
-      return this.verification.verifyDeviceExists(target, action.id);
+    if (has('canvas') || has('tersedia')) {
+      return this.verification.verifyDeviceExists(source, action.id);
     }
-    if (expected.includes('firewall')) {
-      return this.verification.verifyFirewall({ source: target, actionId: action.id });
+    if (has('firewall')) {
+      return this.verification.verifyFirewall({ source, actionId: action.id });
     }
-    if (expected.includes('wireless')) {
-      return this.verification.verifyWireless({ source: target, actionId: action.id });
+    if (has('wireless')) {
+      return this.verification.verifyWireless({ source, actionId: action.id });
     }
-    if (expected.includes('konfigurasi') || expected.includes('terpasang')) {
+    if (has('konfigurasi') || has('terpasang')) {
       // CLI setup: verifikasi lemah — device ada & command sudah lewat jalur vendor.
       // Verifikasi kuat ada di grading lab (state nyata engine).
       return this.verification.verifyDeviceExists(target, action.id);
@@ -401,18 +427,19 @@ export class AgentEngine {
       return { ok: false, planId: plan.id, goal: plan.goal, mode: plan.mode, results, verifications, rolledBack: false, message: 'Plan kosong.', verifiedCount: 0, failedCount: 0 };
     }
 
-    // permission gate di tingkat plan
+    // permission gate di tingkat plan — mode plan, bukan mode engine saat ini
+    // (plan dibuat dengan mode tertentu dan dieksekusi sesuai mode itu).
     const mutating = plan.actions.some((a) => this.toolMap.get(a.type)?.mutating === true);
-    if (mutating && this.mode !== 'execute') {
+    if (mutating && plan.mode !== 'execute') {
       return {
         ok: false,
         planId: plan.id,
         goal: plan.goal,
         mode: plan.mode,
-        results: plan.actions.map((a) => ({ actionId: a.id, type: a.type, ok: false, message: `Plan berisi mutasi; mode "${this.mode}" menolak.`, error: 'permission-denied' })),
+        results: plan.actions.map((a) => ({ actionId: a.id, type: a.type, ok: false, message: `Plan berisi mutasi; mode "${plan.mode}" menolak.`, error: 'permission-denied' })),
         verifications,
         rolledBack: false,
-        message: `Plan ditolak: mode "${this.mode}" tidak mengizinkan mutasi.`,
+        message: `Plan ditolak: mode "${plan.mode}" tidak mengizinkan mutasi.`,
         verifiedCount: 0,
         failedCount: plan.actions.length,
       };
@@ -424,7 +451,16 @@ export class AgentEngine {
       const res = this.runAction(action);
       results.push(res);
 
-      if (!res.ok) {
+      // verifikasi efek yang diharapkan (tidak wajib — beberapa aksi tidak punya verifikasi)
+      const vr = this.verifyAction(action);
+      if (vr) {
+        verifications.push(vr);
+        results[results.length - 1].verification = vr;
+        results[results.length - 1].verificationFailed = !vr.success;
+      }
+
+      const actionFailed = !res.ok || (vr !== null && !vr.success);
+      if (actionFailed) {
         const rolledBack = tx.rollback();
         return {
           ok: false,
@@ -434,24 +470,17 @@ export class AgentEngine {
           results,
           verifications,
           rolledBack,
-          message: `Gagal di aksi "${action.type}" (${res.message}). ${rolledBack ? 'Seluruh perubahan di-rollback.' : 'Rollback tidak berhasil!'}`,
+          message: `Gagal di aksi "${action.type}" (${res.message}${vr && !vr.success ? `; verifikasi: ${vr.reason ?? 'effect-mismatch'}` : ''}). ${rolledBack ? 'Seluruh perubahan di-rollback.' : 'Rollback tidak berhasil!'}`,
           verifiedCount: 0,
-          failedCount: results.filter((r) => !r.ok).length,
+          failedCount: results.filter((r) => !r.ok || r.verificationFailed).length,
         };
-      }
-
-      // verifikasi efek yang diharapkan (tidak wajib — beberapa aksi tidak punya verifikasi)
-      const vr = this.verifyAction(action);
-      if (vr) {
-        verifications.push(vr);
-        results[results.length - 1].verification = vr;
       }
     }
 
     // transaksi sukses → commit
     tx.commit();
 
-    const failed = results.filter((r) => !r.ok).length;
+    const failed = results.filter((r) => !r.ok || r.verificationFailed).length;
     const verifiedCount = verifications.filter((v) => v.success).length;
     return {
       ok: failed === 0,

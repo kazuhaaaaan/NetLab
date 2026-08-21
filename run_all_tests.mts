@@ -27,6 +27,7 @@ import { runLab, findScenarios, formatLabResult } from './src/engine/lab';
 import { LAB_SCENARIOS } from './src/engine/lab/scenarios';
 import { buildNodeExports, validateConfigExport, portLinksOfNode } from './src/utils/configExport';
 import { runVendorInteropTests } from './tests/unit/vendorInterop.test';
+import { runVendorHardeningTests } from './tests/unit/vendorHardening.test';
 import { runCliFacadeTest } from './tests/unit/cliFacade.test';
 import { runCommandTreeTests } from './tests/unit/commandTree.test';
 import { runPortInspectorTests } from './tests/unit/portInspector.test';
@@ -36,6 +37,8 @@ import { runProtocolFidelityTests } from './tests/unit/protocolFidelity.test';
 import { runAiAgentTests } from './tests/unit/aiAgent.test';
 import { runWindowsClientTests } from './tests/unit/windowsClient.test';
 import { runWindowsMasterFixTests } from './tests/unit/windowsMasterFix.test';
+import { runDataPlaneUpgradeTests } from './tests/unit/dataPlaneUpgrade.test';
+import { runServicesUpgradeTests } from './tests/unit/servicesUpgrade.test';
 import { dropCodeOf } from './src/engine/net/core/dropReasons';
 import { NatTranslator } from './src/engine/net/layer4/Nat';
 import type { Packet } from './src/engine/net/core/types';
@@ -2735,6 +2738,12 @@ passed += vrep.passed;
 failed += vrep.failed;
 fails.push(...vrep.fails);
 
+// ── 22b. Vendor hardening: no-fake-success & enforcement registry ──
+const hrep = runVendorHardeningTests();
+passed += hrep.passed;
+failed += hrep.failed;
+fails.push(...hrep.fails);
+
 // ── 23. Facade engine: lexer → parser → adapter → state → executor → resolver.
 //     Lapisan klasifikasi murni di atas engine nyata (tanpa mengubah perilaku).
 const frep = runCliFacadeTest();
@@ -2780,6 +2789,20 @@ const pfrep = runProtocolFidelityTests();
 passed += pfrep.passed;
 failed += pfrep.failed;
 fails.push(...pfrep.fails);
+
+// ── 34. Data plane upgrade (P2): ping size, MTU/fragmentasi IPv4, frag-needed, counters ──
+console.log('\n== 34. Data plane upgrade (ping size, MTU/fragmentasi, counters) ==');
+const dpup = runDataPlaneUpgradeTests();
+passed += dpup.passed;
+failed += dpup.failed;
+fails.push(...dpup.fails);
+
+// ── 35. Services upgrade (P3): DHCP reservation + sinkronisasi vendor ──
+console.log('\n== 35. Services upgrade (DHCP reservation) ==');
+const svcup = runServicesUpgradeTests();
+passed += svcup.passed;
+failed += svcup.failed;
+fails.push(...svcup.fails);
 
 // ── 32. AI Network Agent + Shared Verification Engine (Prompt 2 & 3) ────
 console.log('\n== 32. AI Network Agent & Shared Verification Engine ==');

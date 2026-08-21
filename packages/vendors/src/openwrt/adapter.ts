@@ -102,8 +102,8 @@ export class OpenwrtVendorAdapter implements _IV {
       return `Mar  7 00:00:01 OpenWrt kernel: [    0.000000] Linux version 5.15.137\nMar  7 00:00:02 OpenWrt netifd: lo: set_interface_up\nMar  7 00:00:03 OpenWrt netifd: br-lan: set_interface_up`;
     }
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '8.8.8.8';
-      return `PING ${String(host)} (${String(host)}): 56 data bytes\n64 bytes from ${String(host)}: seq=0 ttl=116 time=2.412 ms\n64 bytes from ${String(host)}: seq=1 ttl=116 time=1.891 ms\n\n--- ${String(host)} ping statistics ---\n2 packets transmitted, 2 packets received, 0% packet loss`;
+      const host = cmdResult.host || '';
+      return `PING ${String(host)} (${String(host)}): simulation engine not available in this context. Use the NetLab ping panel.`;
     }
     if (cmdResult.type === 'help') {
       return ['BusyBox shell commands:',

@@ -155,6 +155,9 @@ function mangleRulesOf(rules: NodeMemory['mangleRules'] | undefined): MangleRule
 export function syncNodeToEngine(sim: SimulationEngine, dis: VendorDispatcher, nodeId: string): void {
   const mem = dis.getNodeMemory(nodeId);
 
+  // Hostname stateful: konfigurasi CLI (hostname R1 / /system identity set /
+  // set hostname …) menjadi state perangkat — prompt & identitas mengikutinya.
+  sim.setHostname(nodeId, mem.hostname || undefined);
   sim.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
   sim.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
   sim.applyNodeConfig(nodeId, mem.configuredIps, mem.routes.filter(isRouteEntry));
@@ -199,11 +202,17 @@ export function syncDhcpPools(sim: SimulationEngine, dis: VendorDispatcher): voi
   for (const [nodeId, m] of Object.entries(dis.serializeMemory())) {
     if (m && Array.isArray(m.dhcpPools) && m.dhcpPools.length > 0) {
       const excl = Array.isArray(m.dhcpExcluded) ? m.dhcpExcluded : [];
-      poolsByNode[nodeId] = excl.length > 0
+      const resv = Array.isArray(m.dhcpReservations) ? m.dhcpReservations : [];
+      poolsByNode[nodeId] = excl.length > 0 || resv.length > 0
         ? m.dhcpPools.map((p) => {
             const rec = { ...p } as Record<string, unknown>;
             const prev = Array.isArray(rec.excluded) ? (rec.excluded as string[]) : [];
-            return { ...p, excluded: [...new Set([...prev, ...excl])] };
+            const prevResv = Array.isArray(rec.reservations) ? (rec.reservations as { mac: string; ip: string }[]) : [];
+            return {
+              ...p,
+              excluded: [...new Set([...prev, ...excl])],
+              reservations: [...prevResv, ...resv],
+            };
           })
         : m.dhcpPools;
     }

@@ -96,7 +96,7 @@ export class RunManager {
     // Penghitung ingress per interface (SNMP ifInOctets/ifInUcastPkts).
     const inIface = device.getIfaceByPortId(evt.port || '') || device.getIfaceByName(evt.port || '');
     if (inIface) {
-      const c = device.ifaceCounters.get(inIface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0 };
+      const c = device.ifaceCounters.get(inIface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0, inErrors: 0, outErrors: 0 };
       c.inPkts += 1;
       c.inOctets += Math.max(pkt.size, 64);
       device.ifaceCounters.set(inIface.name, c);

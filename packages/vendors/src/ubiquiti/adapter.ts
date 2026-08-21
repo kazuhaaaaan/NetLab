@@ -45,8 +45,8 @@ export class UbiquitiVendorAdapter implements _IV {
     if (cmdResult.type === 'configure') return '[edit]\nubnt@EdgeRouter#';
     if (cmdResult.type === 'commit') return 'Commit complete.';
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '192.168.1.1';
-      return `PING ${String(host)} (${String(host)}) 56(84) bytes of data.\n64 bytes from ${String(host)}: icmp_seq=1 ttl=64 time=0.412 ms\n64 bytes from ${String(host)}: icmp_seq=2 ttl=64 time=0.389 ms\n\n--- ${String(host)} ping statistics ---\n2 packets transmitted, 2 received, 0% packet loss`;
+      const host = cmdResult.host || '';
+      return `PING ${String(host)} (${String(host)}): simulation engine not available in this context. Use the NetLab ping panel.`;
     }
     if (cmdResult.type === 'help') {
       return ['Operational commands:',

@@ -122,14 +122,9 @@ export class HuaweiVendorAdapter implements _IV {
     if (cmdResult.type === 'system_view') return '[Huawei]';
     if (cmdResult.type === 'save') return 'The current configuration will be written to the device.\nAre you sure to continue?[Y/N]y\nInfo: Please input the file name ( *.cfg, *.zip ) [vrpcfg.zip]:\nNow saving the current configuration to the slot 0.\nSave the configuration successfully.';
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '192.168.1.1';
-      return [`PING ${String(host)}: 56  data bytes, press CTRL_C to break`,
-        `  Reply from ${String(host)}: bytes=56 Sequence=1 ttl=254 time=1 ms`,
-        `  Reply from ${String(host)}: bytes=56 Sequence=2 ttl=254 time=1 ms`,
-        ``,
-        `--- ${String(host)} ping statistics ---`,
-        `  2 packet(s) transmitted, 2 packet(s) received, 0.00% packet loss`,
-        `  round-trip min/avg/max = 1/1/1 ms`,
+      const host = cmdResult.host || '';
+      return [`PING ${String(host)}: 56 data bytes, press CTRL_C to break`,
+        `simulation engine not available in this context. Use the NetLab ping panel.`,
       ].join('\n');
     }
     if (cmdResult.type === 'help') {

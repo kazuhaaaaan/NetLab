@@ -284,7 +284,12 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
             if (iface === 'ethernet') iface = path[intIdx + 2]; // vyos/edgeos: set interfaces ethernet eth0 address ...
             const addrIdx = path.lastIndexOf('address');
             const ip = addrIdx >= 0 ? path[addrIdx + 1] : undefined;
-            if (ip) {
+            const extra = ip && path.length > addrIdx + 2 ? path.slice(addrIdx + 2) : undefined;
+            if (extra) {
+              // Token di luar grammar "… address <ip/mask>" (mis. vrrp-group 1):
+              // JANGAN diterapkan sebagian — tolak jujur tanpa mengubah state.
+              cmdResult = { raw: `% Unknown "set" path: '${extra.join(' ')}'` };
+            } else if (ip) {
               mem.configuredIps[resolveIfaceName(context?.ports, iface)] = ip;
               cmdResult = { raw: '' };
             } else {
@@ -325,6 +330,7 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
     name: 'b142',
     order: 142,
     vendors: 'all',
+    cap: 'ipv4',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (normalized.action === 'add_ip'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -382,6 +388,7 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
     name: 'b143',
     order: 143,
     vendors: 'all',
+    cap: 'staticRoute',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (normalized.action === 'add_route'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -404,6 +411,7 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
     name: 'b144',
     order: 144,
     vendors: 'all',
+    cap: 'bgp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (normalized.action === 'bgp_instance_add' || normalized.action === 'bgp_router'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -434,6 +442,7 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
     name: 'b145',
     order: 145,
     vendors: 'all',
+    cap: 'bgp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (normalized.action === 'bgp_peer_add'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -455,6 +464,7 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
     name: 'b146',
     order: 146,
     vendors: 'all',
+    cap: 'bgp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (normalized.action === 'bgp_neighbor'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -707,7 +717,11 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
 
           const ast = (typeof payload?.ast === 'object' && payload.ast !== null) ? (payload.ast as ASTNode) : undefined;
           const host = String(payload.host || ast?.subCommands?.[1] || ast?.subCommands?.[0] || '');
-          cmdResult = { type: 'ping', host, target: host };
+          // Ukuran paket: ping -s <n> (linux/huawei), ping <h> size <n> (cisco/juniper),
+          // ping <h> bytes <n>, /ping address=x size=<n> (mikrotik).
+          const sizeM = rawInput.match(/(?:-s\s+|size\s*=\s*|\ssize\s+|\sbytes\s+)(\d+)/i);
+          const size = sizeM ? Math.min(65500, Math.max(1, parseInt(sizeM[1], 10))) : undefined;
+          cmdResult = { type: 'ping', host, target: host, ...(size !== undefined ? { size } : {}) };
         
     return cmdResult;
   },
@@ -769,6 +783,7 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
     name: 'b171',
     order: 171,
     vendors: 'all',
+    cap: 'commit',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (normalized.action === 'commit'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -796,6 +811,7 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
     name: 'b173',
     order: 173,
     vendors: 'all',
+    cap: 'commit',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (normalized.action === 'write_mem' || normalized.action === 'save'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;

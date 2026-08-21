@@ -111,7 +111,7 @@ export class CiscoNxosVendorAdapter implements _IV {
       return lines.join('\n') || '-- no interfaces --';
     }
     if (cmdResult.type === 'ping') {
-      return `PING ${String(cmdResult.host)}: 56 data bytes\n64 bytes from ${String(cmdResult.host)}: icmp_seq=0 time=0.931 ms\n64 bytes from ${String(cmdResult.host)}: icmp_seq=1 time=0.712 ms\n--- ${String(cmdResult.host)} ping statistics ---\n2 packets transmitted, 2 packets received, 0.00% packet loss`;
+      return `PING ${String(cmdResult.host)}: simulation engine not available in this context. Use the NetLab ping panel.`;
     }
     if (cmdResult.type === 'help') return 'show, configure terminal, ping, copy run start';
     return String(cmdResult.raw ?? formatExtended(cmdResult) ?? '');

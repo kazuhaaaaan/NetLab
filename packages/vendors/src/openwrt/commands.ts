@@ -2,7 +2,7 @@
 import type { CommandResult, ChainEntry, ChainEnv } from '../common/types';
 import { registerEntries } from '../common/chain';
 
-import { resolveIfaceName, maskToBits, cidrOf, networkOfMask } from '../common/ip';
+import { resolveIfaceName, maskToBits, cidrOf, networkOfMask, bitsToMask } from '../common/ip';
 import type { NodeMemory, VendorContext } from '../common/types';
 
 export const openwrtEntries: ChainEntry[] = [
@@ -170,7 +170,25 @@ export function commitUci(mem: NodeMemory, context: VendorContext): void {
       else if (opt === 'enable' && value.toLowerCase() === '0') pool.disabled = true;
       continue;
     }
-    if (key.match(/^dhcp\.(\S+)$/i)) continue;
+    if (key.match(/^dhcp\.([^.\s]+)$/i)) {
+      // dnsmasq host: uci set dhcp.host1=host → blok reservasi statis
+      // (hanya SECTION murni; dhcp.host1.mac/.ip ditangani branch berikut).
+      if (value.toLowerCase() === 'host') {
+        mem.uciHosts = mem.uciHosts || {};
+        mem.uciHosts[key.match(/^dhcp\.([^.\s]+)$/i)?.[1] || ''] = mem.uciHosts[key.match(/^dhcp\.([^.\s]+)$/i)?.[1] || ''] || {};
+        mem.uciHosts[key.match(/^dhcp\.([^.\s]+)$/i)?.[1] || ''].type = 'host';
+      }
+      continue;
+    }
+    // dnsmasq host options: uci set dhcp.host1.mac=... / dhcp.host1.ip=...
+    const hostOptMatch = key.match(/^dhcp\.(\S+?)\.(mac|ip)$/i);
+    if (hostOptMatch) {
+      mem.uciHosts = mem.uciHosts || {};
+      const section = hostOptMatch[1];
+      mem.uciHosts[section] = mem.uciHosts[section] || {};
+      mem.uciHosts[section][hostOptMatch[2].toLowerCase()] = value;
+      continue;
+    }
     // static route: uci set network.routeN.target / .gateway / .netmask
     const routeMatch = key.match(/^network\.(route\d+)\.(target|gateway|netmask)$/i);
     if (routeMatch) {
@@ -206,6 +224,15 @@ export function commitUci(mem: NodeMemory, context: VendorContext): void {
   for (const r of mem.routes) {
     if (r.rawMask && !String(r.dst || '').includes('/')) r.dst = `${String(r.dst)}/${String(maskToBits(String(r.rawMask)))}`;
     delete r.rawMask;
+  }
+  // host dnsmasq (mac+ip) → reservasi DHCP statis
+  if (mem.uciHosts) {
+    mem.dhcpReservations = mem.dhcpReservations || [];
+    for (const section of Object.values(mem.uciHosts)) {
+      if (section.type === 'host' && section.mac && section.ip) {
+        mem.dhcpReservations.push({ mac: section.mac, ip: section.ip });
+      }
+    }
   }
   // flush redirect → dstnat (port-forward).
   // Catatan: dest_ip adalah IP INTERNAL tujuan; paket datang ke IP publik
@@ -252,18 +279,23 @@ export function commitUci(mem: NodeMemory, context: VendorContext): void {
       }
     }
   }
-  // selesaikan pool DHCP yang punya start/limit tapi belum range absolut
+  // selesaikan pool DHCP yang punya start/limit tapi belum range absolut —
+  // diturunkan dari IP interface NYATA; tanpa IP interface, range tidak
+  // dikarang (jujur: network DHCP tidak bisa diturunkan).
   for (const pool of mem.dhcpPools) {
     if (pool.start && !pool.range) {
-      const baseIp = pool.iface ? ((mem.configuredIps || {})[pool.iface] || '192.168.1.1/24') : '192.168.1.1/24';
+      const baseIp = pool.iface ? ((mem.configuredIps || {})[pool.iface] || '') : '';
+      if (!baseIp) continue;
       const c = cidrOf(baseIp);
-      const [netIp] = c.split('/');
-      const octets = netIp.split('.');
+      const [netIp, prefix] = c.split('/');
+      // network = alamat SUBNET nyata (bukan IP host) dari IP interface.
+      const netAddr = networkOfMask(netIp, bitsToMask(Number(prefix))) || `${String(netIp)}/${String(prefix)}`;
+      const octets = netAddr.split('/')[0].split('.');
       octets[3] = String(Number(pool.start));
       const startIp = octets.join('.');
       octets[3] = String(Number(pool.start) + (Number(pool.limit) || 100) - 1);
       pool.range = `${String(startIp)}-${String(octets.join('.'))}`;
-      pool.network = networkOfMask(netIp, '255.255.255.0') || '';
+      pool.network = netAddr;
       delete pool.start;
       delete pool.limit;
     }

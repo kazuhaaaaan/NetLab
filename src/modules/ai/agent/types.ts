@@ -120,6 +120,8 @@ export interface PlanActionResult {
   ok: boolean;
   message: string;
   verification?: VerificationResult;
+  /** true bila aksi sukses tapi verifikasi efek gagal. */
+  verificationFailed?: boolean;
   error?: string;
   rolledBack?: boolean;
 }

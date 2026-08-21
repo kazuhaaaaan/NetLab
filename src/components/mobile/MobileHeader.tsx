@@ -19,7 +19,11 @@ import {
   HelpCircle,
   PackageCheck,
   Bot,
-  MoreVertical
+  MoreVertical,
+  Wand2,
+  BookOpen,
+  FlaskConical,
+  Play
 } from 'lucide-react';
 import { LabProject } from '../../types';
 
@@ -44,6 +48,11 @@ interface MobileHeaderProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  onOpenVendorCaps: () => void;
+  onOpenConfigGen: () => void;
+  onOpenConfigLib: () => void;
+  onOpenPresetLabs: () => void;
+  onOpenNetSim: () => void;
   onOpenAddDevice: () => void;
 }
 
@@ -93,6 +102,11 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   onOpenTutorial,
   onOpenGrading,
   onOpenAiChat,
+  onOpenVendorCaps,
+  onOpenConfigGen,
+  onOpenConfigLib,
+  onOpenPresetLabs,
+  onOpenNetSim,
   theme,
   onToggleTheme,
   onLoadTemplate,
@@ -180,8 +194,12 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
                   <MenuRow icon={<Share2 className="w-4 h-4" />} label="Bagikan Topologi" onClick={() => { setMoreOpen(false); onShare(); }} />
                   <MenuRow icon={<FolderTree className="w-4 h-4" />} label="Monorepo Explorer" onClick={() => { setMoreOpen(false); onOpenMonorepo(); }} />
                   <div className="my-1 h-px bg-[#26282E]" />
+                  <MenuRow icon={<Wand2 className="w-4 h-4" />} label="Config Generator" sub="Buat konfigurasi otomatis" onClick={() => { setMoreOpen(false); onOpenConfigGen(); }} />
+                  <MenuRow icon={<BookOpen className="w-4 h-4" />} label="Config Library" sub="Snippet siap salin" onClick={() => { setMoreOpen(false); onOpenConfigLib(); }} />
+                  <MenuRow icon={<FlaskConical className="w-4 h-4" />} label="Preset Labs" sub="Topologi siap pakai" onClick={() => { setMoreOpen(false); onOpenPresetLabs(); }} />
+                  <MenuRow icon={<Play className="w-4 h-4" />} label="Network Simulation" sub="Uji jalur & latensi" onClick={() => { setMoreOpen(false); onOpenNetSim(); }} />
+                  <div className="my-1 h-px bg-[#26282E]" />
                   <MenuRow
-                    icon={theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
                     label={theme === 'dark' ? 'Tema Terang' : 'Tema Gelap'}
                     onClick={() => { setMoreOpen(false); onToggleTheme(); }}
                   />
@@ -229,6 +247,10 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
                 <MenuRow icon={<HelpCircle className="w-4 h-4" />} label="Tutorial" onClick={() => { setDrawerOpen(false); onOpenTutorial(); }} />
                 <MenuRow icon={<Bot className="w-4 h-4" />} label="AI Mentor" onClick={() => { setDrawerOpen(false); onOpenAiChat(); }} />
                 <MenuRow icon={<PackageCheck className="w-4 h-4" />} label="Auto-Grading" onClick={() => { setDrawerOpen(false); onOpenGrading(); }} />
+                <MenuRow icon={<Wand2 className="w-4 h-4" />} label="Config Generator" onClick={() => { setDrawerOpen(false); onOpenConfigGen(); }} />
+                <MenuRow icon={<BookOpen className="w-4 h-4" />} label="Config Library" onClick={() => { setDrawerOpen(false); onOpenConfigLib(); }} />
+                <MenuRow icon={<FlaskConical className="w-4 h-4" />} label="Preset Labs" onClick={() => { setDrawerOpen(false); onOpenPresetLabs(); }} />
+                <MenuRow icon={<Play className="w-4 h-4" />} label="Network Simulation" onClick={() => { setDrawerOpen(false); onOpenNetSim(); }} />
                 <MenuRow icon={<Home className="w-4 h-4" />} label="Beranda" onClick={() => { setDrawerOpen(false); onGoHome(); }} />
               </div>
 

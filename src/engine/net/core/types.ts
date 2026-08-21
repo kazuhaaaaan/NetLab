@@ -89,6 +89,7 @@ export type SimEventType =
   | 'DHCP_OFFER'
   | 'DHCP_REQUEST'
   | 'DHCP_ACK'
+  | 'DHCP_NAK'
   | 'DHCP_RENEW'
   | 'DHCP_RELEASE'
   | 'DHCP_RELAY'
@@ -152,6 +153,9 @@ export interface DhcpPool {
   leaseTimeMs?: number;
   /** DNS server yang diiklankan ke klien (option 6). */
   dnsServers?: string[];
+  /** Reservasi statis MAC → IP (fixed-address): klien dengan MAC itu selalu
+   *  mendapat IP yang sama. IP ini tidak diberikan ke klien lain. */
+  reservations?: { mac: string; ip: string }[];
 }
 
 /**

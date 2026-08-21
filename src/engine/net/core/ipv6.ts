@@ -6,9 +6,30 @@
 export function isIpv6Address(ip: string): boolean {
   if (!ip || typeof ip !== 'string') return false;
   let s = ip.replace(/^\[|\]$/g, '');
-  if (s.includes('.') || !s.includes(':')) return false;
-  s = s.replace(/%[a-zA-Z0-9]+$/, '');
-  return /^[0-9a-fA-F:]*$/.test(s) && s.length >= 2;
+  const zone = s.match(/%[a-zA-Z0-9]+$/);
+  if (zone) s = s.slice(0, -zone[0].length);
+  // Tanpa '.', wajib ada ':', hanya hex+':', dan '::' paling banyak satu.
+  if (!s || s.includes('.') || !s.includes(':')) return false;
+  if (/[^0-9a-fA-F:]/.test(s)) return false;
+  if ((s.match(/::/g)?.length ?? 0) > 1) return false;
+
+  const validGroup = (g: string): boolean => /^[0-9a-fA-F]{1,4}$/.test(g);
+  const compress = s.split('::');
+
+  if (compress.length === 2) {
+    // Bentuk terkompresi: group kosong di dalam head/tail (mis. '1::2:' atau
+    // ':::') menghasilkan entri '' yang gagal validGroup → ditolak.
+    const [head, tail] = compress;
+    const groups = [...(head ? head.split(':') : []), ...(tail ? tail.split(':') : [])];
+    if (!groups.every(validGroup)) return false;
+    // '::' menggantikan minimal satu group nol → group eksplisit harus < 8
+    // ('1:2:3:4:5:6:7:8::' redundan → invalid per RFC 4291).
+    return groups.length < 8;
+  }
+
+  // Bentuk penuh: tepat 8 group, masing-masing 1–4 digit hex.
+  const groups = s.split(':');
+  return groups.length === 8 && groups.every(validGroup);
 }
 
 /** Uraikan alamat v6 → 8 group 16-bit (angka). Tangani '::'. */

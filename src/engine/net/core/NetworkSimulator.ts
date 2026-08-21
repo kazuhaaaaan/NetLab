@@ -267,6 +267,17 @@ export class NetworkSimulator implements SimulatorCore {
     this.configStore.setPortVlans(nodeId, vlanByIface);
   }
 
+  /** Pasang hostname terkonfigurasi (mis. `hostname R1` / `/system identity set name=x`). */
+  setHostname(nodeId: string, hostname?: string): void {
+    this.configStore.setHostname(nodeId, hostname);
+  }
+
+  /** Hostname efektif perangkat: hostname konfigurasi, fallback nama node. */
+  getHostname(nodeId: string): string {
+    const dev = this.ctx.nodes.get(nodeId);
+    return dev?.hostname || dev?.name || nodeId;
+  }
+
   setShutdownIfaces(nodeId: string, names: string[] | undefined): void {
     this.configStore.setShutdownIfaces(nodeId, names);
   }
@@ -343,8 +354,8 @@ export class NetworkSimulator implements SimulatorCore {
   }
 
   // ── Simulasi flow ─────────────────────────────────────────────
-  simulatePing(srcNodeId: string, dstIp: string): PingSimResult {
-    return this.flows.simulatePing(srcNodeId, dstIp);
+  simulatePing(srcNodeId: string, dstIp: string, sizeBytes?: number, df?: boolean): PingSimResult {
+    return this.flows.simulatePing(srcNodeId, dstIp, sizeBytes, df);
   }
 
   simulatePing6(srcNodeId: string, dstIp: string): PingSimResult {

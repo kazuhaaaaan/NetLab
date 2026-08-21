@@ -66,6 +66,7 @@ export class Observation {
           up: i.up,
           linked: hasCable,
           operational,
+          counters: dev.ifaceCounters.get(i.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0, inErrors: 0, outErrors: 0 },
         };
       }),
       arp: dev.arpCache.entriesList().map((e) => ({ ip: e.ip, mac: e.mac })),
@@ -100,6 +101,20 @@ export class Observation {
               { limit: c.limit || 1, sticky: !!c.sticky, learned: [...c.learned] },
             ])
           )
+        : undefined,
+      dhcpPools: dev.dhcpPools.length > 0
+        ? dev.dhcpPools.map((p) => ({
+            name: p.name,
+            range: p.range,
+            network: p.network,
+            iface: p.iface,
+            gateway: p.gateway,
+            disabled: p.disabled,
+            excluded: p.excluded,
+            leaseTimeMs: p.leaseTimeMs,
+            dnsServers: p.dnsServers,
+            reservations: p.reservations,
+          }))
         : undefined,
     };
   }

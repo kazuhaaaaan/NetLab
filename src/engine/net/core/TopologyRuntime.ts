@@ -31,6 +31,9 @@ export class TopologyRuntime {
     this.ctx.nodes = nodes;
     this.ctx.processors.clear();
     for (const [id, dev] of nodes) {
+      // Counters & buffer fragment di-reset: satu sesi lab = kondisi bersih.
+      dev.ifaceCounters.clear();
+      dev.fragBuffer.clear();
       const kind = processorKind(dev);
       let proc = null;
       if (kind === 'wireless') proc = new WirelessProcessor(dev);

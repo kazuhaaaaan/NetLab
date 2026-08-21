@@ -35,6 +35,17 @@ import { linkLatencyMs } from './Topology';
 
 export class SimulationFlows {
   private runSeq = 0;
+  /** Counter ident deterministik (ICMP id, TCP ISN, port sumber) — audit C-2. */
+  private identSeq = 0;
+
+  /**
+   * Nilai ident berikutnya yang DETERMINISTIK (menggantikan Math.random):
+   * urutan paket yang sama antar-run menghasilkan trace yang identik,
+   * tanpa mengubah semantik protokol (id/ISN/port tetap unik per run).
+   */
+  private nextIdent(): number {
+    return ++this.identSeq;
+  }
 
   constructor(
     private readonly ctx: SimulationContext,
@@ -173,7 +184,7 @@ export class SimulationFlows {
   }
 
   // ── Simulasi flow ──────────────────────────────────────────────
-  simulatePing(srcNodeId: string, dstIp: string): PingSimResult {
+  simulatePing(srcNodeId: string, dstIp: string, sizeBytes?: number, df?: boolean): PingSimResult {
     const src = this.ctx.nodes.get(srcNodeId);
     if (!src) return this.pingFail('not-found');
     if (isIpv6Address(dstIp)) return this.simulatePing6(srcNodeId, dstIp);
@@ -209,8 +220,9 @@ export class SimulationFlows {
       dstPort: 0,
       ttl: DEFAULT_TTL,
       traceId,
-      flags: { dir: 'req', icmpType: 8 },
-      payload: { type: 8, code: 0, seq: 1, id: (Math.random() * 0xffff) & 0xffff },
+      flags: { dir: 'req', icmpType: 8, df: df ?? false },
+      payload: { type: 8, code: 0, seq: 1, id: this.nextIdent() & 0xffff },
+      size: sizeBytes ?? 64,
     });
     run.rootPktId = req.id;
 
@@ -297,7 +309,7 @@ export class SimulationFlows {
       ttl: DEFAULT_TTL,
       traceId,
       flags: { dir: 'req', icmpType: 128, v6: true },
-      payload: { type: 128, code: 0, seq: 1, id: (Math.random() * 0xffff) & 0xffff, v6: true },
+      payload: { type: 128, code: 0, seq: 1, id: this.nextIdent() & 0xffff, v6: true },
     });
     run.rootPktId = req.id;
 
@@ -356,7 +368,7 @@ export class SimulationFlows {
         ttl,
         traceId,
         flags: { dir: 'req', icmpType: 8 },
-        payload: { type: 8, code: 0, seq: ttl, id: (Math.random() * 0xffff) & 0xffff, traceroute: true },
+        payload: { type: 8, code: 0, seq: ttl, id: this.nextIdent() & 0xffff, traceroute: true },
       });
       run.rootPktId = req.id;
       if (!this.inject(src, req, traceId)) break;
@@ -426,7 +438,7 @@ export class SimulationFlows {
         ttl,
         traceId,
         flags: { dir: 'req', icmpType: 128, v6: true },
-        payload: { type: 128, code: 0, seq: ttl, id: (Math.random() * 0xffff) & 0xffff, traceroute: true, v6: true },
+        payload: { type: 128, code: 0, seq: ttl, id: this.nextIdent() & 0xffff, traceroute: true, v6: true },
       });
       run.rootPktId = req.id;
       if (!this.inject6(src, req, traceId)) break;
@@ -482,8 +494,8 @@ export class SimulationFlows {
 
     const traceId = `tcp-${++this.runSeq}`;
     const run = this.runManager.beginRun(traceId);
-    const iseq = Math.floor(Math.random() * 50000) + 1000;
-    const clientPort = 40000 + Math.floor(Math.random() * 10000);
+    const iseq = 1000 + ((this.nextIdent() * 7919) % 50000);
+    const clientPort = 40000 + ((this.nextIdent() * 104729) % 10000);
     const syn = this.core.createPacket({
       protocol: 'tcp',
       srcIp: iface.ip.address,
@@ -584,7 +596,7 @@ export class SimulationFlows {
 
     const traceId = `snmp-${++this.runSeq}`;
     const run = this.runManager.beginRun(traceId);
-    const clientPort = 50000 + Math.floor(Math.random() * 5000);
+    const clientPort = 50000 + ((this.nextIdent() * 15485863) % 5000);
     const req = this.core.createPacket({
       protocol: 'udp',
       srcIp: iface.ip.address,
@@ -619,7 +631,7 @@ export class SimulationFlows {
       return { ok: true, device: String(res.device || ''), oids: res.oids || [] };
     }
     const raw = run.reason === 'no-agent' ? 'no-agent' : run.reason === 'auth' ? 'auth' : run.reason === 'rejected' ? 'rejected' : mapReason(run.reason);
-    const reason: SnmpQueryResult['reason'] = (raw === 'ttl' || raw === 'self' || raw === 'blocked' || raw === 'refused' || raw === 'rejected') ? 'timeout' : raw;
+    const reason: SnmpQueryResult['reason'] = (raw === 'ttl' || raw === 'self' || raw === 'blocked' || raw === 'refused' || raw === 'rejected' || raw === 'frag-needed') ? 'timeout' : raw;
     return { ok: false, reason, error: run.reason === 'auth' ? 'Bad community name' : undefined };
   }
 
@@ -708,6 +720,8 @@ function mapReason(reason: string | undefined): PingSimResult['reason'] {
     case 'unreachable':
     case 'rejected':
       return reason;
+    case 'frag-needed':
+      return 'frag-needed';
     default:
       return 'unreachable';
   }

@@ -55,11 +55,19 @@ export const DISCARD_GATEWAY = 'discard';
 export class NetworkDevice {
   readonly id: string;
   name: string;
+  /** Hostname hasil konfigurasi CLI (mis. `hostname R1` / `/system identity set`).
+   *  Sumber kebenaran stateful: kosong = identitas default (nama node). */
+  hostname?: string;
   readonly deviceType: string;
   readonly kind: DeviceKind;
   /** vendor (mikrotik/cisco/linux/...) — additive, tidak mengubah perilaku */
   readonly vendor: string;
   powered = true;
+
+  /** Pasang hostname terkonfigurasi (state device; kosong = default). */
+  setHostname(name?: string): void {
+    this.hostname = name && name.trim().length > 0 ? name.trim() : undefined;
+  }
 
   private interfaces = new Map<string, NetworkInterfaceModel>();
   private nameIndex = new Map<string, string>();
@@ -149,13 +157,15 @@ export class NetworkDevice {
   /** Cache DNS klien: nama → { ip, expiresAt } (TTL tetap 300s, diisi resolveHostname). */
   dnsCache = new Map<string, { ip: string; expiresAt: number }>();
   /** Penghitung paket per interface (untuk ifTable SNMP ifIn/ifOutOctets). */
-  ifaceCounters = new Map<string, { inPkts: number; outPkts: number; inOctets: number; outOctets: number }>();
+  ifaceCounters = new Map<string, { inPkts: number; outPkts: number; inOctets: number; outOctets: number; inErrors: number; outErrors: number }>();
+  /** Buffer reassembly fragment IPv4: fragId → potongan yang sudah tiba. */
+  fragBuffer = new Map<string, { parts: Map<number, number>; total: number; payload: Record<string, unknown> | null }>();
   /** Koneksi TCP yang tercatat (netstat) */
   tcpConnections: Record<string, unknown>[] = [];
   /** State DHCP client (host): xid, fase, IP yang ditawarkan */
   dhcpClient: {
     xid: number;
-    state: 'idle' | 'discover' | 'offer' | 'request' | 'bound' | 'renew' | 'released';
+    state: 'idle' | 'init' | 'discover' | 'offer' | 'request' | 'bound' | 'renew' | 'released';
     ifaceName?: string;
     offered?: { ip: string; gateway: string; prefix: number; poolNodeId?: string };
   } | null = null;

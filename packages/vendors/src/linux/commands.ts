@@ -4,7 +4,6 @@ import { registerEntries } from '../common/chain';
 
 import { resolveIfaceName, networkOfMask, cidrOf } from '../common/ip';
 import { setShutdownState, grantDhcpClient } from '../common/state';
-import { fakeDnsIp } from '../common/format';
 import type { NodeMemory, VendorContext } from '../common/types';
 
 export const linuxEntries: ChainEntry[] = [
@@ -245,12 +244,10 @@ cmdResult = linuxCommand(rawInput, context, mem);
             const r = context.dnsResolver(host);
             cmdResult = { type: 'nslookup', host, server: r.server || '', resolved: r.resolved ?? null, timedOut: !!r.timedOut, nxdomain: !!r.nxdomain };
           } else {
+            // Tanpa resolver engine: TIDAK boleh mengarang IP (fakeDnsIp dihapus).
+            // DNS server terkonfigurasi tetap disebutkan; hasil jujur = timed out.
             const servers = mem.dnsServers || [];
-            if (servers.length === 0) {
-              cmdResult = { type: 'nslookup', host, server: '', resolved: null, timedOut: true };
-            } else {
-              cmdResult = { type: 'nslookup', host, server: String(servers[0]), resolved: fakeDnsIp(host), timedOut: false };
-            }
+            cmdResult = { type: 'nslookup', host, server: String(servers[0] || ''), resolved: null, timedOut: true, nxdomain: false };
           }
         
     return cmdResult;
@@ -296,7 +293,17 @@ cmdResult = linuxCommand(rawInput, context, mem);
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
 
-          cmdResult = { type: 'cat_file', path: String(payload?.path || '') };
+          cmdResult = {
+            type: 'cat_file',
+            path: String(payload?.path || ''),
+            info: {
+              configuredIps: mem.configuredIps,
+              routes: mem.routes,
+              dnsServers: mem.dnsServers,
+              dnsRecords: mem.dnsRecords,
+              hostname: mem.hostname,
+            },
+          };
         
     return cmdResult;
   },

@@ -8,6 +8,8 @@ export const ICMP_ECHO_REPLY = 0;
 export const ICMP_DEST_UNREACHABLE = 3;
 export const ICMP_TIME_EXCEEDED = 11;
 export const ICMP_ECHO_REQUEST = 8;
+/** type 3 code 4: Fragmentation Needed (RFC 792) */
+export const ICMP_FRAGMENTATION_NEEDED = 4;
 
 let icmpSeq = 0;
 
@@ -43,6 +45,16 @@ export function buildTimeExceeded(): IcmpPayload {
 
 export function buildDestUnreachable(detail = 'destination host unreachable'): IcmpPayload {
   return { type: ICMP_DEST_UNREACHABLE, code: 1, seq: 0, id: 0, detail };
+}
+
+export function buildFragNeeded(nextHopMtu: number): IcmpPayload {
+  return {
+    type: ICMP_DEST_UNREACHABLE,
+    code: ICMP_FRAGMENTATION_NEEDED,
+    seq: 0,
+    id: 0,
+    detail: `fragmentation needed (packet exceeds ${nextHopMtu} bytes)`,
+  };
 }
 
 export function icmpLabel(pkt: Packet): string {

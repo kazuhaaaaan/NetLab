@@ -257,7 +257,7 @@ export class VerificationEngine {
 
     let ok = evidence.length > 0;
     if (params.vlanId != null) ok = [...vlanMap.values()].includes(params.vlanId);
-    if (params.trunk) ok = trunks.has(params.trunk) || ok;
+    if (params.trunk) ok = trunks.has(params.trunk);
 
     return this.record(
       {
@@ -346,16 +346,22 @@ export class VerificationEngine {
     );
   }
 
-  verifyInterface(params: VerifyParams & { iface: string }): VerificationResult {
+  verifyInterface(params: VerifyParams & { iface: string; ip?: string }): VerificationResult {
     const stats = this.sim.getDeviceStats(params.source);
     const iface = stats?.interfaces.find((i) => i.name === params.iface);
+    let ipMatch = true;
+    if (params.ip) {
+      ipMatch = (iface?.ip || '').split(',').map((s) => s.trim()).includes(params.ip) ||
+        (iface?.ip || '') === params.ip;
+    }
+    const success = !!iface && iface.up && ipMatch;
     return this.record(
       {
-        success: !!iface && iface.up,
+        success,
         testType: 'interface',
         source: stats?.name || params.source,
         destination: params.iface,
-        reason: !iface ? 'interface-not-found' : iface.up ? undefined : `state=${iface.operational}`,
+        reason: !iface ? 'interface-not-found' : iface.up && ipMatch ? undefined : ipMatch ? `state=${iface.operational}` : `ip-mismatch (expected ${params.ip})`,
         evidence: iface ? [`${iface.name} ${iface.ip || 'no-ip'} up=${iface.up} operational=${iface.operational}`] : [],
         timestamp: Date.now(),
       },
@@ -363,26 +369,30 @@ export class VerificationEngine {
     );
   }
 
-  /** Verifikasi efek topology: link ada antara dua device. */
+  /** Verifikasi efek topology: link ada antara dua device (nama ATAU id). */
   verifyLink(nodeA: string, nodeB: string, actionId?: string, label = 'link exists'): VerificationResult {
     const links = this.sim.topology.links.all;
+    const aId = this.sim.getDevice(nodeA)?.id ?? this.sim.getDeviceByName(nodeA)?.id ?? nodeA;
+    const bId = this.sim.getDevice(nodeB)?.id ?? this.sim.getDeviceByName(nodeB)?.id ?? nodeB;
+    const aName = this.sim.getDevice(aId)?.name ?? nodeA;
+    const bName = this.sim.getDevice(bId)?.name ?? nodeB;
     const hit = links.some(
       (l) =>
-        (l.a.nodeId === nodeA && l.b.nodeId === nodeB) ||
-        (l.a.nodeId === nodeB && l.b.nodeId === nodeA)
+        (l.a.nodeId === aId && l.b.nodeId === bId) ||
+        (l.a.nodeId === bId && l.b.nodeId === aId)
     );
     return this.record(
       {
         success: hit,
         testType: 'topology',
-        source: nodeA,
-        destination: nodeB,
+        source: aName,
+        destination: bName,
         reason: hit ? undefined : 'link-not-found',
         evidence: links.map((l) => `${l.a.nodeId}:${l.a.port} ↔ ${l.b.nodeId}:${l.b.port}`),
         timestamp: Date.now(),
         actionId,
       },
-      { source: nodeA, destination: nodeB, actionId, label }
+      { source: aName, destination: bName, actionId, label }
     );
   }
 

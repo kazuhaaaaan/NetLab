@@ -34,6 +34,7 @@ import {
 export class ConfigStore {
   private configs = new Map<string, { ips: Record<string, string>; routes: { dst: string; gateway: string | null; distance?: number }[] }>();
   private configs6 = new Map<string, { ips6: Record<string, string>; routes6: { dst: string; gateway: string | null }[] }>();
+  private hostnames = new Map<string, string>();
   private dhcpPools = new Map<string, DhcpPoolInfo[]>();
   private routings = new Map<string, RoutingMemoryShape>();
   private bgps = new Map<string, BgpConfig>();
@@ -102,6 +103,8 @@ export class ConfigStore {
       }
       const pv = this.portVlans.get(dev.id);
       if (pv) dev.portVlans = new Map(pv);
+      const hn = this.hostnames.get(dev.id);
+      if (hn) dev.setHostname(hn);
       const tr = this.trunkPorts.get(dev.id);
       if (tr) dev.trunkPorts = new Set(tr);
       const vl = this.vlans.get(dev.id);
@@ -559,6 +562,14 @@ export class ConfigStore {
     else this.portVlans.delete(nodeId);
     const dev = this.ctx.nodes.get(nodeId);
     if (dev) dev.portVlans = vlanByIface ? new Map(Object.entries(vlanByIface)) : new Map();
+  }
+
+  /** Hostname terkonfigurasi per perangkat (state device, bertahan antar sync). */
+  setHostname(nodeId: string, hostname?: string): void {
+    if (hostname && hostname.trim().length > 0) this.hostnames.set(nodeId, hostname.trim());
+    else this.hostnames.delete(nodeId);
+    const dev = this.ctx.nodes.get(nodeId);
+    if (dev) dev.setHostname(hostname);
   }
 
   setShutdownIfaces(nodeId: string, names: string[] | undefined): void {

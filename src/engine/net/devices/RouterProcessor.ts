@@ -9,8 +9,18 @@ import { arpResolveAndSend } from './sendUtils';
 import { Packet, IP_BROADCAST } from '../core/types';
 import { isBroadcastMac } from '../layer2/EthernetFrame';
 import { applyAclDeny } from '../services/FirewallService';
+
+/** FNV-1a 32-bit — hash deterministik untuk ISN TCP (audit C-2). */
+function fnv1a32(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
 import { NatTranslator } from '../layer4/Nat';
-import { allocateIp, findServingPool, LeaseGrant } from '../services/DhcpService';
+import { allocateIp, findServingPool, LeaseGrant, normalizeMac } from '../services/DhcpService';
 import { resolveLocalChain } from '../services/DnsService';
 import { parseCidr, ipToInt, networkOf, inSameSubnet, isValidIp } from '../core/ip';
 import { isIpv6Address, isIpv6Multicast, inSameIpv6Subnet, ipv6NetworkString } from '../core/ipv6';
@@ -22,8 +32,10 @@ import {
   ICMP_TIME_EXCEEDED,
   IcmpPayload,
   buildDestUnreachable,
+  buildFragNeeded,
   buildTimeExceeded,
 } from '../layer4/Icmp';
+import { IpHeader, fragmentIp } from '../layer3/IpPacket';
 import { TCP_SYN, TCP_ACK, TCP_FIN, TCP_RST, TcpSegment, buildTcpSegment, isSyn, isAck, isFin, isRst } from '../layer4/Tcp';
 import { UDP_BOOTPS, UDP_BOOTPC, UDP_DNS, UDP_SNMP } from '../layer4/Udp';
 import { buildMib, mibLookup, normalizeOid } from '../services/SnmpService';
@@ -119,9 +131,51 @@ export class RouterProcessor implements DeviceProcessor {
     const dev = this.device;
     core.emit('PACKET_RECEIVED', traceId, { packetId: pkt.id }, dev.id, inPort);
 
+    // Reassembly fragment IPv4: hanya Tujuan akhir (dstIp milik device ini)
+    // menggabungkan potongan; router perantara meneruskan fragment apa adanya.
+    const fragId = pkt.flags['fragId'];
+    if (typeof fragId === 'string' && dev.hasIp(pkt.dstIp)) {
+      const fragLen = pkt.size - 20;
+      const off = Number(pkt.flags['fragOffset'] ?? 0);
+      const buf = dev.fragBuffer.get(fragId) || { parts: new Map<number, number>(), total: 0, payload: null };
+      buf.parts.set(off, fragLen);
+      if (pkt.flags['mf'] === false) buf.total = off + fragLen;
+      if (pkt.flags['first'] && pkt.payload) buf.payload = pkt.payload;
+      dev.fragBuffer.set(fragId, buf);
+      core.drop(dev, pkt, 'fragment-buffered', traceId);
+      const sum = [...buf.parts.values()].reduce((a, b) => a + b, 0);
+      if (buf.total > 0 && sum >= buf.total) {
+        dev.fragBuffer.delete(fragId);
+        const rebuilt = core.createPacket({
+          protocol: pkt.protocol,
+          srcIp: pkt.srcIp,
+          dstIp: pkt.dstIp,
+          srcMac: pkt.srcMac,
+          dstMac: pkt.dstMac,
+          srcPort: pkt.srcPort,
+          dstPort: pkt.dstPort,
+          vlan: pkt.vlan,
+          ttl: pkt.ttl,
+          traceId,
+          flags: { ...pkt.flags, fragId: undefined, fragOffset: undefined, mf: undefined, first: undefined, reassembled: true },
+          payload: buf.payload,
+          size: 20 + buf.total,
+        });
+        rebuilt.parentId = pkt.parentId || pkt.id;
+        rebuilt.hops = pkt.hops.slice();
+        rebuilt.edgeIds = pkt.edgeIds.slice();
+        rebuilt.trace = pkt.trace.slice();
+        this.handleIp(rebuilt, inPort, core, traceId);
+      }
+      return;
+    }
+
     // Interface masuk mati (shutdown) → frame ditolak (tidak diproses).
     const inIfaceCheck = dev.getIfaceByPortId(inPort) || dev.getIfaceByName(inPort);
     if (inIfaceCheck && !inIfaceCheck.up) {
+      const c = dev.ifaceCounters.get(inIfaceCheck.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0, inErrors: 0, outErrors: 0 };
+      c.inErrors += 1;
+      dev.ifaceCounters.set(inIfaceCheck.name, c);
       core.emit('PACKET_DROPPED', traceId, { reason: 'iface-down' }, dev.id, inPort);
       core.drop(dev, pkt, 'iface-down', traceId);
       return;
@@ -281,6 +335,60 @@ export class RouterProcessor implements DeviceProcessor {
         dev.nat.translateStatic(pkt, toIp, egress.name, core.now);
         core.emit('NAT_REWRITE', traceId, { action: 'srcnat', to: toIp }, dev.id, egress.name);
       }
+    }
+
+    // MTU: paket lebih besar dari MTU interface keluar → ICMP Fragmentation
+    // Needed (DF diset, RFC 1191) atau fragmentasi IPv4 (DF tidak diset).
+    if (pkt.size > egress.mtu) {
+      if (pkt.flags['df']) {
+        this.sendIcmpError(pkt, inPort, buildFragNeeded(egress.mtu), core, traceId);
+        core.emit('ICMP_ERROR', traceId, { reason: `fragmentation needed (mtu ${egress.mtu})`, mtu: egress.mtu }, dev.id, egress.name);
+        const run = core.getRun(traceId);
+        if (run && run.status === 'running') {
+          run.status = 'fail';
+          run.reason = 'frag-needed';
+        }
+        core.drop(dev, pkt, 'mtu-exceeded', traceId);
+        return;
+      }
+      const header: IpHeader = {
+        version: 4,
+        ihl: 5,
+        id: (parseInt(pkt.id.replace(/\D/g, ''), 10) || 1) & 0xffff,
+        flags: { df: false, mf: false },
+        fragOffset: 0,
+        ttl: pkt.ttl,
+        proto: 1,
+        checksum: 0,
+        src: pkt.srcIp,
+        dst: pkt.dstIp,
+      };
+      const frags = fragmentIp(header, pkt.size - 20, egress.mtu);
+      const fragKey = `${pkt.srcIp}:${header.id}`;
+      for (const f of frags) {
+        const childFlags: Record<string, number | string | boolean> = { ...pkt.flags, fragId: fragKey, fragOffset: f.offset, mf: f.more, first: f.offset === 0, df: false };
+        if (f.offset !== 0) delete childFlags['dir'];
+        const child = core.createPacket({
+          protocol: pkt.protocol,
+          srcIp: pkt.srcIp,
+          dstIp: pkt.dstIp,
+          srcMac: pkt.srcMac,
+          dstMac: pkt.dstMac,
+          srcPort: pkt.srcPort,
+          dstPort: pkt.dstPort,
+          vlan: pkt.vlan,
+          ttl: pkt.ttl,
+          traceId,
+          flags: childFlags,
+          payload: f.offset === 0 ? pkt.payload : null,
+          size: 20 + f.length,
+        });
+        child.parentId = pkt.id;
+        arpResolveAndSend(dev, child, egress.name, nextHopIp, core, traceId);
+      }
+      core.emit('PACKET_FORWARDED', traceId, { packetId: pkt.id, dstIp: pkt.dstIp, egress: egress.name, fragments: frags.length }, dev.id, egress.name);
+      core.drop(dev, pkt, 'consumed', traceId);
+      return;
     }
 
     // ARP untuk next hop → rewrite MAC, baru transmit
@@ -538,8 +646,9 @@ export class RouterProcessor implements DeviceProcessor {
           dstIp: pkt.srcIp,
           ttl: 64,
           traceId,
-          flags: { ttlAtDst: pkt.ttl },
+          flags: { ttlAtDst: pkt.ttl, df: false },
           payload: { type: ICMP_ECHO_REPLY, code: 0, seq: p.seq, id: p.id },
+          size: pkt.size,
         });
         // bawa trace request agar lintasan utuh di reply
         reply.hops = pkt.hops.slice();
@@ -635,7 +744,8 @@ export class RouterProcessor implements DeviceProcessor {
         core.drop(dev, pkt, 'refused', traceId);
         return;
       }
-      const iseq = Math.floor(Math.random() * 50000) + 1000;
+      // ISN deterministik dari identitas koneksi (audit C-2) — bukan Math.random.
+      const iseq = 1000 + (fnv1a32(`${pkt.srcIp}|${pkt.dstIp}|${pkt.srcPort}|${pkt.dstPort}`) % 50000);
       const reply = core.createPacket({
         protocol: 'tcp',
         srcMac: iface.mac,
@@ -969,7 +1079,7 @@ export class RouterProcessor implements DeviceProcessor {
     if (p.type === 'discover') {
       core.emit('DHCP_DISCOVER', traceId, { xid: p.xid, mac: pkt.srcMac }, dev.id, inPort);
       const pool = findServingPool(dev, serverIface?.name || inPort);
-      const grant = pool ? this.grantFromPool(dev, pool, core) : null;
+      const grant = pool ? this.grantFromPool(dev, pool, core, pkt.srcMac) : null;
       if (!grant) {
         core.drop(dev, pkt, 'dhcp-no-pool', traceId);
         return;
@@ -1001,6 +1111,33 @@ export class RouterProcessor implements DeviceProcessor {
       const used = core.usedIps();
       const inPool = requestedIp !== '' && this.ipInPool(requestedIp, pool);
       const ownedByClient = core.isIpLeasedTo?.(requestedIp, pkt.srcMac) ?? false;
+      // IP milik reservasi klien LAIN → NAK (reservasi tidak bisa diambil).
+      const reservedForOther = (pool.reservations || []).some(
+        (r) => r.ip === requestedIp && normalizeMac(r.mac) !== normalizeMac(pkt.srcMac)
+      );
+      if (reservedForOther) {
+        // IP kini milik reservasi klien lain → NAK. Binding lama si pemohon
+        // untuk IP itu sudah basi (invalid): server menyerahkan IP kembali ke
+        // pool agar pemilik reservasi bisa menggunakannya.
+        if (requestedIp) core.releaseLease(requestedIp);
+        const nak = core.createPacket({
+          protocol: 'udp',
+          srcMac: serverIface?.mac || pkt.dstMac,
+          dstMac: pkt.srcMac,
+          srcIp: serverIface?.ip?.address || '0.0.0.0',
+          dstIp: pkt.srcIp === '0.0.0.0' ? '255.255.255.255' : pkt.srcIp,
+          srcPort: UDP_BOOTPS,
+          dstPort: UDP_BOOTPC,
+          ttl: 64,
+          traceId,
+          payload: relayed ? { type: 'nak', xid: p.xid, ip: requestedIp, relayed } : { type: 'nak', xid: p.xid, ip: requestedIp },
+        });
+        nak.vlan = pkt.vlan;
+        core.transmit(dev, nak, inPort, traceId);
+        core.emit('DHCP_REQUEST', traceId, { xid: p.xid, nak: true, ip: requestedIp, reserved: true }, dev.id, inPort);
+        core.drop(dev, pkt, 'dhcp-nak', traceId);
+        return;
+      }
       // IP diminta sudah dipakai klien lain → NAK (cegah double-allocation).
       if (inPool && used.has(requestedIp) && !ownedByClient) {
         const nak = core.createPacket({
@@ -1024,7 +1161,7 @@ export class RouterProcessor implements DeviceProcessor {
       const grant =
         inPool && (ownedByClient || !used.has(requestedIp))
           ? this.ackForPool(pool, requestedIp)
-          : this.grantFromPool(dev, pool, core);
+          : this.grantFromPool(dev, pool, core, pkt.srcMac);
       if (!grant) {
         core.drop(dev, pkt, 'dhcp-pool-full', traceId);
         return;
@@ -1078,8 +1215,8 @@ export class RouterProcessor implements DeviceProcessor {
     return phys;
   }
 
-  private grantFromPool(dev: NetworkDevice, pool: NonNullable<ReturnType<typeof findServingPool>>, core: SimulatorCore): LeaseGrant | null {
-    const alloc = allocateIp(dev, pool, core.usedIps());
+  private grantFromPool(dev: NetworkDevice, pool: NonNullable<ReturnType<typeof findServingPool>>, core: SimulatorCore, clientMac?: string): LeaseGrant | null {
+    const alloc = allocateIp(dev, pool, core.usedIps(), clientMac);
     if (!alloc) return null;
     return {
       ip: alloc.ip,

@@ -173,7 +173,11 @@ export function runProtocolFidelityTests(): Report {
     check('F3 release menghapus lease', released, 'lease masih ada');
     check('F3 event DHCP_RELEASE tercatat', sim.eventHistory.some((e) => e.type === 'DHCP_RELEASE'), 'DHCP_RELEASE tidak ditemukan');
     const lease2 = sim.grantDhcpLease('pc2');
-    check('F3 klien lain mendapat alamat valid setelah release', !!lease2 && lease2.ip === '192.168.5.101', JSON.stringify(lease2));
+    // Release mengembalikan alamat ke pool (RFC 2131 §3.4: klien meninggalkan
+    // alamat) → pc2 mendapat IP yang BARU SAJA dilepas (192.168.5.100), bukan
+    // .101. Ekspektasi lama (.101) meng-encode perilaku keliru: klien yang
+    // melepas alamat masih memegangnya sehingga IP tak pernah kembali ke pool.
+    check('F3 klien lain mendapat alamat valid setelah release', !!lease2 && lease2.ip === '192.168.5.100', JSON.stringify(lease2));
   }
 
   // ── F4. DNS: chain CNAME + cache klien ────────────────────────────────

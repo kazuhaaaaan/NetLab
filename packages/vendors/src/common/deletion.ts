@@ -4,7 +4,9 @@ import type { NormalizedCommand } from '../../../cli/src/index';
 import { resolveIfaceName } from './ip';
 import { mergeIps } from './state';
 import { restoreJuniper } from './memory';
+import { isCapabilityBlocked, capabilityErrorMessage } from './capability';
 import type { NodeMemory, VendorContext, CommandResult } from './types';
+import type { CapabilityKey } from '../capabilities';
 
 export function handleDeletion(rawInput: string, normalized: NormalizedCommand, vendorId: string, mem: NodeMemory, context: VendorContext): CommandResult | undefined {
 
@@ -13,6 +15,29 @@ export function handleDeletion(rawInput: string, normalized: NormalizedCommand, 
     const isCisco = vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba';
     const isVyosLike = vendorId === 'vyos' || vendorId === 'ubiquiti';
     const err = (msg: string) => ({ raw: msg });
+
+    // ── Guard kapabilitas penghapusan: fitur yang TIDAK didukung vendor ini
+    // tidak boleh disentuh lewat "no …" / "remove" / "delete" / "undo" —
+    // jawab jujur dan jangan mutasi state (sama dengan guard konfigurasi).
+    const DELETION_CAPS: Array<{ re: RegExp; cap: CapabilityKey }> = [
+      { re: /^(?:no\s+ip\s+nat\b|\/ip\s+firewall\s+nat\s+remove\b|delete\s+security\s+nat\b|delete\s+nat\b)/i, cap: 'nat' },
+      { re: /^(?:no\s+(?:vrrp|standby)\b|\/routing\s+vrrp\b)/i, cap: 'vrrp' },
+      { re: /^(?:no\s+router\s+ospf\b|\/routing\s+ospf\s+(?:instance|network)\s+remove\b|delete\s+protocols\s+ospf\b|undo\s+ospf\b)/i, cap: 'ospf' },
+      { re: /^(?:no\s+router\s+rip\b|\/routing\s+rip\s+(?:instance|network)\s+remove\b|delete\s+protocols\s+rip\b|undo\s+rip\b)/i, cap: 'rip' },
+      { re: /^(?:no\s+router\s+eigrp\b)/i, cap: 'eigrp' },
+      { re: /^(?:no\s+router\s+bgp\b|\/routing\s+bgp\s+\S+\s+remove\b|delete\s+protocols\s+bgp\b|undo\s+bgp\b)/i, cap: 'bgp' },
+      { re: /^(?:no\s+ip\s+route\b|no\s+ip\s+route-static\b|\/ip\s+route\s+remove\b|delete\s+routing-options\s+static\b|delete\s+protocols\s+static\b)/i, cap: 'staticRoute' },
+      { re: /^(?:no\s+ip\s+dhcp\b|\/ip\s+dhcp-server\s+remove\b|delete\s+access\s+address-assignment\b)/i, cap: 'dhcp' },
+      { re: /^(?:no\s+ip\s+name-server\b|no\s+ip\s+host\b|delete\s+system\s+name-server\b)/i, cap: 'dns' },
+      { re: /^(?:no\s+access-list\b|\/ip\s+firewall\s+(?:filter|mangle)\s+remove\b|delete\s+firewall\b)/i, cap: 'firewall' },
+      { re: /^(?:no\s+vlan\b|no\s+interface\s+vlan\b|\/interface\s+vlan\s+remove\b|delete\s+vlans\b)/i, cap: 'vlan' },
+      { re: /^(?:no\s+ipv6\b|\/ipv6\s+\S+\s+remove\b|delete\s+interfaces\s+\S+\s+unit\b)/i, cap: 'ipv6' },
+    ];
+    for (const d of DELETION_CAPS) {
+      if (d.re.test(input) && isCapabilityBlocked(vendorId, d.cap)) {
+        return { raw: capabilityErrorMessage(vendorId, d.cap) };
+      }
+    }
 
     // ── IP address normalization: "x y" (mask) or "x/y" (cidr) → CIDR string ──
     const toCidr = (s: string): string => {

@@ -74,7 +74,27 @@ export class SwitchProcessor implements DeviceProcessor {
       frameVlan = dev.portVlans.get(inName) ?? pkt.vlan ?? inIface.vlanId ?? 1;
     }
     // Bawa VLAN frame ke hop berikutnya (trunk/router) agar reply bisa dikembalikan ke VLAN yang sama.
+    const ingressTag = pkt.vlan;
     pkt.vlan = frameVlan;
+
+    // Ingress enforcement (hardening):
+    // - Trunk: frame (bertag/untagged) hanya diterima bila VLAN-nya terdaftar
+    //   di allowed-list trunk; daftar KOSONG (`allowed vlan none`) menolak
+    //   SEMUA VLAN; tanpa allowed-list = semua VLAN boleh (compat).
+    // - Port non-trunk (access): frame BERTAG ditolak — access port hanya
+    //   menerima frame untagged (802.1Q nyata); tag asing tidak diabaikan.
+    if (hasVlanConfig && trunkIn) {
+      const allowed = dev.trunkAllowedVlans.get(inName);
+      if (allowed !== undefined && !allowed.includes(frameVlan)) {
+        core.emit('PACKET_DROPPED', traceId, { reason: 'vlan', vlan: frameVlan }, dev.id, inPort);
+        core.drop(dev, pkt, 'vlan', traceId);
+        return;
+      }
+    } else if (hasVlanConfig && ingressTag != null && !trunkIn) {
+      core.emit('PACKET_DROPPED', traceId, { reason: 'vlan', vlan: ingressTag }, dev.id, inPort);
+      core.drop(dev, pkt, 'vlan', traceId);
+      return;
+    }
 
     // Database VLAN otoritatif (VlanTable): bila perangkat punya VLAN yang
     // didaftarkan via CLI (`vlan 10` / `/interface vlan add` / `set vlans …`),
@@ -180,16 +200,15 @@ export class SwitchProcessor implements DeviceProcessor {
   /**
    * Apakah frame VLAN `frameVlan` boleh KELUAR lewat `iface`?
    * - Tanpa konfigurasi VLAN → semua port menerima semua (compat lama).
-   * - Trunk: native VLAN selalu boleh; bila allowed-list dikonfigurasi,
-   *   VLAN di luar daftar DITOLAK (tidak diteruskan).
+   * - Trunk: allowed-list (bila ada) adalah SATU-SATUNYA sumber kebenaran —
+   *   native VLAN TIDAK bypass allowed-list (harus didaftarkan juga);
+   *   daftar kosong (`allowed vlan none`) menolak semua VLAN.
    * - Access: hanya access-VLAN port itu sendiri (frame dari VLAN lain
    *   tidak bocor, termasuk frame bertag dari trunk lain).
    */
   private vlanAllows(frameVlan: number, iface: NetIface, _trunkIn: boolean, dev: NetworkDevice): boolean {
     if (dev.portVlans.size === 0 && dev.trunkPorts.size === 0) return true;
     if (dev.trunkPorts.has(iface.name)) {
-      const native = dev.trunkNativeVlans.get(iface.name);
-      if (native !== undefined && frameVlan === native) return true;
       const allowed = dev.trunkAllowedVlans.get(iface.name);
       if (allowed !== undefined) return allowed.includes(frameVlan);
       return true; // trunk tanpa allowed-list = semua VLAN

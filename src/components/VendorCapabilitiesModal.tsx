@@ -44,6 +44,8 @@ const CAP_ORDER: CapabilityKey[] = [
   'dhcp',
   'nat',
   'ospf',
+  'rip',
+  'eigrp',
   'bgp',
   'vrrp',
   'firewall',

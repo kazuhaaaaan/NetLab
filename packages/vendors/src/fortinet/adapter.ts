@@ -68,8 +68,8 @@ export class FortinetVendorAdapter implements _IV {
       ].join('\n');
     }
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '8.8.8.8';
-      return `PING ${String(host)} (${String(host)}): 56 data bytes\n64 bytes from ${String(host)}: icmp_seq=1 ttl=116 time=1.415 ms\n\n--- ${String(host)} ping statistics ---\n1 packets transmitted, 1 packets received, 0% packet loss\nround-trip min/avg/max = 1.415/1.415/1.415 ms`;
+      const host = cmdResult.host || '';
+      return `PING ${String(host)} (${String(host)}): simulation engine not available in this context. Use the NetLab ping panel.`;
     }
     if (cmdResult.type === 'help') {
       return ['Global commands:',

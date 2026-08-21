@@ -216,8 +216,8 @@ const TEMPLATES: Record<LabTemplateId, LabTemplate> = {
         'interface ether1.10', 'encapsulation dot1q 10', 'ip address 10.0.10.254 255.255.255.0', 'exit',
         'interface ether1.20', 'encapsulation dot1q 20', 'ip address 10.0.20.254 255.255.255.0', 'exit',
       ],
-      'PC-A': [],
-      'PC-B': [],
+      'PC-A': ['ip addr add 10.0.10.100/24 dev eth0', 'ip route add default via 10.0.10.254'],
+      'PC-B': ['ip addr add 10.0.20.100/24 dev eth0', 'ip route add default via 10.0.20.254'],
     },
     tasks: [
       { title: 'Buat VLAN', detail: 'VLAN 10 (users) dan VLAN 20 (servers) di SW1.' },
@@ -232,7 +232,7 @@ const TEMPLATES: Record<LabTemplateId, LabTemplate> = {
     grading: (sim, project) => [
       g('VLAN 10 di SW1', vlanExists(sim, resolveDeviceId(project, 'SW1'), 10)),
       g('VLAN 20 di SW1', vlanExists(sim, resolveDeviceId(project, 'SW1'), 20)),
-      g('inter-VLAN ping', hasPing(sim, resolveDeviceId(project, 'PC-A'), '10.0.20.1')),
+      g('inter-VLAN ping', hasPing(sim, resolveDeviceId(project, 'PC-A'), '10.0.20.100')),
     ],
   },
 
@@ -498,12 +498,13 @@ const TEMPLATES: Record<LabTemplateId, LabTemplate> = {
         { deviceType: 'wireless', vendor: 'mikrotik', name: 'AP1', seed: 'ap1', position: { x: 150, y: 120 } },
         { deviceType: 'wireless', vendor: 'mikrotik', name: 'AP2', seed: 'ap2', position: { x: 450, y: 120 } },
         { deviceType: 'switch', vendor: 'mikrotik', name: 'WSW', seed: 'wsw', position: { x: 300, y: 300 } },
-        { deviceType: 'pc', vendor: 'linux', name: 'WPC', seed: 'wpc', position: { x: 300, y: 460 } },
+        { deviceType: 'wireless', vendor: 'mikrotik', name: 'WPC', seed: 'wpc', position: { x: 300, y: 460 } },
       ],
       links: [
         { a: 'AP1', b: 'WSW', seed: 'lw1' },
         { a: 'AP2', b: 'WSW', seed: 'lw2' },
         { a: 'WSW', b: 'WPC', seed: 'lwpc' },
+        { a: 'AP1', b: 'WPC', seed: 'lwair' },
       ],
     },
     setupCommands: {
@@ -511,14 +512,21 @@ const TEMPLATES: Record<LabTemplateId, LabTemplate> = {
         '/interface wireless set wlan1 mode=ap-bridge ssid=NetLabLab band=2ghz-b/g/n',
         '/interface wireless security-profiles set default mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key=netlab123',
         '/interface wireless set wlan1 security-profile=default',
+        '/ip address add address=192.168.88.1/24 interface=wlan1',
       ],
       AP2: [
         '/interface wireless set wlan1 mode=ap-bridge ssid=NetLabLab band=2ghz-b/g/n',
         '/interface wireless security-profiles set default mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key=netlab123',
         '/interface wireless set wlan1 security-profile=default',
+        '/ip address add address=192.168.88.2/24 interface=wlan1',
       ],
       WSW: [],
-      WPC: [],
+      WPC: [
+        '/interface wireless set wlan1 mode=station ssid=NetLabLab band=2ghz-b/g/n',
+        '/interface wireless security-profiles set default mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key=netlab123',
+        '/interface wireless set wlan1 security-profile=default',
+        '/ip address add address=192.168.88.100/24 interface=wlan1',
+      ],
     },
     tasks: [
       { title: 'AP mode', detail: 'AP1 & AP2 sebagai ap-bridge dengan SSID NetLabLab (WPA2).' },

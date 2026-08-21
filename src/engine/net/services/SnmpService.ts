@@ -61,7 +61,7 @@ export function buildMib(dev: NetworkDevice, now: number): Map<string, MibEntry>
   let idx = 1;
   for (const iface of dev.getInterfaces()) {
     const i = idx++;
-    const c = dev.ifaceCounters.get(iface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0 };
+    const c = dev.ifaceCounters.get(iface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0, inErrors: 0, outErrors: 0 };
     mib.set(`${IF}.1.${i}`, { value: String(i), type: TYPE_INTEGER });
     mib.set(`${IF}.2.${i}`, { value: iface.name, type: TYPE_STRING });
     mib.set(`${IF}.3.${i}`, { value: '6', type: TYPE_INTEGER });

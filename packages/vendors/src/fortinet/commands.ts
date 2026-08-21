@@ -2,7 +2,7 @@
 import type { CommandResult, ChainEntry, ChainEnv, FortiPolicyDraft } from '../common/types';
 import { registerEntries } from '../common/chain';
 
-import { resolveIfaceName, cidrOf, networkOfMask } from '../common/ip';
+import { resolveIfaceName, cidrOf, networkOfMask, bitsToMask } from '../common/ip';
 import { grantDhcpClient, upsertSubinterface } from '../common/state';
 import type { NodeMemory, VendorContext } from '../common/types';
 
@@ -205,13 +205,13 @@ export function fortinetCommand(raw: string, context: VendorContext, mem: NodeMe
       m = t.match(/^set\s+start-ip\s+(\S+)/i);
       if (m) {
         pool.startIp = m[1];
-        finalizeFortiPool(pool);
+        finalizeFortiPool(pool, mem);
         return { raw: '' };
       }
       m = t.match(/^set\s+end-ip\s+(\S+)/i);
       if (m) {
         pool.endIp = m[1];
-        finalizeFortiPool(pool);
+        finalizeFortiPool(pool, mem);
         return { raw: '' };
       }
     }
@@ -454,7 +454,11 @@ export function fortinetCommand(raw: string, context: VendorContext, mem: NodeMe
   if (top === 'iface') {
     let m = t.match(/^set\s+vlanid\s+(\d+)/i);
     if (m) {
-      mem.fortiPendingVlan = parseInt(m[1], 10);
+      const v = parseInt(m[1], 10);
+      if (!(v >= 1 && v <= 4094)) {
+        return { raw: '% Error: VLAN ID must be in range 1..4094.' };
+      }
+      mem.fortiPendingVlan = v;
       return { raw: '' };
     }
     m = t.match(/^set\s+interface\s+(\S+)/i);
@@ -495,12 +499,19 @@ export function fortinetCommand(raw: string, context: VendorContext, mem: NodeMe
   return undefined;
 }
 
-export function finalizeFortiPool(pool: NodeMemory['dhcpPools'][number]): void {
+export function finalizeFortiPool(pool: NodeMemory['dhcpPools'][number], mem: NodeMemory): void {
   if (pool.startIp && pool.endIp) {
     pool.range = `${String(pool.startIp)}-${String(pool.endIp)}`;
-    const mask = pool.netmask || '255.255.255.0';
-    const net = networkOfMask(pool.startIp, mask);
-    if (net) pool.network = net;
+    // network = subnet NYATA dari IP interface (bukan tebakan dari range
+    // start — salah untuk subnet non-/24). Tanpa IP interface, network
+    // dibiarkan kosong (jujur), tidak dikarang.
+    const ifaceIp = pool.iface ? (mem.configuredIps || {})[pool.iface] : undefined;
+    const parts = ifaceIp ? String(ifaceIp).split(/[\s/]+/) : [];
+    if (parts.length >= 2) {
+      const mask = parts[1].includes('.') ? parts[1] : bitsToMask(Number(parts[1]));
+      const net = networkOfMask(parts[0], mask);
+      if (net) pool.network = net;
+    }
   }
 }
 

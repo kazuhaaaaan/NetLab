@@ -20,6 +20,8 @@ export type CapabilityKey =
   | 'dhcp'
   | 'nat'
   | 'ospf'
+  | 'rip'
+  | 'eigrp'
   | 'bgp'
   | 'vrrp'
   | 'staticRoute'
@@ -41,12 +43,30 @@ export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
   dhcp: 'DHCP',
   nat: 'NAT',
   ospf: 'OSPF',
+  rip: 'RIP',
+  eigrp: 'EIGRP',
   bgp: 'BGP',
   vrrp: 'VRRP/FHRP',
   staticRoute: 'Static Route',
   firewall: 'Firewall/ACL',
   dns: 'DNS',
   commit: 'Commit/Rollback',
+};
+
+/** Nama tampilan vendor — dipakai UI dan pesan error capability guard. */
+export const VENDOR_NAMES: Record<string, string> = {
+  mikrotik: 'MikroTik RouterOS',
+  cisco_ios: 'Cisco IOS',
+  cisco_nxos: 'Cisco NX-OS',
+  juniper: 'Juniper Junos',
+  huawei: 'Huawei VRP',
+  ubiquiti: 'Ubiquiti EdgeOS',
+  vyos: 'VyOS',
+  fortinet: 'Fortinet FortiOS',
+  aruba: 'Aruba AOS-CX',
+  openwrt: 'OpenWrt (UCI)',
+  linux: 'Linux / Debian',
+  windows: 'Windows 11',
 };
 
 const S = 'supported' as const;
@@ -58,25 +78,25 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   mikrotik: {
     vendorId: 'mikrotik',
     caps: {
-      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: P,
-      staticRoute: S, firewall: S, dns: S, commit: NS,
+      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      bgp: S, vrrp: P, staticRoute: S, firewall: S, dns: S, commit: NS,
     },
     notes: 'RouterOS v7. Konfigurasi tereksekusi langsung tanpa mode commit. VRRP hanya print/parser — belum teruji konfigurasi.',
   },
   cisco_ios: {
     vendorId: 'cisco_ios',
     caps: {
-      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, bgp: S, vrrp: S,
-      staticRoute: S, firewall: P, dns: S, commit: NS,
+      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, rip: S, eigrp: S,
+      bgp: S, vrrp: S, staticRoute: S, firewall: P, dns: S, commit: S,
     },
     notes:
-      'NAT masquerade & VRRP teruji end-to-end; dstnat Cisco & ACL teruji di level memori (parser-only menuju engine).',
+      'NAT masquerade & VRRP teruji end-to-end; dstnat Cisco & ACL teruji di level memori (parser-only menuju engine). write memory / copy run start menyimpan snapshot startup-config; reload memulihkannya (teruji round-trip).',
   },
   cisco_nxos: {
     vendorId: 'cisco_nxos',
     caps: {
-      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, bgp: S, vrrp: P,
-      staticRoute: S, firewall: P, dns: S, commit: NS,
+      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, rip: S, eigrp: S,
+      bgp: S, vrrp: P, staticRoute: S, firewall: P, dns: S, commit: NS,
     },
     notes:
       'NAT & ACL NX-OS teruji di level memori; integrasi engine mengikuti model Cisco. VRRP NX-OS belum teruji.',
@@ -84,8 +104,8 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   juniper: {
     vendorId: 'juniper',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: NS,
-      staticRoute: S, firewall: S, dns: S, commit: S,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes:
       'commit/rollback/rollback 0 nyata (snapshot state). VRRP Junos belum diimplementasikan.',
@@ -93,48 +113,48 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   huawei: {
     vendorId: 'huawei',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: NS,
-      staticRoute: S, firewall: S, dns: S, commit: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
-    notes: 'VRP v8. VRRP dan IPv6-level-2 Huawei belum teruji end-to-end.',
+    notes: 'VRP v8. save menyimpan snapshot startup-config; reboot memulihkannya. VRRP dan IPv6-level-2 Huawei belum teruji end-to-end.',
   },
   ubiquiti: {
     vendorId: 'ubiquiti',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: NS,
-      staticRoute: S, firewall: S, dns: S, commit: P,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: P,
     },
     notes: 'EdgeOS: model set/commit sederhana tanpa snapshot rollback.',
   },
   vyos: {
     vendorId: 'vyos',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: NS,
-      staticRoute: S, firewall: S, dns: S, commit: P,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: P,
     },
     notes: 'VyOS: model set/commit sederhana tanpa snapshot rollback.',
   },
   fortinet: {
     vendorId: 'fortinet',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, bgp: S, vrrp: NS,
-      staticRoute: S, firewall: S, dns: S, commit: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: NS, eigrp: NS,
+      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: NS,
     },
     notes: 'FortiOS: NAT via policy & VIP teruji. VRRP FortiOS tidak diimplementasikan (CLI menjawab jujur).',
   },
   aruba: {
     vendorId: 'aruba',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: NS, ospf: S, bgp: P, vrrp: NS,
-      staticRoute: S, firewall: P, dns: S, commit: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: NS, ospf: S, rip: NS, eigrp: NS,
+      bgp: P, vrrp: NS, staticRoute: S, firewall: P, dns: S, commit: S,
     },
-    notes: 'AOS-CX: NAT & BGP belum diimplementasikan (tidak ada klaim sukses palsu).',
+    notes: 'AOS-CX: NAT, RIP, EIGRP & VRRP belum diimplementasikan (tidak ada klaim sukses palsu). write memory menyimpan snapshot startup-config; reload memulihkannya.',
   },
   openwrt: {
     vendorId: 'openwrt',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: NS, bgp: NS, vrrp: NS,
-      staticRoute: S, firewall: S, dns: S, commit: S,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: NS, rip: NS, eigrp: NS,
+      bgp: NS, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes:
       'UCI commit nyata. OSPF OpenWrt (bird/zebra) tidak disimulasikan; CLI menjawab jujur. BGP tidak didukung.',
@@ -142,8 +162,8 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   linux: {
     vendorId: 'linux',
     caps: {
-      ipv4: S, ipv6: P, vlan: P, dhcp: S, nat: S, ospf: NS, bgp: NS, vrrp: NS,
-      staticRoute: S, firewall: P, dns: S, commit: NS,
+      ipv4: S, ipv6: P, vlan: P, dhcp: S, nat: S, ospf: NS, rip: NS, eigrp: NS,
+      bgp: NS, vrrp: NS, staticRoute: S, firewall: P, dns: S, commit: NS,
     },
     notes:
       'Linux host: tidak menjalankan protokol routing dinamis (OSPF/BGP) di simulator ini.',
@@ -151,8 +171,8 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   windows: {
     vendorId: 'windows',
     caps: {
-      ipv4: P, ipv6: NS, vlan: NS, dhcp: P, nat: NS, ospf: NS, bgp: NS, vrrp: NS,
-      staticRoute: P, firewall: NS, dns: P, commit: NS,
+      ipv4: P, ipv6: NS, vlan: NS, dhcp: P, nat: NS, ospf: NS, rip: NS, eigrp: NS,
+      bgp: NS, vrrp: NS, staticRoute: P, firewall: NS, dns: P, commit: NS,
     },
     notes:
       'Windows 11 client (GUI Simulator): IP/DNS/rute dikonfigurasi via GUI + lease DHCP (teruji end-to-end), CLI jujur read-only (ipconfig/nslookup/curl). Tidak ada routing dinamis / NAT / VLAN tagging.',

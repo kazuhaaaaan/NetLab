@@ -49,13 +49,32 @@ export function findServingPool(server: NetworkDevice, ifaceOrPort: string): Dhc
 export function allocateIp(
   server: NetworkDevice,
   pool: DhcpPool,
-  usedIps: Set<string>
+  usedIps: Set<string>,
+  clientMac?: string
 ): { ip: string; prefix: number; gateway: string } | null {
   const serverIface = pool.iface ? server.getIfaceByName(pool.iface) : null;
   // Prefix dari pool.network, fallback prefix interface server, terakhir /24.
   const poolPrefix = pool.network ? parseCidr(pool.network)?.prefix : undefined;
   const prefix = poolPrefix ?? serverIface?.ip?.prefix ?? 24;
   const gateway = pool.gateway || serverIface?.ip?.address || '';
+
+  const reservations = pool.reservations || [];
+  const reservedIps = reservations.map((r) => r.ip);
+  const matchingReservation = clientMac
+    ? reservations.find((r) => normalizeMac(r.mac) === normalizeMac(clientMac))
+    : undefined;
+
+  // 1) Klien punya reservasi → IP tetap, tidak boleh diberikan ke siapa pun.
+  if (matchingReservation) {
+    const ip = matchingReservation.ip;
+    if (ip !== gateway && !usedIps.has(ip) && !isExcluded(pool, ip)) {
+      return { ip, prefix, gateway };
+    }
+    return null;
+  }
+
+  // 2) Alokasi dinamis: IP milik reservasi lain tidak boleh dilease.
+  const skip = (ip: string) => isExcluded(pool, ip) || reservedIps.includes(ip);
 
   if (pool.range) {
     const m = pool.range.match(/(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)/);
@@ -64,13 +83,13 @@ export function allocateIp(
       const end = ipToInt(m[2]);
       for (let n = start; n <= end; n++) {
         const ip = intToIp(n);
-        if (ip === gateway || usedIps.has(ip) || isExcluded(pool, ip)) continue;
+        if (ip === gateway || usedIps.has(ip) || skip(ip)) continue;
         return { ip, prefix, gateway };
       }
       return null;
     }
     const single = pool.range.trim();
-    if (single !== gateway && !usedIps.has(single) && !isExcluded(pool, single)) {
+    if (single !== gateway && !usedIps.has(single) && !skip(single)) {
       return { ip: single, prefix, gateway };
     }
     return null;
@@ -94,13 +113,18 @@ export function allocateIp(
     const last = hostBits === 1 ? 1 : 2 ** hostBits - 2;
     for (let n = base + first; n <= base + last; n++) {
       const ip = intToIp(n);
-      if (ip === gw || usedIps.has(ip) || isExcluded(pool, ip)) continue;
+      if (ip === gw || usedIps.has(ip) || skip(ip)) continue;
       return { ip, prefix: parsed.prefix, gateway: gw };
     }
     return null;
   }
 
   return null;
+}
+
+/** Normalisasi MAC (aabb.ccdd.eeff / aa:bb:cc:dd:ee:ff / aabbccddeeff) → 12 hex kecil. */
+export function normalizeMac(mac: string): string {
+  return mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
 }
 
 /** true bila alamat masuk daftar excluded pool (Cisco excluded-address). */

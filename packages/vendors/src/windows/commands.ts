@@ -66,7 +66,7 @@ export const windowsEntries: ChainEntry[] = [
           const up = p.linkConnected !== false && p.linkDown !== true;
           rows.push(
             `Koneksi Ethernet Adapter ${name}:`,
-            `   Status Media. . . . . . . : ${up ? 'Media terputus' : 'Media terputus'}`,
+            `   Status Media. . . . . . . : ${up ? 'Media tersambung' : 'Media terputus'}`,
             `   Alamat Fisik. . . . . . . : ${mac}`,
             ...(ip
               ? [
@@ -83,8 +83,11 @@ export const windowsEntries: ChainEntry[] = [
             (all ? 'Konfigurasi IP Windows\r\n\r\n' : '') + rows.join('\r\n') + `\r\nServer DNS. . . . . . . . . : ${(mem.dnsServers || []).join(', ') || '(tidak ada)'}`,
         };
       } else if (action === 'ping') {
-        const host = input.replace(/^ping\s+/i, '').split(/\s+/)[0] || '';
-        cmdResult = { raw: context?.pingSimulator ? context.pingSimulator(host, WIN) : `% Tidak dapat menemukan host ${host}. Periksa ejaan dan coba lagi.` };
+        const tokens = input.replace(/^ping\s+/i, '').split(/\s+/).filter((t) => t && !t.startsWith('-'));
+        const host = tokens[tokens.length - 1] || '';
+        const sizeM = input.match(/-l\s+(\d+)/i);
+        const size = sizeM ? Math.min(65500, Math.max(1, parseInt(sizeM[1], 10))) : undefined;
+        cmdResult = { raw: context?.pingSimulator ? context.pingSimulator(host, WIN, size) : `% Tidak dapat menemukan host ${host}. Periksa ejaan dan coba lagi.` };
       } else if (action === 'nslookup') {
         const host = input.replace(/^nslookup\s+/i, '').split(/\s+/)[0] || '';
         if (!context?.dnsResolver) cmdResult = { raw: '*** dns resolver tidak tersedia' };
@@ -107,7 +110,7 @@ export const windowsEntries: ChainEntry[] = [
           target = m[1];
           if (m[2]) port = Number(m[2]);
         }
-        cmdResult = { raw: context?.connectivitySimulator ? context.connectivitySimulator(target, WIN, port) : `curl: tidak ada simulator` };
+        cmdResult = { type: 'http_get', host: target, port };
       } else if (action === 'arp') {
         // arp -a: tabel ARP nyata dari engine (state perangkat, bukan teks palsu).
         const entries = (context?.arpProvider ? context.arpProvider() : []) as Array<{ ip?: string; mac?: string }>;

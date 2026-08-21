@@ -62,10 +62,12 @@ export interface RunCliCommandOptions {
 export interface RunCliCommandResult {
   /** Output vendor-autentik dari engine nyata. */
   output: string;
-  /** Hasil klasifikasi (parsed) perintah. */
+  /** Hasil klasifikasi (parsed) perintah (dari input yang DIEXPAND, bila ada). */
   command: CommandObject;
   /** Apakah perintah memutasi cermin DeviceState. */
   changed: boolean;
+  /** Perintah yang benar-benar dikirim ke engine (hasil ekspansi abbreviation). */
+  dispatched: string;
 }
 
 /**
@@ -76,25 +78,30 @@ export interface RunCliCommandResult {
  *   dispatch → state tidak berubah;
  * - input unik & disingkat → perintah kanonis yang dikirim ke engine;
  * - selainnya → input apa adanya (perilaku lama dipertahankan).
+ *
+ * Cermin DeviceState dan hasil parse SELALU dihitung dari perintah yang sama
+ * dengan yang dikirim ke engine (`dispatched`), sehingga klasifikasi tidak
+ * pernah berbeda dengan eksekusi nyata.
  */
 export function runCliCommand(opts: RunCliCommandOptions): RunCliCommandResult {
-  const command = parseCommand(opts.cmd, opts.vendor);
-
   const tv = treeVendor(opts.vendor);
-  let dispatchInput = opts.cmd;
+  let dispatched = opts.cmd;
   if (tv) {
     const resolution = resolveAbbreviation(tv, opts.mode || 'exec', opts.cmd);
     if (resolution.kind === 'ambiguous') {
       return {
         output: abbreviationError(tv, resolution.input, resolution.candidates),
-        command,
+        command: parseCommand(opts.cmd, opts.vendor),
         changed: false,
+        dispatched: opts.cmd,
       };
     }
     if (resolution.kind === 'expanded' && resolution.command !== opts.cmd.trim()) {
-      dispatchInput = resolution.command;
+      dispatched = resolution.command;
     }
   }
+
+  const command = parseCommand(dispatched, opts.vendor);
 
   let changed = false;
   if (opts.currentDevice) {
@@ -108,6 +115,44 @@ export function runCliCommand(opts: RunCliCommandOptions): RunCliCommandResult {
     if (next && changed && opts.onStateChange) opts.onStateChange(next);
   }
 
-  const output = opts.bridge.dispatch(opts.vendor, dispatchInput, opts.context);
-  return { output, command, changed };
+  const output = opts.bridge.dispatch(opts.vendor, dispatched, opts.context);
+  return { output, command, changed, dispatched };
+}
+
+/**
+ * Deteksi kegagalan perintah dari output vendor-autentik (murni).
+ *
+ * Semua jalur error engine mengikuti konvensi penanda ini:
+ * - Cisco/Aruba/NX-OS/Huawei/MikroTik/VyOS/Ubiquiti/Fortinet: '% …' / '% Error'
+ * - RouterOS: 'bad command name …'
+ * - Juniper: 'error: …' / 'syntax error'
+ * - Linux/OpenWrt: 'bash: …: command not found'
+ * - Capability guard: 'not supported' / 'not currently simulated'
+ * - Guard IP/interface: 'no such interface', 'Cannot find device', 'Unknown "set" path'
+ * Output sukses (show/print/config) tidak pernah memuat penanda ini.
+ */
+export function isCliFailure(output: string): boolean {
+  const t = output.trim();
+  if (!t) return false;
+  const lo = t.toLowerCase();
+  return (
+    t.startsWith('%') ||
+    t.startsWith('bad command name') ||
+    t.startsWith('syntax error') ||
+    t.startsWith('failure:') ||
+    lo.startsWith('error:') ||
+    lo.startsWith('bash:') ||
+    lo.includes('command not found') ||
+    lo.includes('not supported') ||
+    lo.includes('not currently simulated') ||
+    lo.includes('no such interface') ||
+    lo.includes('cannot find device') ||
+    lo.includes('unknown "set" path') ||
+    lo.includes('unknown command') ||
+    lo.includes('no such option') ||
+    lo.includes('does not exist') ||
+    lo.includes('must be') ||
+    lo.includes('only berlaku') ||
+    lo.includes('enter interface')
+  );
 }

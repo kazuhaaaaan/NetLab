@@ -3,7 +3,7 @@ import { CLIParser } from '../../../cli/src/index';
 import type { NormalizedCommand } from '../../../cli/src/index';
 import type { CommandResult, VendorAdapter as _IV } from '../common/types';
 
-import { isPrefix } from '../common/ip';
+import { isPrefix, bitsToMask } from '../common/ip';
 import { portOperational } from '../common/state';
 import { formatExtended } from '../common/format';
 
@@ -96,7 +96,7 @@ export class LinuxDebianVendorAdapter implements _IV {
     }
     if (cmdResult.type === 'ip_route' || cmdResult.type === 'show_ip_route') {
       const routes = (cmdResult.routes || []) as Array<Record<string, unknown>>;
-      if (routes.length === 0) return 'default via 192.168.1.1 dev eth0 proto static metric 100\n192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10';
+      if (routes.length === 0) return '-- routing table kosong (tidak ada rute terkonfigurasi) --';
       return routes.map((r) => {
         const dst = r.dst === '0.0.0.0/0' || r.dst === 'default' ? 'default' : r.dst;
         const proto = r.kind === 'connected' ? 'kernel scope link' : 'static';
@@ -132,25 +132,25 @@ export class LinuxDebianVendorAdapter implements _IV {
       return header + '\n' + rows.join('\n');
     }
     if (cmdResult.type === 'traceroute') {
-      const host = cmdResult.host || '8.8.8.8';
-      return [
-        `traceroute to ${String(host)} (${String(host)}), 30 hops max, 60 byte packets`,
-        ` 1  192.168.1.1 (192.168.1.1)  0.312 ms  0.289 ms  0.301 ms`,
-        ` 2  10.0.0.1 (10.0.0.1)  1.412 ms  1.389 ms  1.401 ms`,
-        ` 3  ${String(host)} (${String(host)})  2.001 ms  1.998 ms  2.012 ms`,
-      ].join('\n');
+      const host = cmdResult.host || '';
+      return `traceroute to ${String(host)}: simulation engine not available in this context. Use the NetLab ping panel.`;
     }
     if (cmdResult.type === 'nslookup') {
       if (cmdResult.timedOut || !cmdResult.resolved) {
         return cmdResult.nxdomain
           ? `;; server can't find ${String(cmdResult.host)}: NXDOMAIN`
-          : ';; connection timed out; no servers could be reached';
+          : cmdResult.server
+            ? `;; connection timed out; no servers could be reached (server ${String(cmdResult.server)})`
+            : ';; connection timed out; no servers could be reached';
       }
-      const host = cmdResult.host || 'google.com';
-      return `Server:\t\t${String(cmdResult.server || '8.8.8.8')}\nAddress:\t${String(cmdResult.server || '8.8.8.8')}#53\n\nNon-authoritative answer:\nName:\t${String(host)}\nAddress: ${String(cmdResult.resolved)}`;
+      const host = cmdResult.host || '';
+      const server = cmdResult.server ? String(cmdResult.server) : '';
+      const head = server ? `Server:\t\t${server}\nAddress:\t${server}#53\n\n` : '';
+      return `${head}Non-authoritative answer:\nName:\t${host}\nAddress: ${String(cmdResult.resolved)}`;
     }
     if (cmdResult.type === 'http_get') {
-      return 'HTTP/1.1 200 OK\nContent-Type: text/html; charset=utf-8\nServer: nginx/1.22.1\n\n<!DOCTYPE html><html><head><title>OK</title></head><body>Connection OK</body></html>';
+      const host = cmdResult.host || '';
+      return `GET http://${host}: connectivity simulation not available in this context.`;
     }
     if (cmdResult.type === 'systemctl') {
       return `\u25CF nginx.service - A high performance web server\n   Loaded: loaded (/lib/systemd/system/nginx.service; enabled; vendor preset: enabled)\n   Active: active (running) since Tue 2024-03-07 10:00:00 UTC; 14 days ago\n Main PID: 890 (nginx)\n   Memory: 4.0M\n   CGroup: /system.slice/nginx.service\n           \u251C\u2500890 nginx: master process /usr/sbin/nginx\n           \u2514\u2500891 nginx: worker process`;
@@ -159,17 +159,8 @@ export class LinuxDebianVendorAdapter implements _IV {
       return 'Reading package lists... Done\nBuilding dependency tree... Done\nReading state information... Done\nAll packages are up to date.';
     }
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '8.8.8.8';
-      return [
-        `PING ${String(host)} (${String(host)}) 56(84) bytes of data.`,
-        `64 bytes from ${String(host)}: icmp_seq=1 ttl=64 time=0.412 ms`,
-        `64 bytes from ${String(host)}: icmp_seq=2 ttl=64 time=0.389 ms`,
-        `64 bytes from ${String(host)}: icmp_seq=3 ttl=64 time=0.401 ms`,
-        ``,
-        `--- ${String(host)} ping statistics ---`,
-        `3 packets transmitted, 3 received, 0% packet loss, time 2003ms`,
-        `rtt min/avg/max/mdev = 0.389/0.400/0.412/0.010 ms`,
-      ].join('\n');
+      const host = cmdResult.host || '';
+      return `ping to ${host}: simulation engine not available in this context. Use the NetLab ping panel.`;
     }
     if (cmdResult.type === 'hostname') return 'debian-server';
     if (cmdResult.type === 'uname') return 'Linux debian-server 6.1.0-21-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.90-1 (2024-05-03) x86_64 GNU/Linux';
@@ -218,10 +209,32 @@ export class LinuxDebianVendorAdapter implements _IV {
     if (cmdResult.type === 'ls') return 'bin  boot  dev  etc  home  lib  lib64  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var';
     if (cmdResult.type === 'cat_file') {
       const path = String(cmdResult.path || '').trim();
-      if (path.includes('/etc/hostname')) return 'debian-server';
-      if (path.includes('/etc/resolv.conf')) return 'nameserver 8.8.8.8\nnameserver 1.1.1.1\nsearch localdomain';
-      if (path.includes('/etc/hosts')) return '127.0.0.1\tlocalhost\n127.0.1.1\tdebian-server\n::1\t\tlocalhost ip6-localhost ip6-loopback';
-      if (path.includes('/etc/network/interfaces')) return '# /etc/network/interfaces\nauto lo\niface lo inet loopback\n\nauto eth0\niface eth0 inet static\n\taddress 192.168.1.10\n\tnetmask 255.255.255.0\n\tgateway 192.168.1.1\n\tdns-nameservers 8.8.8.8 1.1.1.1';
+      const info = (cmdResult.info || {}) as Record<string, unknown>;
+      const ips = (info.configuredIps || {}) as Record<string, string>;
+      const routes = (info.routes || []) as Array<Record<string, unknown>>;
+      const dns = (info.dnsServers || []) as string[];
+      const hosts = (info.dnsRecords || []) as Array<{ name?: string; address?: string }>;
+      if (path.includes('/etc/hostname')) return String(info.hostname || 'debian-server');
+      if (path.includes('/etc/resolv.conf')) return dns.length > 0 ? dns.map((s) => `nameserver ${String(s)}`).join('\n') : '# empty (no DNS servers configured)';
+      if (path.includes('/etc/hosts')) {
+        const lines = ['127.0.0.1\tlocalhost', String(info.hostname || 'debian-server') ? `127.0.1.1\t${String(info.hostname || 'debian-server')}` : ''].filter(Boolean);
+        for (const h of hosts) if (h.name && h.address) lines.push(`${String(h.address)}\t${String(h.name)}`);
+        return lines.join('\n');
+      }
+      if (path.includes('/etc/network/interfaces')) {
+        const lines = ['# /etc/network/interfaces', 'auto lo', 'iface lo inet loopback', ''];
+        for (const [iface, cidr] of Object.entries(ips)) {
+          const [ip, prefix] = String(cidr).split('/');
+          const mask = prefix ? bitsToMask(parseInt(prefix, 10)) : '255.255.255.0';
+          lines.push(`auto ${String(iface)}`, `iface ${String(iface)} inet static`, `\taddress ${String(ip)}`, `\tnetmask ${mask}`);
+          const gw = routes.find((r) => r.dst === '0.0.0.0/0' || r.dst === 'default');
+          if (gw?.gateway) lines.push(`\tgateway ${String(gw.gateway)}`);
+          if (dns.length > 0) lines.push(`\tdns-nameservers ${dns.join(' ')}`);
+          lines.push('');
+        }
+        if (lines.length === 4) lines.push('# (belum ada interface terkonfigurasi)');
+        return lines.join('\n');
+      }
       if (path.includes('/etc/debian_version')) return 'bookworm/sid';
       return `cat: ${String(path)}: No such file or directory`;
     }

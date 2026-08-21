@@ -297,8 +297,8 @@ const matrix: VendorMatrix = {
     { name: 'Web server', cmds: ['echo "Hi" > /var/www/html/index.html'], check: (m) => m.webServer?.content === 'Hi' },
     {
       name: 'DHCP server (uci dhcp)',
-      cmds: ['uci set dhcp.lan=dhcp', 'uci set dhcp.lan.interface=lan', 'uci set dhcp.lan.start=100', 'uci set dhcp.lan.limit=100', 'uci commit dhcp'],
-      check: (m) => m.dhcpPools.length === 1 && m.dhcpPools[0].name === 'lan' && m.dhcpPools[0].range === '192.168.1.100-192.168.1.199' && m.dhcpPools[0].iface === 'lan',
+      cmds: ['uci set network.lan.ipaddr=192.168.1.1', 'uci set network.lan.netmask=255.255.255.0', 'uci set network.lan.proto=static', 'uci commit network', 'uci set dhcp.lan=dhcp', 'uci set dhcp.lan.interface=lan', 'uci set dhcp.lan.start=100', 'uci set dhcp.lan.limit=100', 'uci commit dhcp'],
+      check: (m) => m.dhcpPools.length === 1 && m.dhcpPools[0].name === 'lan' && m.dhcpPools[0].range === '192.168.1.100-192.168.1.199' && m.dhcpPools[0].iface === 'lan' && m.dhcpPools[0].network === '192.168.1.0/24',
     },
     {
       name: 'NAT masquerade (uci firewall)',

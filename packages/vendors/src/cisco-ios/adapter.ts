@@ -135,12 +135,11 @@ export class CiscoVendorAdapter implements _IV {
         : '*Mar  1 00:00:05.999: %SYS-5-RELOAD: Reload requested by console.\nReloading...\n[OK]\nNo startup-configuration present. Device started with default configuration.';
     }
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '10.0.0.1';
+      const host = cmdResult.host || '';
       return [
         `Type escape sequence to abort.`,
         `Sending 5, 100-byte ICMP Echos to ${String(host)}, timeout is 2 seconds:`,
-        `!!!!!`,
-        `Success rate is 100 percent (5/5), round-trip min/avg/max = 1/1/2 ms`,
+        `simulation engine not available in this context. Use the NetLab ping panel.`,
       ].join('\n');
     }
     if (cmdResult.type === 'show_bgp_summary') {

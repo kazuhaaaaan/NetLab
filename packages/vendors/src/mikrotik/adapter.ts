@@ -207,7 +207,7 @@ export class MikroTikVendorAdapter implements _IV {
     if (cmdResult.type === 'ping') {
       // Tanpa engine simulator, jangan pura-pura sukses (no fake success).
       // Host app selalu menyuplai context.pingSimulator; fallback ini jujur.
-      const host = cmdResult.target || '192.168.88.1';
+      const host = cmdResult.target || '';
       return [
         `  SEQ HOST                                     SIZE TTL TIME  STATUS`,
         `    ping to ${String(host)}: simulation engine not available in this context — use NetLab ping panel.`,

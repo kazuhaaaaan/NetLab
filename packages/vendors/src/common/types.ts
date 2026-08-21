@@ -1,4 +1,5 @@
 import type { NormalizedCommand, ASTNode } from '../../../cli/src/index';
+import type { CapabilityKey } from '../capabilities';
 export type { ASTNode } from '../../../cli/src/index';
 
 // ============================================================
@@ -45,6 +46,7 @@ export interface CommandResult {
   type?: string;
   host?: string;
   target?: string;
+  size?: number;
   port?: number;
   ports?: unknown[];
   ifaces?: unknown[];
@@ -116,6 +118,9 @@ export interface ChainEntry {
   name: string;
   order: number;
   vendors: 'all' | VendorId[];
+  /** Kapabilitas yang diproteksi entry ini — diblokir bila vendor berstatus
+   *  'not-supported' / 'parser-only' di capabilities.ts (sebelum run()). */
+  cap?: CapabilityKey;
   match(env: ChainEnv): boolean;
   run(env: ChainEnv): CommandResult | undefined;
 }
@@ -126,7 +131,7 @@ export interface VendorContext {
   name?: string;
   ports?: Array<Record<string, unknown>>;
   portLinks?: Record<string, boolean | string> | Array<Record<string, unknown>>;
-  pingSimulator?: (host: string, vendorId: string) => string;
+  pingSimulator?: (host: string, vendorId: string, size?: number) => string;
   tracerouteSimulator?: (host: string, vendorId: string) => string;
   connectivitySimulator?: (host: string, vendorId: string, port?: number) => string;
   dnsResolver?: (host: string) => { server?: string; resolved?: string | boolean | null; timedOut?: boolean; nxdomain?: boolean; [k: string]: unknown };
@@ -368,6 +373,8 @@ export interface NodeMemory {
   dhcpPools: DhcpPool[];
   dhcpClients: DhcpClient[];
   dhcpExcluded?: string[];
+  /** Reservasi statis MAC → IP (fixed-address), mis. /ip dhcp-server lease add. */
+  dhcpReservations?: { mac: string; ip: string }[];
   natRules: NatRule[];
   acls: AclRule[];
   portVlans: Record<string, number>;
@@ -419,6 +426,8 @@ export interface NodeMemory {
   juniperDstPool: Record<string, unknown>;
   uciPending: Record<string, string>;
   uciRedirects: Record<string, Record<string, string>>;
+  /** OpenWrt: blok host dnsmasq (uci set dhcp.hostN=host + .mac/.ip). */
+  uciHosts?: Record<string, Record<string, string>>;
   ifaceSettings: Record<string, unknown>;
   juniperFilters: Record<string, unknown>;
   fortiAddrName: string;

@@ -129,19 +129,18 @@ export class SimulationCore {
     // fisik induk subinterface VLAN.
     const physIface = device.getIfaceByPortId(portId) || device.getIfaceByName(portId) || iface;
     if (!physIface || !physIface.up) {
+      this.countEgressError(device, portId);
       this.drop(device, pkt, 'iface-down', traceId);
       return false;
     }
     // Keluar lewat subinterface (VLAN) → tandai tag agar switch meneruskannya ke VLAN yang benar.
     if (iface && iface.type === 'vlan' && iface.vlanId) pkt.vlan = iface.vlanId;
-    const neighbor = this.ctx.topology.links.neighborOf(device.id, portId);
-    if (!neighbor) return false;
-    // Link dimatikan (failure injection) → frame hilang di kabel.
-    const link = this.ctx.topology.links.linkById(neighbor.linkId);
-    if (link?.down) return false;
-    // Perangkat tujuan mati = link down: frame hilang di kabel tanpa
-    // menggagalkan run (fisiknya memang tidak sampai ke perangkat).
-    if (!this.configStore.isNodePowered(neighbor.nodeId)) return false;
+    // Segment hub: sebuah port bisa punya BANYAK kabel (dua host + switch
+    // pada kabel yang sama). Frame yang keluar direplikasi ke SEMUA kabel —
+    // host yang MAC-nya tidak cocok menolak frame (l2-filter). Tanpa
+    // replikasi, host di kabel kedua tidak pernah menerima broadcast/unicast.
+    const neighbors = this.ctx.topology.links.neighborsOf(device.id, portId);
+    if (neighbors.length === 0) return false;
 
     // QoS: mangle (mark-packet/change-mss) lalu simple queue (token bucket).
     if (pkt.protocol !== 'arp') {
@@ -151,27 +150,44 @@ export class SimulationCore {
         return false;
       }
     }
-    const delay = transmissionDelay(link, pkt);
 
-    // track lintasan request (dir=req) pada run
-    if (pkt.flags['dir'] === 'req' && pkt.correlationId === traceId) {
-      const run = this.ctx.runs.get(traceId);
-      if (run && run.rootPktId === pkt.id) {
-        if (run.fwdEdges[run.fwdEdges.length - 1] !== neighbor.linkId) run.fwdEdges.push(neighbor.linkId);
+    let sentAny = false;
+    for (const neighbor of neighbors) {
+      // Link dimatikan (failure injection) → frame hilang di kabel.
+      const link = this.ctx.topology.links.linkById(neighbor.linkId);
+      if (link?.down) {
+        this.countEgressError(device, portId);
+        continue;
       }
-    }
-    if (!pkt.edgeIds.includes(neighbor.linkId)) pkt.edgeIds.push(neighbor.linkId);
+      // Perangkat tujuan mati = link down: frame hilang di kabel tanpa
+      // menggagalkan run (fisiknya memang tidak sampai ke perangkat).
+      if (!this.configStore.isNodePowered(neighbor.nodeId)) {
+        this.countEgressError(device, portId);
+        continue;
+      }
+      const delay = transmissionDelay(link, pkt);
 
-    const frame = clonePacket(pkt);
-    this.countEgress(device, portId, pkt);
-    this.ctx.scheduler.schedule(
-      { type: 'PACKET_SEND', traceId, nodeId: neighbor.nodeId, port: neighbor.port, data: { pkt: frame, traceId } },
-      this.ctx.time.now() + delay
-    );
-    this.emit('PACKET_QUEUED', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, delay, outPort }, device.id, outPort);
-    this.emit('PACKET_SEND', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, delay }, device.id, outPort);
-    this.emit('PACKET_TRANSMITTED', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, linkId: neighbor.linkId }, device.id, outPort);
-    return true;
+      // track lintasan request (dir=req) pada run
+      if (pkt.flags['dir'] === 'req' && pkt.correlationId === traceId) {
+        const run = this.ctx.runs.get(traceId);
+        if (run && run.rootPktId === pkt.id) {
+          if (run.fwdEdges[run.fwdEdges.length - 1] !== neighbor.linkId) run.fwdEdges.push(neighbor.linkId);
+        }
+      }
+      if (!pkt.edgeIds.includes(neighbor.linkId)) pkt.edgeIds.push(neighbor.linkId);
+
+      const frame = clonePacket(pkt);
+      this.countEgress(device, portId, pkt);
+      this.ctx.scheduler.schedule(
+        { type: 'PACKET_SEND', traceId, nodeId: neighbor.nodeId, port: neighbor.port, data: { pkt: frame, traceId } },
+        this.ctx.time.now() + delay
+      );
+      this.emit('PACKET_QUEUED', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, delay, outPort }, device.id, outPort);
+      this.emit('PACKET_SEND', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, delay }, device.id, outPort);
+      this.emit('PACKET_TRANSMITTED', traceId, { packetId: pkt.id, to: neighbor.nodeId, port: neighbor.port, linkId: neighbor.linkId }, device.id, outPort);
+      sentAny = true;
+    }
+    return sentAny;
   }
 
   drop(device: NetworkDevice, pkt: Packet, reason: string, traceId: string): void {
@@ -239,9 +255,18 @@ export class SimulationCore {
   private countEgress(device: NetworkDevice, outPort: string, pkt: Packet): void {
     const iface = device.getIfaceByName(outPort) || device.getIfaceByPortId(outPort);
     if (!iface) return;
-    const c = device.ifaceCounters.get(iface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0 };
+    const c = device.ifaceCounters.get(iface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0, inErrors: 0, outErrors: 0 };
     c.outPkts += 1;
     c.outOctets += Math.max(pkt.size, 64);
+    device.ifaceCounters.set(iface.name, c);
+  }
+
+  /** Catat kegagalan kirim pada penghitung interface (outErrors — link mati, port down, QoS drop). */
+  private countEgressError(device: NetworkDevice, outPort: string): void {
+    const iface = device.getIfaceByName(outPort) || device.getIfaceByPortId(outPort);
+    if (!iface) return;
+    const c = device.ifaceCounters.get(iface.name) || { inPkts: 0, outPkts: 0, inOctets: 0, outOctets: 0, inErrors: 0, outErrors: 0 };
+    c.outErrors += 1;
     device.ifaceCounters.set(iface.name, c);
   }
 

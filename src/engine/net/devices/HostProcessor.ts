@@ -110,7 +110,9 @@ export class HostProcessor extends RouterProcessor {
     return true;
   }
 
-  /** Release: host mengirim DHCPRELEASE; server menghapus lease, IP kembali ke pool. */
+  /** Release: host mengirim DHCPRELEASE; server menghapus lease, IP kembali ke pool.
+   *  Klien yang melepas alamat juga meninggalkannya (kembali ke INIT): alamat
+   *  tidak boleh dipertahankan setelah release (RFC 2131 §3.4). */
   startDhcpRelease(traceId: string, core: SimulatorCore, lease: { ip: string }): boolean {
     const dev = this.device;
     const iface = this.pickClientIface();
@@ -130,6 +132,11 @@ export class HostProcessor extends RouterProcessor {
     });
     core.emit('DHCP_RELEASE', traceId, { ip: lease.ip, mac: iface.mac }, dev.id, iface.name);
     core.transmit(dev, rel, iface.name, traceId);
+    if (iface.ip && iface.ip.address === lease.ip) {
+      iface.ip = undefined;
+      dev.leases.delete(iface.name);
+    }
+    dev.dhcpClient = { xid: 0, state: 'init', ifaceName: iface.name };
     return true;
   }
 
@@ -201,6 +208,26 @@ export class HostProcessor extends RouterProcessor {
         run.reason = 'dhcp-bound';
       }
       core.emit('DHCP_ACK', traceId, { ip: p.ip }, dev.id, iface.name);
+      core.drop(dev, pkt, 'dhcp-consumed', traceId);
+      return;
+    }
+
+    // NAK: IP tidak valid (sudah direservasi klien lain / dipakai klien lain).
+    // RFC 2131 §3.2: klien meninggalkan alamat, kembali ke INIT, dan boleh
+    // mencoba DORA lagi — alamat lama TIDAK boleh dipertahankan.
+    if (p.type === 'nak' && state) {
+      const target = dev.getIfaceByName(state.ifaceName || iface.name);
+      if (target) {
+        target.ip = undefined;
+        dev.leases.delete(target.name);
+      }
+      dev.dhcpClient = { xid: 0, state: 'init', ifaceName: state.ifaceName };
+      const run = core.getRun(traceId);
+      if (run && run.status === 'running') {
+        run.status = 'ok';
+        run.reason = 'dhcp-nak';
+      }
+      core.emit('DHCP_NAK', traceId, { ip: p.ip }, dev.id, iface.name);
       core.drop(dev, pkt, 'dhcp-consumed', traceId);
       return;
     }

@@ -8,6 +8,8 @@ const REASON_TEXT: Record<string, string> = {
   ttl: 'time to live exceeded in transit (routing loop or too many hops)',
   self: 'pinging this device itself',
   blocked: 'request rejected by access-list / firewall filter (permit/deny)',
+  'frag-needed': 'fragmentation needed but DF (do-not-fragment) bit set (packet exceeds interface MTU)',
+  power: 'device is powered off',
 };
 
 function errorLines(vendorId: string, host: string, r: PingSimResult): string[] {

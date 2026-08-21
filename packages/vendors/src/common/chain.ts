@@ -1,4 +1,5 @@
 import type { ChainEntry, ChainEnv, CommandResult } from './types';
+import { isCapabilityBlocked, blockedCapabilityResult } from './capability';
 
 // ============================================================
 // Chain registry — pengganti if-else raksasa di dispatch() lama.
@@ -43,6 +44,11 @@ function allSorted(): ChainEntry[] {
 export function runChain(vendorId: string, env: ChainEnv): CommandResult | undefined {
   for (const entry of allSorted()) {
     if (!entry.match(env)) continue;
+    // Capability guard: fitur yang tidak didukung vendor ini dijawab jujur
+    // SEBELUM handler sempat memutasi state (aturan: tidak ada sukses palsu).
+    if (entry.cap && isCapabilityBlocked(vendorId, entry.cap)) {
+      return blockedCapabilityResult(vendorId, entry.cap);
+    }
     const result = entry.run(env);
     if (result !== undefined) return result;
   }

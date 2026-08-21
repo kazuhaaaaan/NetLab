@@ -30,8 +30,8 @@ export function buildCliContext({ node, project, sim }: CliContextInput): Vendor
     name: node.name,
     ports: node.ports.map((p) => ({ ...p })),
     portLinks: portLinksOfNode(node, project.edges),
-    pingSimulator: (host: string, vendorId: string) => {
-      const result = sim.simulatePing(nodeId, host);
+    pingSimulator: (host: string, vendorId: string, size?: number) => {
+      const result = sim.simulatePing(nodeId, host, size);
       return formatPingOutput(vendorId, host, result);
     },
     tracerouteSimulator: (host: string, vendorId: string) => {

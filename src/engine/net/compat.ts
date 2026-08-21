@@ -25,7 +25,7 @@ export interface PingSimResult {
   dhcpGranted?: boolean;
   /** round-trip time (ms) dari latensi kabel di lintasan */
   rttMs?: number;
-  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power' | 'refused' | 'rejected';
+  reason?: 'no-ip' | 'invalid' | 'not-found' | 'unreachable' | 'ttl' | 'self' | 'blocked' | 'power' | 'refused' | 'rejected' | 'frag-needed';
 }
 
 export interface DhcpPoolInfo {
@@ -42,6 +42,8 @@ export interface DhcpPoolInfo {
   leaseTimeMs?: number;
   /** DNS server yang diiklankan ke klien (option 6). */
   dnsServers?: string[];
+  /** Reservasi statis MAC → IP (fixed-address). */
+  reservations?: { mac: string; ip: string }[];
 }
 
 export interface DeviceStatsSnapshot {
@@ -64,6 +66,8 @@ export interface DeviceStatsSnapshot {
      * - 'down': kabel ada tetapi interface tidak aktif
      */
     operational: 'up' | 'down' | 'not-connected' | 'admin-down' | 'link-down';
+    /** penghitung lalu lintas engine (di-reset saat topology disinkronkan) */
+    counters: { inPkts: number; outPkts: number; inOctets: number; outOctets: number; inErrors: number; outErrors: number };
   }[];
   arp: { ip: string; mac: string }[];
   macTable: { mac: string; port: string }[];
@@ -87,6 +91,8 @@ export interface DeviceStatsSnapshot {
   }[];
   /** port-security per interface (switch saja) */
   portSecurity?: Record<string, { limit: number; sticky: boolean; learned: string[] }>;
+  /** pool DHCP server yang aktif di perangkat (termasuk reservasi/excluded). */
+  dhcpPools?: DhcpPoolInfo[];
 }
 
 export interface DhcpLeaseInfo {

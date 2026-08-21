@@ -43,6 +43,10 @@ import type { NetLabBridge } from './engine/state/bridge';
 import { ConfigExportModal } from './components/ConfigExportModal';
 import { VendorCapabilitiesModal } from './components/VendorCapabilitiesModal';
 import { AiActionPlanModal } from './components/AiActionPlanModal';
+import { ConfigGeneratorModal } from './components/ConfigGeneratorModal';
+import { ConfigLibraryModal } from './components/ConfigLibraryModal';
+import { PresetLabModal } from './components/PresetLabModal';
+import { NetworkSimulationModal } from './components/NetworkSimulationModal';
 import { portLinksOfNode } from './utils/configExport';
 import { useAgentEngine } from './hooks/useAgentEngine';
 import { formatExecuteOutcome, formatPlanPreview, formatDiagnostic, formatVerification } from './modules/ai/agent/format';
@@ -297,6 +301,12 @@ export default function App() {
   const [isVendorCapsOpen, setIsVendorCapsOpen] = useState(false);
   const [isDonateOpen, setIsDonateOpen] = useState(false);
   const [isMonorepoOpen, setIsMonorepoOpen] = useState(false);
+  const [isConfigGenOpen, setIsConfigGenOpen] = useState(false);
+  const [isConfigLibOpen, setIsConfigLibOpen] = useState(false);
+  const [isPresetLabOpen, setIsPresetLabOpen] = useState(false);
+  const [isNetSimOpen, setIsNetSimOpen] = useState(false);
+  // Badge simulasi dari NetworkSimulationModal (kuning = diuji, merah = gagal)
+  const [simNodeState, setSimNodeState] = useState<{ pinging: string[]; failed: string[] }>({ pinging: [], failed: [] });
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   // Pesan yang disuntikkan ke panel chat AI dari luar (mis. hasil eksekusi agent)
   const [injectedAiNote, setInjectedAiNote] = useState<{ id: number; text: string } | null>(null);
@@ -371,6 +381,17 @@ export default function App() {
     }
     return [...ids];
   }, [packetAnimations, project.edges]);
+  // Badge simulasi dari NetworkSimulationModal digabung dengan animasi ping panel
+  const canvasPingingNodeIds = useMemo(() => {
+    const ids = new Set(pingingNodeIds);
+    for (const id of simNodeState.pinging) ids.add(id);
+    return [...ids];
+  }, [pingingNodeIds, simNodeState.pinging]);
+  const canvasFailedPingNodeIds = useMemo(() => {
+    const ids = new Set(failedPingNodeIds);
+    for (const id of simNodeState.failed) ids.add(id);
+    return [...ids];
+  }, [failedPingNodeIds, simNodeState.failed]);
   // Penanda pembaruan state engine → panel statistik perlu di-refresh
   const [statsVersion, setStatsVersion] = useState(0);
 
@@ -1333,8 +1354,8 @@ export default function App() {
       name: node?.name || nodeId,
       ports: node?.ports || [],
       portLinks: portLinksOfNode(node, project.edges),
-      pingSimulator: (host: string, vendorId: string) => {
-        const result = simEngineRef.current.simulatePing(nodeId, host);
+      pingSimulator: (host: string, vendorId: string, size?: number) => {
+        const result = simEngineRef.current.simulatePing(nodeId, host, size);
         return formatPingOutput(vendorId, host, result);
       },
       tracerouteSimulator: (host: string, vendorId: string) => {
@@ -1609,6 +1630,10 @@ export default function App() {
           onOpenGrading={() => setIsGradingOpen(true)}
           onOpenVendorCaps={() => setIsVendorCapsOpen(true)}
           onOpenAiChat={() => setIsAiChatOpen(true)}
+          onOpenConfigGen={() => setIsConfigGenOpen(true)}
+          onOpenConfigLib={() => setIsConfigLibOpen(true)}
+          onOpenPresetLabs={() => setIsPresetLabOpen(true)}
+          onOpenNetSim={() => setIsNetSimOpen(true)}
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           onLoadTemplate={(tpl) => {
@@ -1648,6 +1673,10 @@ export default function App() {
           onOpenTutorial={() => setIsTutorialOpen(true)}
           onOpenGrading={() => setIsGradingOpen(true)}
           onOpenAiChat={() => setIsAiChatOpen(true)}
+          onOpenConfigGen={() => setIsConfigGenOpen(true)}
+          onOpenConfigLib={() => setIsConfigLibOpen(true)}
+          onOpenPresetLabs={() => setIsPresetLabOpen(true)}
+          onOpenNetSim={() => setIsNetSimOpen(true)}
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           onLoadTemplate={(tpl) => {
@@ -1742,8 +1771,8 @@ export default function App() {
             onOpenPorts={handleOpenPorts}
             highlightEdgeId={inspectorHighlight?.edgeId ?? null}
             highlightNodeId={inspectorHighlight?.nodeId ?? null}
-            pingingNodeIds={pingingNodeIds}
-            failedPingNodeIds={failedPingNodeIds}
+            pingingNodeIds={canvasPingingNodeIds}
+            failedPingNodeIds={canvasFailedPingNodeIds}
             isMobile={isMobile}
             onNodeTap={
               isMobile
@@ -1817,6 +1846,7 @@ onOpenTerminal={handleOpenTerminal}
         onSendCommand={handleSendTerminalCommand}
         isOpen={isTerminalOpen}
         onClose={() => setIsTerminalOpen(false)}
+        hostnameOf={(nodeId) => vendorDispatcher.getNodeMemory(nodeId)?.hostname || undefined}
       />
 
       {/* PDU / Ping Simulation Panel */}
@@ -1960,6 +1990,44 @@ onOpenTerminal={handleOpenTerminal}
 
       {/* Vendor capability matrix (Supported / Partial / Parser-only / Not Supported) */}
       <VendorCapabilitiesModal isOpen={isVendorCapsOpen} onClose={() => setIsVendorCapsOpen(false)} />
+
+      {/* Config Generator — buat konfigurasi router dari form */}
+      <ConfigGeneratorModal open={isConfigGenOpen} onClose={() => setIsConfigGenOpen(false)} />
+
+      {/* Config Library — snippet konfigurasi siap salin */}
+      <ConfigLibraryModal open={isConfigLibOpen} onClose={() => setIsConfigLibOpen(false)} />
+
+      {/* Preset Labs — topologi siap pakai */}
+      <PresetLabModal
+        open={isPresetLabOpen}
+        onClose={() => setIsPresetLabOpen(false)}
+        onLoadLab={(lab) => {
+          setProjectWithHistory(lab.build());
+          setIsPresetLabOpen(false);
+        }}
+      />
+
+      {/* Network Simulation — uji jalur & latensi antar perangkat */}
+      <NetworkSimulationModal
+        open={isNetSimOpen}
+        onClose={() => {
+          setIsNetSimOpen(false);
+          setSimNodeState({ pinging: [], failed: [] });
+        }}
+        nodes={project.nodes}
+        edges={project.edges}
+        onRunPacketAnimation={(edgeIds, reverse, red) => {
+          const id = `netsim-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          setPacketAnimations((prev) => [
+            ...prev.filter((a) => a.id !== id),
+            { id, edgeIds, reverse, red },
+          ]);
+          window.setTimeout(() => {
+            setPacketAnimations((prev) => prev.filter((a) => a.id !== id));
+          }, 4200);
+        }}
+        onSimulationNodes={(pinging, failed) => setSimNodeState({ pinging, failed })}
+      />
 
       {/* Mobile bottom sheets */}
       {isMobile && (

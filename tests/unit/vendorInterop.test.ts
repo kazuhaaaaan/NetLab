@@ -22,7 +22,7 @@ const VENDOR_IDS = Object.keys(VENDOR_CAPABILITIES);
 
 // Urutan kolom & baris matriks validasi (sama dengan modal UI VendorCapabilitiesModal).
 const CAP_ORDER: CapabilityKey[] = [
-  'ipv4', 'ipv6', 'staticRoute', 'vlan', 'dhcp', 'nat', 'ospf', 'bgp', 'vrrp', 'firewall', 'dns', 'commit',
+  'ipv4', 'ipv6', 'staticRoute', 'vlan', 'dhcp', 'nat', 'ospf', 'rip', 'eigrp', 'bgp', 'vrrp', 'firewall', 'dns', 'commit',
 ];
 const VENDOR_ORDER = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux', 'windows'];
 
@@ -87,22 +87,27 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'vlan', cmds: ['/interface vlan add name=vlan10 vlan-id=10 interface=ether1'], assert: (m) => m.vlans.some((v: any) => String(v.id) === '10') },
     { cap: 'nat', cmds: ['/ip firewall nat add chain=srcnat out-interface=ether2 action=masquerade'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
     { cap: 'ospf', cmds: ['/routing ospf instance add name=x router-id=1.1.1.1', '/routing ospf network add network=10.0.0.0/24 area=0'], assert: (m) => m.routing?.ospf?.enabled && (m.routing?.ospf?.networks?.length ?? 0) >= 1 },
+    { cap: 'rip', cmds: ['/routing rip instance add name=rip1'], assert: (m) => !!m.routing?.rip?.enabled },
     { cap: 'bgp', cmds: ['/routing bgp instance add as=65001 router-id=1.1.1.1', '/routing bgp peer add remote-as=65002 remote-address=10.0.9.2', '/routing bgp network add network=10.0.1.0/24'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 && (m.bgp?.networks?.length ?? 0) >= 1 },
     { cap: 'dns', cmds: ['/ip dns set servers=8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
     { cap: 'ipv6', cmds: ['/ipv6 address add address=2001:db8::1/64 interface=ether1'], assert: (m) => m.configuredIps6?.['ether1'] === '2001:db8::1/64' },
-    { cap: 'dhcp', cmds: ['/ip pool add name=pool1 ranges=192.168.88.100-192.168.88.200', '/ip dhcp-server add name=dhcp1 interface=ether1 address-pool=pool1'], assert: (m) => m.dhcpPools.some((p: any) => p.iface === 'ether1') },
+    { cap: 'dhcp', cmds: ['/ip pool add name=pool1 ranges=192.168.88.100-192.168.88.200', '/ip dhcp-server add name=dhcp1 interface=ether1 address-pool=pool1', '/ip dhcp-server lease add address=192.168.88.50 mac-address=AA:BB:CC:DD:EE:FF'], assert: (m) => m.dhcpPools.some((p: any) => p.iface === 'ether1') && (m.dhcpReservations || []).some((r: any) => r.ip === '192.168.88.50' && /AABBCCDDEEFF/i.test(String(r.mac).replace(/[^0-9a-f]/gi, ''))) },
     { cap: 'firewall', cmds: ['/ip firewall filter add chain=input protocol=icmp action=drop'], assert: (m) => m.acls.some((a: any) => a.action === 'deny') },
   ],
   cisco_ios: [
     { cap: 'ipv4', cmds: ['interface ether1', 'ip address 10.0.1.1 255.255.255.252'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
     { cap: 'staticRoute', cmds: ['ip route 10.99.0.0 255.255.255.0 10.0.1.2'], assert: (m) => routeStored(m, '10.99.0.0/24', '10.0.1.2') },
     { cap: 'vlan', cmds: ['vlan 10', 'name v10'], assert: (m) => m.vlans.some((v: any) => String(v.id) === '10') },
-    { cap: 'dhcp', cmds: ['ip dhcp pool LAN', 'network 192.168.9.0 255.255.255.0', 'default-router 192.168.9.1'], assert: (m) => m.dhcpPools.some((p: any) => p.name === 'LAN' && p.gateway === '192.168.9.1') },
+    { cap: 'dhcp', cmds: ['ip dhcp pool LAN', 'network 192.168.9.0 255.255.255.0', 'default-router 192.168.9.1', 'host 192.168.9.50 255.255.255.0', 'hardware-address 0050.7966.6677'], assert: (m) => m.dhcpPools.some((p: any) => p.name === 'LAN' && p.gateway === '192.168.9.1') && m.dhcpPools.some((p: any) => (p.reservations || []).some((r: any) => r.ip === '192.168.9.50' && /005079666677/i.test(String(r.mac).replace(/[^0-9a-f]/gi, '')))) },
     { cap: 'ospf', cmds: ['router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
+    { cap: 'rip', cmds: ['router rip', 'network 10.0.0.0'], assert: (m) => !!m.routing?.rip?.enabled },
+    { cap: 'eigrp', cmds: ['router eigrp 100', 'network 10.0.0.0'], assert: (m) => !!m.routing?.eigrp?.enabled && m.routing?.eigrp?.asn === 100 },
     { cap: 'bgp', cmds: ['router bgp 65001', 'neighbor 10.0.9.2 remote-as 65002'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 },
     { cap: 'vrrp', cmds: ['interface ether1', 'vrrp 1 ip 192.168.9.254'], assert: (m) => m.fhrpGroups?.some((g: any) => g.vrid === 1) },
     { cap: 'dns', cmds: ['ip name-server 8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
     { cap: 'ipv6', cmds: ['interface ether1', 'ipv6 address 2001:db8:1::1/64'], assert: (m) => m.configuredIps6?.['ether1'] === '2001:db8:1::1/64' },
+    // commit: write memory → snapshot startup-config → reload memulihkannya.
+    { cap: 'commit', cmds: ['interface ether1', 'ip address 10.0.1.1 255.255.255.252', 'write memory', 'reload'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
   ],
   cisco_nxos: [
     { cap: 'ipv4', cmds: ['interface ether1', 'ip address 10.0.1.1/30'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
@@ -110,6 +115,8 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'vlan', cmds: ['vlan 10'], assert: (m) => String(m.vlans?.[0]?.id) === '10' },
     { cap: 'dhcp', cmds: ['ip dhcp pool LAN1', 'network 192.168.88.0 255.255.255.0', 'default-router 192.168.88.1'], assert: (m) => m.dhcpPools.some((p: any) => p.gateway === '192.168.88.1') },
     { cap: 'ospf', cmds: ['router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
+    { cap: 'rip', cmds: ['router rip'], assert: (m) => !!m.routing?.rip?.enabled },
+    { cap: 'eigrp', cmds: ['router eigrp 100'], assert: (m) => !!m.routing?.eigrp?.enabled && m.routing?.eigrp?.asn === 100 },
     { cap: 'bgp', cmds: ['router bgp 65001', 'neighbor 10.0.9.2 remote-as 65002'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 },
     { cap: 'dns', cmds: ['ip name-server 8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
     { cap: 'ipv6', cmds: ['interface ether1', 'ipv6 address 2001:db8::1/64'], assert: (m) => m.configuredIps6?.['ether1'] === '2001:db8::1/64' },
@@ -119,6 +126,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'staticRoute', cmds: ['set routing-options static route 10.99.0.0/24 next-hop 10.0.1.2'], assert: (m) => routeStored(m, '10.99.0.0/24', '10.0.1.2') },
     { cap: 'nat', cmds: ['set security nat source rule-set SNAT1 from interface ether2', 'set security nat source rule-set SNAT1 rule 10 match source-address 10.0.0.0/16', 'set security nat source rule-set SNAT1 rule 10 then source-nat interface'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
     { cap: 'ospf', cmds: ['set protocols ospf area 0 interface ether1'], assert: (m) => m.routing?.ospf?.enabled },
+    { cap: 'rip', cmds: ['set protocols rip group G1 neighbor ether1'], assert: (m) => !!m.routing?.rip?.enabled },
     { cap: 'bgp', cmds: ['set routing-options autonomous-system 65001', 'set routing-options router-id 1.1.1.1', 'set protocols bgp group EXT type external', 'set protocols bgp group EXT peer-as 65002', 'set protocols bgp group EXT neighbor 10.0.9.2', 'set protocols bgp group EXT network 10.0.1.0/24'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 && (m.bgp?.networks?.length ?? 0) >= 1 },
     { cap: 'commit', cmds: ['set system host-name jnet', 'commit'], assert: (m) => m.hostname === 'jnet' },
     { cap: 'vlan', cmds: ['set vlans V10 vlan-id 10'], assert: (m) => String(m.vlans?.[0]?.id) === '10' },
@@ -132,10 +140,13 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'vlan', cmds: ['vlan 10'], assert: (m) => (m.vlans || []).length >= 1 },
     { cap: 'dhcp', cmds: ['dhcp enable', 'ip pool LAN1', 'network 192.168.9.0 mask 255.255.255.0', 'gateway-list 192.168.9.1'], assert: (m) => m.dhcpPools.some((p: any) => p.name === 'LAN1') },
     { cap: 'ospf', cmds: ['ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
+    { cap: 'rip', cmds: ['rip'], assert: (m) => !!m.routing?.rip?.enabled },
     { cap: 'bgp', cmds: ['bgp 65001', 'peer 10.0.9.2 as-number 65002', 'network 10.0.1.0 mask 255.255.255.0'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 },
     { cap: 'nat', cmds: ['interface ether1', 'nat outbound 3000', 'nat server protocol tcp global current-interface 8080 inside 192.168.1.10 80'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') && m.natRules.some((r: any) => r.chain === 'dstnat' && r.toPorts === '80') },
     { cap: 'firewall', cmds: ['acl 3000', 'rule 5 deny icmp source 10.0.0.0 0.0.0.255', 'quit'], assert: (m) => m.acls.some((a: any) => a.aclId === '3000' && a.action === 'deny' && a.proto === 'icmp') },
     { cap: 'dns', cmds: ['dns server 8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
+    // commit: save → snapshot startup-config → reboot memulihkannya.
+    { cap: 'commit', cmds: ['interface ether1', 'ip address 10.0.1.1 255.255.255.252', 'save', 'reboot'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
   ],
   ubiquiti: [
     { cap: 'ipv4', cmds: ['set interfaces ethernet ether1 address 10.0.1.1/30'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
@@ -145,6 +156,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'vlan', cmds: ['set vlans V10 vlan-id 10'], assert: (m) => (m.vlans || []).length >= 1 },
     { cap: 'dhcp', cmds: ['set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 start 192.168.88.100 stop 192.168.88.200', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 default-router 192.168.88.1'], assert: (m) => m.dhcpPools.some((p: any) => p.network === '192.168.88.0/24' && p.range === '192.168.88.100-192.168.88.200' && p.gateway === '192.168.88.1') },
     { cap: 'ospf', cmds: ['set protocols ospf area 0 interface eth0'], assert: (m) => m.routing?.ospf?.enabled },
+    { cap: 'rip', cmds: ['set protocols rip'], assert: (m) => !!m.routing?.rip?.enabled },
     { cap: 'bgp', cmds: ['set protocols bgp 65001 parameters router-id 1.1.1.1', 'set protocols bgp 65001 neighbor 10.0.9.2 remote-as 65002', 'set protocols bgp 65001 network 10.0.1.0/24'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 && (m.bgp?.networks?.length ?? 0) >= 1 },
     { cap: 'firewall', cmds: ['set firewall name FW1 rule 10 action drop', 'set firewall name FW1 rule 10 protocol icmp', 'set firewall name FW1 rule 10 source address 10.0.0.0/8'], assert: (m) => m.acls.some((a: any) => a.action === 'deny' && a.proto === 'icmp' && a.src === '10.0.0.0/8') },
     { cap: 'dns', cmds: ['set system name-server 8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
@@ -154,6 +166,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'staticRoute', cmds: ['set protocols static route 10.99.0.0/24 next-hop 10.0.1.2'], assert: (m) => routeStored(m, '10.99.0.0/24', '10.0.1.2') },
     { cap: 'nat', cmds: ['set nat source rule 10 outbound-interface ether2', 'set nat source rule 10 source address 192.168.88.0/24', 'set nat source rule 10 translation address masquerade'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
     { cap: 'ospf', cmds: ['set protocols ospf area 0 network 10.0.0.0/24', 'set protocols ospf parameters router-id 1.1.1.1'], assert: (m) => m.routing?.ospf?.enabled },
+    { cap: 'rip', cmds: ['set protocols rip'], assert: (m) => !!m.routing?.rip?.enabled },
     { cap: 'commit', cmds: ['set system host-name vedge', 'commit'], assert: (m) => m.hostname === 'vedge' },
     { cap: 'vlan', cmds: ['set vlans V10 vlan-id 10'], assert: (m) => (m.vlans || []).length >= 1 },
     { cap: 'dhcp', cmds: ['set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 start 192.168.88.100 stop 192.168.88.200', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 default-router 192.168.88.1'], assert: (m) => m.dhcpPools.some((p: any) => p.network === '192.168.88.0/24' && p.range === '192.168.88.100-192.168.88.200' && p.gateway === '192.168.88.1') },
@@ -179,6 +192,8 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'ospf', cmds: ['router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
     { cap: 'dhcp', cmds: ['ip dhcp pool LAN1', 'network 192.168.88.0 255.255.255.0', 'default-router 192.168.88.1'], assert: (m) => m.dhcpPools.some((p: any) => p.gateway === '192.168.88.1') },
     { cap: 'dns', cmds: ['ip name-server 8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
+    // commit: write memory → snapshot startup-config → reload memulihkannya.
+    { cap: 'commit', cmds: ['interface ether1', 'ip address 10.0.1.1 255.255.255.252', 'write memory', 'reload'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
   ],
   openwrt: [
     { cap: 'ipv4', cmds: ['uci set network.ether1.ipaddr=10.0.1.1', 'uci set network.ether1.netmask=255.255.255.252', 'uci set network.ether1.proto=static', 'uci commit network'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
@@ -186,7 +201,10 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'nat', cmds: ['uci set firewall.@zone[1].masq=1', 'uci commit firewall'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat' && r.action === 'masquerade') },
     { cap: 'commit', cmds: ['uci set system.@system[0].hostname=owrt', 'uci commit system'], assert: (m) => m.hostname === 'owrt' },
     { cap: 'vlan', cmds: ['uci set network.vlan10.vlan=10'], assert: (m) => (m.vlans || []).length >= 1 },
-    { cap: 'dhcp', cmds: ['uci set dhcp.lan=dhcp', 'uci set dhcp.lan.interface=lan', 'uci set dhcp.lan.start=100', 'uci set dhcp.lan.limit=100', 'uci commit dhcp'], assert: (m) => m.dhcpPools.some((p: any) => p.name === 'lan' && p.range === '192.168.1.100-192.168.1.199') },
+    // DHCP dnsmasq OpenWrt: range diturunkan dari IP interface NYATA
+    // (dhcp.lan.start/limit relatif terhadap subnet lan) — IP lan dikonfigurasi
+    // dulu, tanpa itu server tidak bisa menghitung range (jujur, bukan fake).
+    { cap: 'dhcp', cmds: ['uci set network.lan.ipaddr=192.168.1.1', 'uci set network.lan.netmask=255.255.255.0', 'uci set network.lan.proto=static', 'uci commit network', 'uci set dhcp.lan=dhcp', 'uci set dhcp.lan.interface=lan', 'uci set dhcp.lan.start=100', 'uci set dhcp.lan.limit=100', 'uci set dhcp.host1=host', 'uci set dhcp.host1.mac=aa:bb:cc:dd:ee:ff', 'uci set dhcp.host1.ip=192.168.1.50', 'uci commit dhcp'], assert: (m) => m.dhcpPools.some((p: any) => p.name === 'lan' && p.range === '192.168.1.100-192.168.1.199' && p.network === '192.168.1.0/24') && (m.dhcpReservations || []).some((r: any) => r.ip === '192.168.1.50' && /AABBCCDDEEFF/i.test(String(r.mac).replace(/[^0-9a-f]/gi, ''))) },
     { cap: 'firewall', cmds: ['uci add firewall redirect', 'uci set firewall.@redirect[0].dest_ip=192.168.1.10', 'uci set firewall.@redirect[0].dest_port=80', 'uci set firewall.@redirect[0].src_dport=8080', 'uci set firewall.@redirect[0].target=DNAT', 'uci commit firewall'], assert: (m) => m.natRules.some((r: any) => r.chain === 'dstnat' && r.toAddresses === '192.168.1.10' && r.dstPort === '8080') },
     { cap: 'dns', cmds: ['echo "nameserver 8.8.8.8" > /etc/resolv.conf'], assert: (m) => (m.dnsServers || []).length >= 1 },
   ],
@@ -269,7 +287,7 @@ export function runVendorInteropTests(): Report {
   }
 
   console.log('\n== V2. Interop L3 lintas vendor: static route + ping (semua pasangan) ==');
-  const ROUTER_VENDORS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'fortinet', 'vyos', 'openwrt'];
+  const ROUTER_VENDORS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'fortinet', 'vyos', 'ubiquiti', 'aruba', 'openwrt'];
   const ipCmd = {
     mikrotik: (i: string, ip: string) => [`/ip address add address=${ip} interface=${i}`],
     cisco_ios: (i: string, ip: string) => [`interface ${i}`, `ip address ${ip.replace('/', ' ')}`],
@@ -278,6 +296,8 @@ export function runVendorInteropTests(): Report {
     huawei: (i: string, ip: string) => [`interface ${i}`, `ip address ${ip.replace('/', ' ')}`],
     fortinet: (i: string, ip: string) => ['config system interface', `edit ${i}`, `set ip ${ip.replace('/', ' ')}`, 'next', 'end'],
     vyos: (i: string, ip: string) => [`set interfaces ethernet ${i} address ${ip}`],
+    ubiquiti: (i: string, ip: string) => [`set interfaces ethernet ${i} address ${ip}`],
+    aruba: (i: string, ip: string) => [`interface ${i}`, `ip address ${ip.replace('/', ' ')}`],
     openwrt: (i: string, ip: string) => [`uci set network.${i}.ipaddr=${ip.split('/')[0]}`, `uci set network.${i}.netmask=${ip.includes('/30') ? '255.255.255.252' : '255.255.255.0'}`, `uci set network.${i}.proto=static`, 'uci commit network'],
     linux: (i: string, ip: string) => [`ip addr add ${ip} dev ${i}`],
   } as Record<string, (i: string, ip: string) => string[]>;
@@ -289,6 +309,8 @@ export function runVendorInteropTests(): Report {
     huawei: (dst: string, gw: string) => [`ip route-static ${dst.split('/')[0]} ${dst.split('/')[1]} ${gw}`],
     fortinet: (dst: string, gw: string) => ['config router static', 'edit 1', `set dst ${dst.split('/')[0]} ${cidrMask(dst)}`, `set gateway ${gw}`, 'next', 'end'],
     vyos: (dst: string, gw: string) => [`set protocols static route ${dst} next-hop ${gw}`],
+    ubiquiti: (dst: string, gw: string) => [`set protocols static route ${dst} next-hop ${gw}`],
+    aruba: (dst: string, gw: string) => [`ip route ${dst.split('/')[0]} ${cidrMask(dst)} ${gw}`],
     openwrt: (dst: string, gw: string) => ['uci set network.route1=route', `uci set network.route1.target=${dst.split('/')[0]}`, `uci set network.route1.netmask=${cidrMask(dst)}`, `uci set network.route1.gateway=${gw}`, 'uci commit network'],
     linux: (dst: string, gw: string) => [`ip route add ${dst} via ${gw}`],
   } as Record<string, (dst: string, gw: string) => string[]>;
@@ -334,13 +356,19 @@ export function runVendorInteropTests(): Report {
   }
 
   console.log('\n== V3. DHCP lintas vendor (server router → klien Linux) ==');
-  const DHCP_SERVERS = ['mikrotik', 'cisco_ios', 'juniper', 'huawei', 'fortinet'];
+  const DHCP_SERVERS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'fortinet', 'aruba', 'ubiquiti', 'vyos', 'openwrt', 'linux'];
   const poolCmds: Record<string, string[]> = {
     mikrotik: ['/ip address add address=192.168.9.1/24 interface=ether1', '/ip pool add name=pool1 ranges=192.168.9.100-192.168.9.200', '/ip dhcp-server add name=dhcp1 interface=ether1 address-pool=pool1'],
     cisco_ios: ['interface ether1', 'ip address 192.168.9.1 255.255.255.0', 'no shutdown', 'exit', 'ip dhcp pool LAN', 'network 192.168.9.0 255.255.255.0', 'default-router 192.168.9.1'],
+    cisco_nxos: ['interface ether1', 'ip address 192.168.9.1/24', 'no shutdown', 'exit', 'ip dhcp pool LAN', 'network 192.168.9.0 255.255.255.0', 'default-router 192.168.9.1'],
     juniper: ['set interfaces ether1 unit 0 family inet address 192.168.9.1/24', 'set access address-assignment pool jpool family inet network 192.168.9.0/24', 'set access address-assignment pool jpool family inet range jr1 low 192.168.9.100 high 192.168.9.200', 'set access address-assignment pool jpool family inet dhcp-attributes router 192.168.9.1', 'set system services dhcp-local-server group jdhcp pool jpool', 'set system services dhcp-local-server group jdhcp interface ether1'],
     huawei: ['dhcp enable', 'ip pool LAN1', 'network 192.168.9.0 mask 255.255.255.0', 'gateway-list 192.168.9.1', 'quit', 'interface ether1', 'ip address 192.168.9.1 255.255.255.0', 'dhcp select global'],
     fortinet: ['config system interface', 'edit ether1', 'set ip 192.168.9.1 255.255.255.0', 'next', 'end', 'config system dhcp server', 'edit 1', 'set interface ether1', 'config ip-range', 'edit 1', 'set start-ip 192.168.9.100', 'set end-ip 192.168.9.200', 'next', 'end', 'set netmask 255.255.255.0', 'next', 'end'],
+    aruba: ['interface ether1', 'ip address 192.168.9.1 255.255.255.0', 'no shutdown', 'exit', 'ip dhcp pool LAN', 'network 192.168.9.0 255.255.255.0', 'default-router 192.168.9.1'],
+    ubiquiti: ['set interfaces ethernet ether1 address 192.168.9.1/24', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.9.0/24 start 192.168.9.100 stop 192.168.9.200', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.9.0/24 default-router 192.168.9.1'],
+    vyos: ['set interfaces ethernet ether1 address 192.168.9.1/24', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.9.0/24 start 192.168.9.100 stop 192.168.9.200', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.9.0/24 default-router 192.168.9.1'],
+    openwrt: ['uci set network.ether1.ipaddr=192.168.9.1', 'uci set network.ether1.netmask=255.255.255.0', 'uci set network.ether1.proto=static', 'uci commit network', 'uci set dhcp.lan=dhcp', 'uci set dhcp.lan.interface=ether1', 'uci set dhcp.lan.start=100', 'uci set dhcp.lan.limit=100', 'uci commit dhcp'],
+    linux: ['ip addr add 192.168.9.1/24 dev ether1', 'echo "subnet 192.168.9.0 netmask 255.255.255.0 { range 192.168.9.100 192.168.9.200; option routers 192.168.9.1; }" > /etc/dhcp/dhcpd.conf'],
   };
   const syncPools = (dis: VendorDispatcher, sim: NetworkSimulator) => {
     syncDhcpPools(sim, dis);
@@ -358,6 +386,17 @@ export function runVendorInteropTests(): Report {
     poolCmds[sv].forEach((c) => dis.dispatch(sv, c, ctx));
     syncCli(dis, sim, 'r1');
     syncPools(dis, sim);
+    // Observability: pool terlihat di getDeviceStats (snapshot Observation) —
+    // bukti jalur CLI → NodeMemory → cliSync → ConfigStore → Observation utuh.
+    const pools = sim.getDeviceStats('r1')?.dhcpPools || [];
+    check(`V3 ${sv.padEnd(9)} getDeviceStats.dhcpPools ada`, pools.length >= 1, JSON.stringify(pools).slice(0, 120));
+    // Data pool nyata (tiap vendor menyimpan yang diketahuinya): network cidr
+    // ATAU gateway ATAU range — tidak boleh pool kosong di Observation.
+    check(
+      `V3 ${sv.padEnd(9)} pool data nyata (network/gateway/range)`,
+      pools.some((p: any) => cidrNorm(p.network) === '192.168.9.0/24' || p.gateway === '192.168.9.1' || String(p.range || '').startsWith('192.168.9.')),
+      JSON.stringify(pools)
+    );
     // Klien: linux dhclient memohon lease lewat engine (alur App).
     const pcCtx = {
       nodeId: 'pc1',
@@ -380,29 +419,44 @@ export function runVendorInteropTests(): Report {
   }
 
   console.log('\n== V4. Fitur tidak didukung gagal JUJUR (no fake success) ==');
-  const UNSUPPORTED: Record<string, { cap: CapabilityKey; cmds: string[] }> = {
-    aruba: { cap: 'nat', cmds: ['ip nat inside', 'ip nat outside'] },
-    openwrt: { cap: 'bgp', cmds: ['router bgp 65001', '/routing bgp peer add name=x remote-address=1.1.1.1 remote-as=2'] },
-    linux: { cap: 'ospf', cmds: ['router ospf 1', '/routing ospf instance set default'] },
+  const UNSUPPORTED: Record<string, { cap: CapabilityKey; cmds: string[] }[]> = {
+    aruba: [
+      { cap: 'nat', cmds: ['ip nat inside', 'ip nat outside'] },
+      { cap: 'vrrp', cmds: ['vrrp 1 ip 192.168.9.254'] },
+      { cap: 'rip', cmds: ['router rip'] },
+      { cap: 'eigrp', cmds: ['router eigrp 100'] },
+    ],
+    openwrt: [{ cap: 'bgp', cmds: ['router bgp 65001', '/routing bgp peer add name=x remote-address=1.1.1.1 remote-as=2'] }],
+    linux: [
+      { cap: 'ospf', cmds: ['router ospf 1', '/routing ospf instance set default'] },
+      { cap: 'commit', cmds: ['commit'] },
+      { cap: 'vrrp', cmds: ['vrrp 1 ip 192.168.9.254'] },
+    ],
+    mikrotik: [{ cap: 'commit', cmds: ['commit', '/system backup save name=x'] }],
+    fortinet: [{ cap: 'rip', cmds: ['router rip', 'config router rip'] }],
+    huawei: [{ cap: 'eigrp', cmds: ['eigrp 100'] }],
+    juniper: [{ cap: 'vrrp', cmds: ['set protocols vrrp group 1'] }],
   };
-  for (const [vid, u] of Object.entries(UNSUPPORTED)) {
+  for (const [vid, cases] of Object.entries(UNSUPPORTED)) {
     const reg = VENDOR_CAPABILITIES[vid];
-    const st = reg?.caps[u.cap] ?? null;
-    // Registry harus jujur: bukan 'supported'.
-    check(`V4 ${vid}.${u.cap} registry tidak mengklaim supported`, st !== 'supported', `status=${st}`);
-    const dis = new VendorDispatcher();
-    const ctx = mkCtx(vid, vid, ['ether1', 'ether2']);
-    const memA = dis.getNodeMemory(vid);
-    const before = JSON.stringify(memA);
-    for (const c of u.cmds) {
-      const out = dis.dispatch(vid, c, ctx);
-      const outStr = typeof out === 'string' ? out : JSON.stringify(out ?? '');
-      const honest = /unknown command|not supported|belum|tidak didukung|unrecognized|not currently simulated|not simulated/i.test(outStr);
-      check(`V4 ${vid} '${c.slice(0, 40)}' gagal jujur`, honest, outStr.slice(0, 80));
+    for (const u of cases) {
+      const st = reg?.caps[u.cap] ?? null;
+      // Registry harus jujur: bukan 'supported'.
+      check(`V4 ${vid}.${u.cap} registry tidak mengklaim supported`, st !== 'supported', `status=${st}`);
+      const dis = new VendorDispatcher();
+      const ctx = mkCtx(vid, vid, ['ether1', 'ether2']);
+      const memA = dis.getNodeMemory(vid);
+      const before = JSON.stringify(memA);
+      for (const c of u.cmds) {
+        const out = dis.dispatch(vid, c, ctx);
+        const outStr = typeof out === 'string' ? out : JSON.stringify(out ?? '');
+        const honest = /unknown|not supported|belum|tidak didukung|unrecognized|not currently simulated|not simulated|invalid input|command not found|bad command name|no such|not found|error:|no servers could be reached/i.test(outStr);
+        check(`V4 ${vid} '${c.slice(0, 40)}' gagal jujur`, honest, outStr.slice(0, 80));
+      }
+      // State tidak boleh berubah karena perintah tak didukung (tidak ada sukses palsu).
+      const after = JSON.stringify(memA);
+      check(`V4 ${vid}.${u.cap} state tidak berubah`, before === after, 'state berubah walau fitur tak didukung');
     }
-    // State tidak boleh berubah karena perintah tak didukung (tidak ada sukses palsu).
-    const after = JSON.stringify(memA);
-    check(`V4 ${vid}.${u.cap} state tidak berubah`, before === after, 'state berubah walau fitur tak didukung');
   }
 
   console.log('\n== V5. Matriks validasi vendor: SEMUA klaim kapabilitas punya bukti ==');

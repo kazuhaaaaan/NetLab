@@ -3,7 +3,7 @@ import type { CommandResult, ChainEntry, ChainEnv } from '../common/types';
 import { registerEntries } from '../common/chain';
 import { recordArray, recordObject } from '../common/types';
 
-import { resolveIfaceName } from '../common/ip';
+import { resolveIfaceName, networkOfMask, bitsToMask } from '../common/ip';
 import { setShutdownState, upsertSubinterface, grantDhcpClient, pushTrunk } from '../common/state';
 
 export const mikrotikEntries: ChainEntry[] = [
@@ -346,7 +346,7 @@ export const mikrotikEntries: ChainEntry[] = [
           const name = raw.match(/name=(\S+)/i)?.[1];
           const ranges = raw.match(/ranges=(\S+)/i)?.[1];
           if (name && ranges) {
-            mem.dhcpPools.push({ name, range: ranges, network: ranges.split('-')[0], iface: '', gateway: '' });
+            mem.dhcpPools.push({ name, range: ranges, network: '', iface: '', gateway: '' });
             cmdResult = { raw: '' };
           } else {
             cmdResult = { raw: '% Usage: /ip pool add name=<nama> ranges=<awal>-<akhir>' };
@@ -372,6 +372,14 @@ export const mikrotikEntries: ChainEntry[] = [
           if (name && iface) {
           if (entry) {
             entry.iface = resolveIfaceName(context?.ports, iface) || iface;
+            // network pool = subnet NYATA dari IP interface (bukan range start).
+            const boundIface = entry.iface;
+            const baseIp = (mem.configuredIps || {})[boundIface] || '';
+            const c = baseIp.includes('/') ? baseIp : '';
+            if (c && !entry.network) {
+              const [netIp, prefix] = c.split('/');
+              entry.network = networkOfMask(netIp, bitsToMask(Number(prefix))) || `${String(netIp)}/${String(prefix)}`;
+            }
           } else {
               mem.dhcpPools.push({ name, range: '', network: '', iface: resolveIfaceName(context?.ports, iface) || iface, gateway: '' });
             }
@@ -405,6 +413,30 @@ export const mikrotikEntries: ChainEntry[] = [
             }
           } else {
             cmdResult = { raw: '% Usage: /ip dhcp-server set <nama> disabled=yes|no' };
+          }
+        
+    return cmdResult;
+  },
+  },
+  {
+    name: 'b81r',
+    order: 81,
+    vendors: 'all',
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^\/ip\s+dhcp-server\s+lease\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik'),
+    run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
+    let cmdResult: CommandResult | undefined;
+
+    // MikroTik: "/ip dhcp-server lease add address=10.0.1.50 mac-address=AA:BB:CC:DD:EE:FF"
+    // → reservasi statis: klien dengan MAC itu selalu mendapat IP tersebut.
+          const raw = rawInput.trim();
+          const ip = raw.match(/address=(\S+)/i)?.[1];
+          const mac = raw.match(/mac-address=(\S+)/i)?.[1];
+          if (ip && mac) {
+            mem.dhcpReservations = mem.dhcpReservations || [];
+            mem.dhcpReservations.push({ mac, ip });
+            cmdResult = { raw: '' };
+          } else {
+            cmdResult = { raw: '% Usage: /ip dhcp-server lease add address=<ip> mac-address=<mac>' };
           }
         
     return cmdResult;

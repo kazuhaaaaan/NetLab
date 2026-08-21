@@ -84,7 +84,7 @@ export interface DeviceState {
   trunkPorts: string[];
   shutdownIfaces: string[];
   subinterfaces: Record<string, { parentPort: string; vlanId: number }>;
-  dhcpClientState: 'idle' | 'discover' | 'offer' | 'request' | 'bound' | 'renew' | 'released' | null;
+  dhcpClientState: 'idle' | 'init' | 'discover' | 'offer' | 'request' | 'bound' | 'renew' | 'released' | null;
   neighbors: { peerNodeId: string; peerName: string; peerDeviceType: string; localPort: string; peerPort: string }[];
 }
 

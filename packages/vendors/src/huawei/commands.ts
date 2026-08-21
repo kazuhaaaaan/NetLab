@@ -168,7 +168,8 @@ cmdResult = huaweiCommand(rawInput, context, mem);
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
 
-          mem.dhcpPools.push({ name: 'global', range: '', network: '', iface: '', gateway: '' });
+          // dhcp enable hanya mengaktifkan layanan — JANGAN membuat pool
+          // dummy 'global' (mencemari daftar pool nyata).
           cmdResult = { raw: '' };
         
     return cmdResult;

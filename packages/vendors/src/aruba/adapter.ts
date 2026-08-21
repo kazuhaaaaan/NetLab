@@ -78,9 +78,12 @@ export class ArubaVendorAdapter implements _IV {
       const rows = entries.map((e) => `${String(String(e.ip).padEnd(17))} ${String(String(e.mac).padEnd(16))} dynamic    Vlan1`).join('\n');
       return 'IPv4 Address      MAC Address       Type        Port\n----------------  ----------------  ----------  ----\n' + rows;
     }
+    if (cmdResult.type === 'write_mem') {
+      return 'Configuration updated successfully.';
+    }
     if (cmdResult.type === 'ping') {
-      const host = cmdResult.host || '192.168.1.1';
-      return `Sending 5, 100-byte ICMP Echos to ${String(host)}\n!!!!!\nSuccess rate is 100 percent (5/5), round-trip min/avg/max = 0/0/1 ms`;
+      const host = cmdResult.host || '';
+      return `Sending 5, 100-byte ICMP Echos to ${String(host)}: simulation engine not available in this context. Use the NetLab ping panel.`;
     }
     if (cmdResult.type === 'help') {
       return ['Exec commands:',

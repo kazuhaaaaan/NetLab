@@ -24,8 +24,11 @@ export function splitWords(input: string): string[] {
         current += ch;
       }
     } else if (ch === '"' || ch === "'") {
-      if (current) words.push(current);
-      current = '';
+      // Kutipan di awal ATAU tengah kata (mis. `address="..."`): masuk mode
+      // kutip tanpa menambahkan penanda ke kata — pembuka maupun penutup
+      // dibuang, sehingga nilai berspasi tetap satu kata utuh dan seimbang
+      // (`name="R1 Lab"` → satu kata `name=R1 Lab`; stripQuotes di tokenize
+      // tidak lagi menemukan kutip yatim).
       quote = ch;
     } else if (/\s/.test(ch)) {
       if (current) {

@@ -11,6 +11,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b12',
     order: 12,
     vendors: 'all',
+    cap: 'vlan',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^encapsulation\s+dot1q\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && /\.\d+$/.test(mem.currentIface) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -43,6 +44,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b15',
     order: 15,
     vendors: 'all',
+    cap: 'ospf',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(?:ip\s+)?ospf\s+cost\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -63,6 +65,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b16',
     order: 16,
     vendors: 'all',
+    cap: 'ospf',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^passive-interface\s+(\S+)/i.test(rawInput.trim()) && mem.currentProto === 'ospf' && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -81,6 +84,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b21',
     order: 21,
     vendors: 'all',
+    cap: 'dhcp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+helper-address\s+(\d+\.\d+\.\d+\.\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -96,6 +100,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b23',
     order: 23,
     vendors: 'all',
+    cap: 'ipv6',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ipv6\s+address\s+(?:autoconfig|dhcp)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -230,6 +235,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b33',
     order: 33,
     vendors: 'all',
+    cap: 'ipv6',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/(?:^ipv6\s+address\s+)(\S+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -248,6 +254,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b34',
     order: 34,
     vendors: 'all',
+    cap: 'ipv6',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ipv6\s+route\s+(\S+)\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -266,6 +273,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b37',
     order: 37,
     vendors: 'all',
+    cap: 'vrrp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(vrrp|standby)\s+(\d+)\s+ip\s+(\S+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -289,6 +297,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b38',
     order: 38,
     vendors: 'all',
+    cap: 'vrrp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(vrrp|standby)\s+(\d+)\s+priority\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -311,6 +320,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b48',
     order: 48,
     vendors: 'all',
+    cap: 'staticRoute',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => ((vendorId === 'cisco_ios' || vendorId === 'aruba' || vendorId === 'cisco_nxos') && /^ip\s+route\s+\S+\s+\S+\s+\S+/i.test(rawInput.trim())),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -349,6 +359,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b61',
     order: 61,
     vendors: 'all',
+    cap: 'vlan',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^vlan\s+(\d+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -379,6 +390,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b63',
     order: 63,
     vendors: 'all',
+    cap: 'vlan',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^name\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -413,6 +425,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b76',
     order: 76,
     vendors: 'all',
+    cap: 'dns',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+name-server\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -430,6 +443,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b82',
     order: 82,
     vendors: 'all',
+    cap: 'dhcp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+dhcp\s+excluded-address\s+(\d+\.\d+\.\d+\.\d+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -450,6 +464,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b83',
     order: 83,
     vendors: 'all',
+    cap: 'dhcp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+dhcp\s+pool\s+(\S+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -470,6 +485,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b84',
     order: 84,
     vendors: 'all',
+    cap: 'dhcp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^network\s+(\S+)\s+(\S+)/i.test(rawInput.trim()) && mem.currentDhcpPool && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -488,6 +504,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b85',
     order: 85,
     vendors: 'all',
+    cap: 'dhcp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^default-router\s+(\S+)/i.test(rawInput.trim()) && mem.currentDhcpPool && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -503,9 +520,57 @@ export const ciscoiosEntries: ChainEntry[] = [
   },
   },
   {
+    name: 'b85r',
+    order: 85,
+    vendors: 'all',
+    cap: 'dhcp',
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^host\s+(\S+)\s+(\S+)/i.test(rawInput.trim()) && mem.currentDhcpPool && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
+    run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
+    let cmdResult: CommandResult | undefined;
+
+    // Cisco: reservasi statis — "host <ip> <mask>" (fixed-address) +
+    // "hardware-address <mac>" di dalam pool → IP itu selalu untuk MAC itu.
+          const m = rawInput.trim().match(/^host\s+(\S+)\s+(\S+)/i);
+          const pool = mem.dhcpPools.find((p) => p.name === mem.currentDhcpPool);
+          if (m && pool) {
+            pool.host = m[1];
+            pool.reservations = pool.reservations || [];
+            cmdResult = { raw: '' };
+          } else {
+            cmdResult = { raw: '% Usage: host <ip> <netmask>' };
+          }
+        
+    return cmdResult;
+  },
+  },
+  {
+    name: 'b85s',
+    order: 85,
+    vendors: 'all',
+    cap: 'dhcp',
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^hardware-address\s+(\S+)/i.test(rawInput.trim()) && mem.currentDhcpPool && mem.dhcpPools.some((p) => p.name === mem.currentDhcpPool && p.host) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
+    run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
+    let cmdResult: CommandResult | undefined;
+
+          const m = rawInput.trim().match(/^hardware-address\s+(\S+)/i);
+          const pool = mem.dhcpPools.find((p) => p.name === mem.currentDhcpPool);
+          if (m && pool && pool.host) {
+            const resv = (pool.reservations as { mac: string; ip: string }[] | undefined) || [];
+            resv.push({ mac: m[1], ip: String(pool.host) });
+            pool.reservations = resv;
+            cmdResult = { raw: '' };
+          } else {
+            cmdResult = { raw: '% Usage: hardware-address <mac> (butuhkan "host <ip> <mask>" dulu)' };
+          }
+        
+    return cmdResult;
+  },
+  },
+  {
     name: 'b87',
     order: 87,
     vendors: 'all',
+    cap: 'dns',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+host\s+(\S+)\s+(\d+\.\d+\.\d+\.\d+)/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -524,6 +589,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b90',
     order: 90,
     vendors: 'all',
+    cap: 'dhcp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => ((vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei') && /^ip\s+address\s+dhcp/i.test(rawInput.trim())),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -542,6 +608,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b96',
     order: 96,
     vendors: 'all',
+    cap: 'firewall',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^access-list\s+\d+\s+(permit|deny)\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -634,6 +701,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b97',
     order: 97,
     vendors: 'all',
+    cap: 'nat',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+nat\s+(inside|outside)$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -653,6 +721,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b98',
     order: 98,
     vendors: 'all',
+    cap: 'nat',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+nat\s+inside\s+source\s+list\s+\d+\s+interface\s+\S+\s+overload/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -680,6 +749,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b99',
     order: 99,
     vendors: 'all',
+    cap: 'nat',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^ip\s+nat\s+inside\s+source\s+static\s+tcp\s+\S+\s+\d+\s+\S+\s+\d+/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -706,15 +776,56 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b101',
     order: 101,
     vendors: 'all',
-    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^router\s+(ospf|rip|eigrp)\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
+    cap: 'ospf',
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^router\s+ospf\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
 
-    // Cisco: "router ospf 1" / "router rip" / "router eigrp 100"
-          const proto = rawInput.trim().match(/^router\s+(ospf|rip|eigrp)\b/i)?.[1]?.toLowerCase() as 'ospf' | 'rip' | 'eigrp';
-          const asn = rawInput.trim().match(/\b(eigrp|ospf)\s+(\d+)/i)?.[2];
+    // Cisco: "router ospf 1" — process id, BUKAN router-id (router-id diatur
+    // lewat perintah "router-id x.x.x.x"). Tidak boleh menimpa router-id dari
+    // nomor proses.
+          const proto = 'ospf' as const;
           mem.routing[proto].enabled = true;
-          if (proto === 'eigrp' && asn) mem.routing.eigrp.asn = parseInt(asn, 10);
+          mem.currentProto = proto;
+          mem.currentDhcpPool = '';
+          cmdResult = { raw: '' };
+        
+    return cmdResult;
+  },
+  },
+  {
+    name: 'b101b',
+    order: 101,
+    vendors: 'all',
+    cap: 'rip',
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^router\s+rip\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
+    run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
+    let cmdResult: CommandResult | undefined;
+
+    // Cisco: "router rip"
+          const proto = 'rip' as const;
+          mem.routing[proto].enabled = true;
+          mem.currentProto = proto;
+          mem.currentDhcpPool = '';
+          cmdResult = { raw: '' };
+        
+    return cmdResult;
+  },
+  },
+  {
+    name: 'b101c',
+    order: 101,
+    vendors: 'all',
+    cap: 'eigrp',
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^router\s+eigrp\b/i.test(rawInput.trim()) && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
+    run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
+    let cmdResult: CommandResult | undefined;
+
+    // Cisco: "router eigrp 100"
+          const proto = 'eigrp' as const;
+          const asn = rawInput.trim().match(/\beigrp\s+(\d+)/i)?.[1];
+          mem.routing[proto].enabled = true;
+          if (asn) mem.routing.eigrp.asn = parseInt(asn, 10);
           mem.currentProto = proto;
           mem.currentDhcpPool = '';
           cmdResult = { raw: '' };
@@ -726,6 +837,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b102',
     order: 102,
     vendors: 'all',
+    cap: 'bgp',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^network\s+(\d+\.\d+\.\d+\.\d+)\s+mask\s+(\d+\.\d+\.\d+\.\d+)$/i.test(rawInput.trim()) && mem.currentProto === 'bgp' && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -746,6 +858,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b103',
     order: 103,
     vendors: 'all',
+    cap: 'ospf',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^network\s+\d+\.\d+\.\d+\.\d+(?:\/\d{1,2})?(?:\s+\d+\.\d+\.\d+\.\d+)?(?:\s+area\s+\S+)?$/i.test(rawInput.trim()) && mem.currentProto && mem.currentProto !== 'bgp' && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba' || vendorId === 'huawei')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -867,6 +980,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b125',
     order: 125,
     vendors: 'all',
+    cap: 'vlan',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^switchport\s+(mode\s+access|access\s+vlan\s+\d+)$/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -896,6 +1010,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b126',
     order: 126,
     vendors: 'all',
+    cap: 'vlan',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^switchport\s+trunk\s+(allowed\s+vlan|native\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
@@ -968,6 +1083,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     name: 'b127',
     order: 127,
     vendors: 'all',
+    cap: 'vlan',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^switchport\s+(mode\s+trunk|trunk\s+allowed\s+vlan)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;

@@ -16,7 +16,7 @@ import type { NetworkSimulator } from '../../../engine/net/core/NetworkSimulator
 import type { VendorDispatcher } from '../../../../packages/vendors/src/dispatcher/VendorDispatcher';
 import type { LabProject, LabNode } from '../../../types';
 import { buildCliContext } from '../../../utils/cliContext';
-import { runCliCommand, createNetLabBridge } from '../../../engine';
+import { runCliCommand, createNetLabBridge, isCliFailure } from '../../../engine';
 import { syncNodeToEngine, syncDhcpPools } from '../../../utils/cliSync';
 import type { VendorContext } from '../../../../packages/vendors/src/common/types';
 
@@ -81,7 +81,7 @@ export function createHeadlessRuntime(
       });
       syncNodeToEngine(sim, dispatcher, realId);
       syncDhcpPools(sim, dispatcher);
-      return { output: res.output, ok: true, changed: res.changed };
+      return { output: res.output, ok: !isCliFailure(res.output), changed: res.changed };
     },
     syncNodeToEngine: (nodeId) => syncNodeToEngine(sim, dispatcher, resolveNodeId(project, nodeId)),
     syncDhcpPools: () => syncDhcpPools(sim, dispatcher),
