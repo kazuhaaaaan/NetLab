@@ -1,0 +1,63 @@
+{
+  "$schema": "./vendor-baseline.schema.md",
+  "meta": {
+    "generatedAt": "2026-08-22",
+    "commit": "925ffe5",
+    "method": "PHASE 0 audit: static exploration + npm run lint + npm test + scripts/verify-all-vendors.mts + targeted dispatcher probes",
+    "fullSuite": { "passed": 2162, "failed": 0 },
+    "typecheck": "clean (tsc --noEmit, 0 error)",
+    "vendorMatrix": { "pass": 93, "fail": 5, "skip": 0 }
+  },
+  "architecture": {
+    "cliEntry": "src/engine/index.ts runCliCommand() — SATU facade untuk terminal utama, Windows terminal, AI agent app & headless",
+    "dispatcher": "packages/vendors/src/dispatcher/VendorDispatcher.ts — chain-of-responsibility (entries b<N> sorted by order, first-match wins)",
+    "state": "NodeMemory per node (common/memory.ts) — running & startup config, restore/serialize via MemoryRegistryImpl",
+    "engineBridge": "vendors tidak import engine; VendorContext dari src/utils/cliContext.ts (~20 provider), NodeMemory -> engine via src/utils/cliSync.ts",
+    "capabilityRegistry": "packages/vendors/src/capabilities.ts — status supported|partial|parser-only|not-supported, di-enforce isCapabilityBlocked() + negative tests",
+    "tests": "custom harness run_all_tests.mts + tests/unit/*.test.ts (micro-harness check()/Report)"
+  },
+  "capabilityMatrix": {
+    "mikrotik":   { "ipv4": "supported", "ipv6": "supported", "vlan": "supported", "dhcp": "supported", "nat": "supported", "ospf": "supported", "rip": "supported", "eigrp": "not-supported", "bgp": "supported", "vrrp": "partial", "staticRoute": "supported", "firewall": "supported", "dns": "supported", "commit": "not-supported" },
+    "cisco_ios":  { "ipv4": "supported", "ipv6": "supported", "vlan": "supported", "dhcp": "supported", "nat": "partial", "ospf": "supported", "rip": "supported", "eigrp": "supported", "bgp": "supported", "vrrp": "supported", "staticRoute": "supported", "firewall": "partial", "dns": "supported", "commit": "supported" },
+    "cisco_nxos": { "ipv4": "supported", "ipv6": "supported", "vlan": "supported", "dhcp": "supported", "nat": "partial", "ospf": "supported", "rip": "supported", "eigrp": "supported", "bgp": "supported", "vrrp": "partial", "staticRoute": "supported", "firewall": "partial", "dns": "supported", "commit": "not-supported" },
+    "juniper":    { "ipv4": "supported", "ipv6": "partial", "vlan": "supported", "dhcp": "supported", "nat": "supported", "ospf": "supported", "rip": "supported", "eigrp": "not-supported", "bgp": "supported", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "supported", "dns": "supported", "commit": "supported" },
+    "huawei":     { "ipv4": "supported", "ipv6": "partial", "vlan": "supported", "dhcp": "supported", "nat": "supported", "ospf": "supported", "rip": "supported", "eigrp": "not-supported", "bgp": "supported", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "supported", "dns": "supported", "commit": "supported" },
+    "ubiquiti":   { "ipv4": "supported", "ipv6": "partial", "vlan": "supported", "dhcp": "supported", "nat": "supported", "ospf": "supported", "rip": "supported", "eigrp": "not-supported", "bgp": "supported", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "supported", "dns": "supported", "commit": "partial" },
+    "vyos":       { "ipv4": "supported", "ipv6": "partial", "vlan": "supported", "dhcp": "supported", "nat": "supported", "ospf": "supported", "rip": "supported", "eigrp": "not-supported", "bgp": "supported", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "supported", "dns": "supported", "commit": "partial" },
+    "fortinet":   { "ipv4": "supported", "ipv6": "partial", "vlan": "supported", "dhcp": "supported", "nat": "supported", "ospf": "supported", "rip": "not-supported", "eigrp": "not-supported", "bgp": "supported", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "supported", "dns": "supported", "commit": "not-supported" },
+    "aruba":      { "ipv4": "supported", "ipv6": "partial", "vlan": "supported", "dhcp": "supported", "nat": "not-supported", "ospf": "supported", "rip": "not-supported", "eigrp": "not-supported", "bgp": "partial", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "partial", "dns": "supported", "commit": "supported" },
+    "openwrt":    { "ipv4": "supported", "ipv6": "partial", "vlan": "supported", "dhcp": "supported", "nat": "supported", "ospf": "not-supported", "rip": "not-supported", "eigrp": "not-supported", "bgp": "not-supported", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "supported", "dns": "supported", "commit": "supported" },
+    "linux":      { "ipv4": "supported", "ipv6": "partial", "vlan": "partial", "dhcp": "supported", "nat": "supported", "ospf": "not-supported", "rip": "not-supported", "eigrp": "not-supported", "bgp": "not-supported", "vrrp": "not-supported", "staticRoute": "supported", "firewall": "partial", "dns": "supported", "commit": "not-supported" },
+    "windows":    { "ipv4": "partial", "ipv6": "not-supported", "vlan": "not-supported", "dhcp": "partial", "nat": "not-supported", "ospf": "not-supported", "rip": "not-supported", "eigrp": "not-supported", "bgp": "not-supported", "vrrp": "not-supported", "staticRoute": "partial", "firewall": "not-supported", "dns": "partial", "commit": "not-supported" }
+  },
+  "verifyMatrixFailuresRootCause": [
+    { "vendor": "huawei", "case": "DHCP server (global)", "rootCause": "SCRIPT BUG: ekspektasi dhcpPools.length===1 padahal 'dhcp enable' memang sengaja tidak membuat pool. NAMUN handler juga silent no-op tanpa state flag apa pun (mem.dhcpEnabled tidak ada) = fake success ringan. FIX: set flag state nyata + perbaiki ekspektasi script.", "realGap": true },
+    { "vendor": "huawei", "case": "DHCP client", "rootCause": "SCRIPT BUG: mkCtx pakai port generik p1/p2/p3, sedangkan port huawei autentik bernama GigabitEthernet0/0/N (deviceModels.ts). Dengan port autentik, 'interface GigabitEthernet0/0/2' + 'ip address dhcp' BEKERJA (dhcpClients terisi).", "realGap": false },
+    { "vendor": "huawei", "case": "DHCP server (ip pool + gateway)", "rootCause": "KASKADE dari case pertama: ekspektasi dhcpPools.length===2 mengasumsikan 'dhcp enable' membuat pool pertama. Implementasi 'ip pool LAN1' sendiri benar (network/gateway tersimpan).", "realGap": false },
+    { "vendor": "huawei", "case": "NAT (outbound + server)", "rootCause": "SCRIPT BUG kaskade: 'interface GigabitEthernet0/0/1' gagal karena port tidak ada di ctx script. Dengan port autentik: nat outbound -> srcnat OK; nat server -> dstnat OK. GAP KECIL NYATA: 'current-interface' tidak diresolv ke IP interface (dstAddress kosong).", "realGap": true, "note": "gap kecil: resolve current-interface ke IP interface" },
+    { "vendor": "fortinet", "case": "DHCP server (full config)", "rootCause": "GAP KECIL NYATA: pool tersimpan dengan netmask/startIp/endIp/gateway benar, tapi field network tidak dihitung (\"\" vs ekspektasi '192.168.88.0/24'). FortiOS nyata mewarisi subnet dari interface/netmask. FIX: derive network CIDR dari netmask+startIp atau interface IP.", "realGap": true }
+  ],
+  "knownGapsFromAudit": [
+    "huawei 'dhcp enable': no-op tanpa state flag (harus set mem.dhcpEnabled=true dan dipakai gate DHCP server)",
+    "fortinet DHCP server: field network tidak di-derive dari netmask+range/interface IP",
+    "huawei nat server 'current-interface': dstAddress tidak terisi IP aktual interface",
+    "windows: ipv6 not-supported (NS), ipv4/dhcp/dns/staticRoute hanya partial — kandidat prioritas PHASE 3",
+    "aruba: nat/rip/eigrp/vrrp NS, bgp P — vendor dengan capability terendah kedua",
+    "commit model vyos/ubiquiti masih 'simple tanpa snapshot rollback' (P) vs juniper/huawei/aruba yang punya snapshot nyata",
+    "Determinism belum diaudit penuh: penggunaan Math.random()/Date.now() yang mempengaruhi simulasi belum dipetakan",
+    "Event log bounds (MAX_EVENTS/MAX_PACKET_TRACE/MAX_DEBUG_LOG) belum dikonfirmasi ada"
+  ],
+  "phase3PriorityByLowestCapability": [
+    "windows (7x NS, 4x P)",
+    "aruba (5x NS, 2x P)",
+    "linux (7x NS, 3x P)",
+    "fortinet (3x NS)",
+    "openwrt (5x NS tapi by-design: routing dinamis tidak disimulasikan)",
+    "vyos / ubiquiti (commit P, ipv6 P)",
+    "juniper / huawei (ipv6 P, vrrp NS)",
+    "cisco_nxos (nat/firewall P, commit NS by-design)",
+    "mikrotik (vrrp P)",
+    "cisco_ios (nat/firewall P)"
+  ],
+  "baselineVerdict": "Engine inti solid (2162 test hijau, typecheck bersih, arsitektur facade-dispatcher-state-engine utuh, tidak ditemukan fake success besar). 5 kegagalan verify-matrix: 3 akar masalahnya bug test-script (port naming generik), 2 gap kecil nyata (huawei dhcp enable flag, fortinet network derive). Fokus PHASE 1: determinism audit, validasi IPv4/IPv6 strict, event bounds, capability registry extension dengan level fidelity."
+}

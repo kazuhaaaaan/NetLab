@@ -2,7 +2,7 @@
 import type { CommandResult, ChainEntry, ChainEnv } from '../common/types';
 import { registerEntries } from '../common/chain';
 
-import { resolveIfaceName, networkOfMask, cidrOf } from '../common/ip';
+import { resolveIfaceName, networkOfMask, cidrOf, isValidIpv4RouteDst, isValidRouteGateway, isValidIpv6RouteDst, isValidIpv4, isValidIpCidrValue } from '../common/ip';
 import { setShutdownState, grantDhcpClient } from '../common/state';
 import type { NodeMemory, VendorContext } from '../common/types';
 
@@ -33,8 +33,12 @@ cmdResult = linuxCommand(rawInput, context, mem);
           const m = rawInput.trim().match(/^ip\s+-6\s+route\s+add\s+(\S+)\s+via\s+(\S+)/i);
           if (m) {
             const dst = m[1].toLowerCase() === 'default' ? '::/0' : m[1];
-            if (!mem.routes6.some((r) => r.dst === dst)) mem.routes6.push({ dst, gateway: m[2] });
-            cmdResult = { raw: '' };
+            if (!isValidIpv6RouteDst(String(dst)) || !isValidRouteGateway(String(m[2]))) {
+              cmdResult = { raw: `Error: invalid IPv6 route "${String(dst)} via ${String(m[2])}"` };
+            } else {
+              if (!mem.routes6.some((r) => r.dst === dst)) mem.routes6.push({ dst, gateway: m[2] });
+              cmdResult = { raw: '' };
+            }
           } else {
             cmdResult = { raw: '% Usage: ip -6 route add <dst> via <gateway>' };
           }
@@ -79,6 +83,8 @@ cmdResult = linuxCommand(rawInput, context, mem);
             );
             if (!devExists && devName !== 'lo') {
               cmdResult = { raw: `% Cannot find device "${String(m[3])}"` };
+            } else if (!isValidIpCidrValue(String(m[2]))) {
+              cmdResult = { raw: `Error: invalid address "${String(m[2])}"` };
             } else {
               const target = m[2].includes(':') ? mem.configuredIps6 : mem.configuredIps;
               target[resolveIfaceName(context?.ports, m[3]) || m[3]] = m[2];
@@ -101,8 +107,12 @@ cmdResult = linuxCommand(rawInput, context, mem);
           const m = rawInput.trim().match(/^ip\s+route\s+add\s+(\S+)\s+via\s+(\S+)/i);
           if (m) {
             const dst = m[1].toLowerCase() === 'default' ? '0.0.0.0/0' : m[1];
-            mem.routes.push({ dst, gateway: m[2], distance: 1 });
-            cmdResult = { raw: '' };
+            if (!isValidIpv4RouteDst(String(dst)) || !isValidIpv4(String(m[2]))) {
+              cmdResult = { raw: `Error: invalid route "${String(dst)} via ${String(m[2])}"` };
+            } else {
+              mem.routes.push({ dst, gateway: m[2], distance: 1 });
+              cmdResult = { raw: '' };
+            }
           } else {
             cmdResult = { raw: '% Usage: ip route add <dst> via <gateway>' };
           }

@@ -2,7 +2,7 @@
 import type { CommandResult, ChainEntry, ChainEnv } from '../common/types';
 import { registerEntries } from '../common/chain';
 
-import { resolveIfaceName, maskToBits, cidrOf, networkOfMask, bitsToMask } from '../common/ip';
+import { resolveIfaceName, maskToBits, cidrOf, networkOfMask, bitsToMask, isContiguousMask, isValidIpv4RouteDst, isValidIpv6RouteDst, isValidRouteGateway, isValidIpv4 } from '../common/ip';
 import type { NodeMemory, VendorContext } from '../common/types';
 
 export const openwrtEntries: ChainEntry[] = [
@@ -105,6 +105,20 @@ export function openwrtCommand(raw: string, context: VendorContext, mem: NodeMem
     // biarkan branch generik menangani hostname & network.X.vlan
     if (/^system\.@system\[0\]\.hostname$/i.test(key)) return undefined;
     if (/^network\.\S+\.vlan$/i.test(key)) return undefined;
+    // Route statis: validasi field saat di-set (target/gateway/netmask) —
+    // nilai sampah ditolak jujur, bukan disimpan lalu gagal diam-diam.
+    const routeOpt = key.match(/^network\.(route\d+)\.(target|gateway|netmask)$/i);
+    if (routeOpt) {
+      const opt = routeOpt[2];
+      const v = m[2];
+      const bad =
+        (opt === 'target' && !(isValidIpv4RouteDst(v) || isValidIpv6RouteDst(v))) ||
+        (opt === 'gateway' && !isValidRouteGateway(v)) ||
+        (opt === 'netmask' && !isContiguousMask(v));
+      if (bad) {
+        return { raw: `uci: Invalid argument — ${opt} "${v}"` };
+      }
+    }
     mem.uciPending = mem.uciPending || {};
     mem.uciPending[key] = m[2];
     return { raw: '' };
@@ -222,9 +236,17 @@ export function commitUci(mem: NodeMemory, context: VendorContext): void {
   }
   // netmask terpisah (OpenWrt) → dst berformat CIDR
   for (const r of mem.routes) {
-    if (r.rawMask && !String(r.dst || '').includes('/')) r.dst = `${String(r.dst)}/${String(maskToBits(String(r.rawMask)))}`;
-    delete r.rawMask;
+    if (r.rawMask) {
+      // Mask tak kontigu tidak boleh jadi prefix karangan.
+      if (!String(r.dst || '').includes('/') && isContiguousMask(String(r.rawMask))) {
+        r.dst = `${String(r.dst)}/${String(maskToBits(String(r.rawMask)))}`;
+      }
+      delete r.rawMask;
+    }
   }
+  // Rute UCI tanpa prefix = konfigurasi tidak lengkap (netmask ditolak saat
+  // set / tak pernah diset) — jangan dimaterialkan diam-diam.
+  mem.routes = mem.routes.filter((r) => !(r.section && !String(r.dst || '').includes('/')));
   // host dnsmasq (mac+ip) → reservasi DHCP statis
   if (mem.uciHosts) {
     mem.dhcpReservations = mem.dhcpReservations || [];
@@ -260,12 +282,19 @@ export function commitUci(mem: NodeMemory, context: VendorContext): void {
     const lanMatch = key.match(/^network\.(\S+?)\.(ipaddr|netmask|gateway|proto)$/i);
     if (lanMatch) {
       const ifaceRaw = lanMatch[1];
+      // Section rute UCI (network.routeN.*) bukan interface — jangan
+      // diterjemahkan sebagai gateway/IP interface.
+      if (/^route\d+$/i.test(ifaceRaw)) continue;
       const opt = lanMatch[2].toLowerCase();
       // "lan" = interface ether1 (sesuai uci delete network.lan → ether1)
       const iface = resolveIfaceName(context?.ports, ifaceRaw === 'loopback' ? 'lo' : ifaceRaw) || ifaceRaw;
       if (opt === 'ipaddr') {
-        const mask = pending[`network.${String(ifaceRaw)}.netmask`] || '255.255.255.0';
-        mem.configuredIps[iface] = `${String(value)}/${String(maskToBits(mask))}`;
+        if (!isValidIpv4(String(value))) continue;
+        const rawMask = pending[`network.${String(ifaceRaw)}.netmask`] || '255.255.255.0';
+        // Netmask tak kontigu tidak bisa jadi CIDR — abaikan pasangan ini
+        // (jujur: tidak ada IP yang diterapkan).
+        if (!isContiguousMask(rawMask)) continue;
+        mem.configuredIps[iface] = `${String(value)}/${String(maskToBits(rawMask))}`;
         if (!mem.ifaceSettings) mem.ifaceSettings = {};
       } else if (opt === 'proto' && value.toLowerCase() === 'dhcp') {
         if (!mem.dhcpClients) mem.dhcpClients = [];
@@ -273,6 +302,7 @@ export function commitUci(mem: NodeMemory, context: VendorContext): void {
           mem.dhcpClients.push({ iface, addDefaultRoute: true, status: 'searching' });
         }
       } else if (opt === 'gateway') {
+        if (!isValidRouteGateway(String(value))) continue;
         if (!mem.routes.some((r2) => r2.gateway === value)) {
           mem.routes.push({ dst: '0.0.0.0/0', gateway: value, distance: 1 });
         }

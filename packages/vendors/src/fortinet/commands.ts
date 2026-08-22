@@ -2,7 +2,7 @@
 import type { CommandResult, ChainEntry, ChainEnv, FortiPolicyDraft } from '../common/types';
 import { registerEntries } from '../common/chain';
 
-import { resolveIfaceName, cidrOf, networkOfMask, bitsToMask } from '../common/ip';
+import { resolveIfaceName, cidrOf, networkOfMask, bitsToMask, isValidIpv4 } from '../common/ip';
 import { grantDhcpClient, upsertSubinterface } from '../common/state';
 import type { NodeMemory, VendorContext } from '../common/types';
 
@@ -88,9 +88,13 @@ cmdResult = fortinetCommand(rawInput, context, mem);
     // Fortinet: "set gateway <ip>" — lengkapi rute statis
           const m = rawInput.trim().match(/^set\s+gateway\s+(\S+)/i);
           if (m && mem.currentStaticDst) {
-            mem.routes.push({ dst: mem.currentStaticDst, gateway: m[1], distance: 1 });
-            mem.currentStaticDst = '';
-            cmdResult = { raw: '' };
+            if (!isValidIpv4(String(m[1]))) {
+              cmdResult = { raw: `% Error: invalid gateway IP "${String(m[1])}"` };
+            } else {
+              mem.routes.push({ dst: mem.currentStaticDst, gateway: m[1], distance: 1 });
+              mem.currentStaticDst = '';
+              cmdResult = { raw: '' };
+            }
           } else {
             cmdResult = { raw: '% Usage: set dst <ip> <mask> dulu, lalu set gateway <ip>' };
           }

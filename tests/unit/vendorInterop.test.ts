@@ -142,7 +142,8 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'ospf', cmds: ['ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
     { cap: 'rip', cmds: ['rip'], assert: (m) => !!m.routing?.rip?.enabled },
     { cap: 'bgp', cmds: ['bgp 65001', 'peer 10.0.9.2 as-number 65002', 'network 10.0.1.0 mask 255.255.255.0'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 },
-    { cap: 'nat', cmds: ['interface ether1', 'nat outbound 3000', 'nat server protocol tcp global current-interface 8080 inside 192.168.1.10 80'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') && m.natRules.some((r: any) => r.chain === 'dstnat' && r.toPorts === '80') },
+    // nat server 'current-interface' kini diresolv ke IP interface (state nyata)
+    { cap: 'nat', cmds: ['interface ether1', 'ip address 203.0.113.1 255.255.255.0', 'nat outbound 3000', 'nat server protocol tcp global current-interface 8080 inside 192.168.1.10 80'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') && m.natRules.some((r: any) => r.chain === 'dstnat' && r.dstAddress === '203.0.113.1' && r.toPorts === '80') },
     { cap: 'firewall', cmds: ['acl 3000', 'rule 5 deny icmp source 10.0.0.0 0.0.0.255', 'quit'], assert: (m) => m.acls.some((a: any) => a.aclId === '3000' && a.action === 'deny' && a.proto === 'icmp') },
     { cap: 'dns', cmds: ['dns server 8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
     // commit: save → snapshot startup-config → reboot memulihkannya.
@@ -152,7 +153,9 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'ipv4', cmds: ['set interfaces ethernet ether1 address 10.0.1.1/30'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
     { cap: 'staticRoute', cmds: ['set protocols static route 10.99.0.0/24 next-hop 10.0.1.2'], assert: (m) => routeStored(m, '10.99.0.0/24', '10.0.1.2') },
     { cap: 'nat', cmds: ['set nat source rule 10 outbound-interface ether2', 'set nat source rule 10 source address 192.168.88.0/24', 'set nat source rule 10 translation address masquerade'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
-    { cap: 'commit', cmds: ['set system host-name uedge', 'commit'], assert: (m) => m.hostname === 'uedge' },
+    // Commit nyata: snapshot disimpan saat 'commit'; set setelahnya bersifat
+    // belum-final dan 'rollback 0' mengembalikan ke kondisi commit terakhir.
+    { cap: 'commit', cmds: ['set system host-name uedge', 'commit', 'set system host-name broken', 'rollback 0'], assert: (m) => m.hostname === 'uedge' },
     { cap: 'vlan', cmds: ['set vlans V10 vlan-id 10'], assert: (m) => (m.vlans || []).length >= 1 },
     { cap: 'dhcp', cmds: ['set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 start 192.168.88.100 stop 192.168.88.200', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 default-router 192.168.88.1'], assert: (m) => m.dhcpPools.some((p: any) => p.network === '192.168.88.0/24' && p.range === '192.168.88.100-192.168.88.200' && p.gateway === '192.168.88.1') },
     { cap: 'ospf', cmds: ['set protocols ospf area 0 interface eth0'], assert: (m) => m.routing?.ospf?.enabled },
@@ -167,7 +170,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'nat', cmds: ['set nat source rule 10 outbound-interface ether2', 'set nat source rule 10 source address 192.168.88.0/24', 'set nat source rule 10 translation address masquerade'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
     { cap: 'ospf', cmds: ['set protocols ospf area 0 network 10.0.0.0/24', 'set protocols ospf parameters router-id 1.1.1.1'], assert: (m) => m.routing?.ospf?.enabled },
     { cap: 'rip', cmds: ['set protocols rip'], assert: (m) => !!m.routing?.rip?.enabled },
-    { cap: 'commit', cmds: ['set system host-name vedge', 'commit'], assert: (m) => m.hostname === 'vedge' },
+    { cap: 'commit', cmds: ['set system host-name vedge', 'commit', 'set system host-name broken', 'rollback 0'], assert: (m) => m.hostname === 'vedge' },
     { cap: 'vlan', cmds: ['set vlans V10 vlan-id 10'], assert: (m) => (m.vlans || []).length >= 1 },
     { cap: 'dhcp', cmds: ['set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 start 192.168.88.100 stop 192.168.88.200', 'set service dhcp-server shared-network-name LAN1 subnet 192.168.88.0/24 default-router 192.168.88.1'], assert: (m) => m.dhcpPools.some((p: any) => p.network === '192.168.88.0/24' && p.range === '192.168.88.100-192.168.88.200' && p.gateway === '192.168.88.1') },
     { cap: 'bgp', cmds: ['set protocols bgp 65001 parameters router-id 1.1.1.1', 'set protocols bgp 65001 neighbor 10.0.9.2 remote-as 65002', 'set protocols bgp 65001 network 10.0.1.0/24'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 && (m.bgp?.networks?.length ?? 0) >= 1 },

@@ -122,17 +122,17 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
     vendorId: 'ubiquiti',
     caps: {
       ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
-      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: P,
+      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
-    notes: 'EdgeOS: model set/commit sederhana tanpa snapshot rollback.',
+    notes: 'EdgeOS: set diterapkan seketika; commit menyimpan snapshot & rollback 0 mengembalikan ke commit terakhir (teruji).',
   },
   vyos: {
     vendorId: 'vyos',
     caps: {
       ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
-      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: P,
+      bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
-    notes: 'VyOS: model set/commit sederhana tanpa snapshot rollback.',
+    notes: 'VyOS: set diterapkan seketika; commit menyimpan snapshot & rollback 0 mengembalikan ke commit terakhir (teruji).',
   },
   fortinet: {
     vendorId: 'fortinet',

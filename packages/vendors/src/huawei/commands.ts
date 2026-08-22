@@ -4,7 +4,7 @@ import { registerEntries } from '../common/chain';
 import { recordArray } from '../common/types';
 
 import { upsertSubinterface, pushTrunk } from '../common/state';
-import { resolveIfaceName } from '../common/ip';
+import { resolveIfaceName, isValidIpv4, isContiguousMask, isValidPrefix } from '../common/ip';
 import type { NodeMemory, VendorContext } from '../common/types';
 
 export const huaweiEntries: ChainEntry[] = [
@@ -88,8 +88,18 @@ cmdResult = huaweiCommand(rawInput, context, mem);
     // Huawei: "ip route-static 0.0.0.0 0.0.0.0 <gateway>"
           const m = rawInput.trim().match(/^ip\s+route-static\s+(\S+)\s+(\S+)\s+(\S+)/i);
           if (m) {
-            mem.routes.push({ dst: `${String(m[1])} ${String(m[2])}`, gateway: m[3], distance: 1 });
-            cmdResult = { raw: '' };
+            // VRP menerima dua bentuk parameter kedua: dotted mask atau prefix-length.
+            const maskOk = isContiguousMask(String(m[2])) || isValidPrefix(String(m[2]), false);
+            const dstOk = isValidIpv4(String(m[1])) && maskOk;
+            const gwOk = isValidIpv4(String(m[3]));
+            if (!dstOk) {
+              cmdResult = { raw: `% Unrecognized command found at '^' position.\nError: Invalid destination/mask "${String(m[1])} ${String(m[2])}"` };
+            } else if (!gwOk) {
+              cmdResult = { raw: `% Unrecognized command found at '^' position.\nError: Invalid gateway "${String(m[3])}"` };
+            } else {
+              mem.routes.push({ dst: `${String(m[1])} ${String(m[2])}`, gateway: m[3], distance: 1 });
+              cmdResult = { raw: '' };
+            }
           } else {
             cmdResult = { raw: '% Usage: ip route-static <dst> <mask> <gateway>' };
           }
@@ -168,10 +178,16 @@ cmdResult = huaweiCommand(rawInput, context, mem);
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
 
-          // dhcp enable hanya mengaktifkan layanan — JANGAN membuat pool
-          // dummy 'global' (mencemari daftar pool nyata).
+          // Huawei `dhcp enable`: aktifkan layanan DHCP global — state NYATA
+          // (flag dhcpEnabled), tanpa membuat pool dummy. `undo dhcp enable`
+          // mematikannya kembali.
+          if (/^undo\s+dhcp\s+enable/i.test(rawInput.trim())) {
+            mem.dhcpEnabled = false;
+          } else {
+            mem.dhcpEnabled = true;
+          }
           cmdResult = { raw: '' };
-        
+
     return cmdResult;
   },
   },
@@ -422,16 +438,24 @@ export function huaweiCommand(raw: string, context: VendorContext, mem: NodeMemo
   // NAT server (port-forward)
   m = t.match(/^nat\s+server\s+protocol\s+(\S+)\s+global\s+(current-interface|\S+)\s+(\d+)\s+inside\s+(\S+)\s+(\d+)/i);
   if (m && mem.currentIface) {
-    mem.natRules.push({
-      chain: 'dstnat',
-      action: 'dst-nat',
-      protocol: m[1].toLowerCase(),
-      dstAddress: m[2] === 'current-interface' ? '' : m[2],
-      dstPort: m[3],
-      toAddresses: m[4],
-      toPorts: m[5],
-    });
-    return { raw: '' };
+    // 'current-interface' → alamat IP aktual interface (VRP memakai IP-nya).
+    const cfg = (mem.configuredIps || {})[mem.currentIface];
+    const ifaceIp = m[2] === 'current-interface'
+      ? String(cfg || '').split(/[\s/]+/)[0] || ''
+      : m[2];
+    if (m[2] !== 'current-interface' || isValidIpv4(ifaceIp)) {
+      mem.natRules.push({
+        chain: 'dstnat',
+        action: 'dst-nat',
+        protocol: m[1].toLowerCase(),
+        dstAddress: ifaceIp,
+        dstPort: m[3],
+        toAddresses: m[4],
+        toPorts: m[5],
+      });
+      return { raw: '' };
+    }
+    return { raw: `% Error: interface ${String(mem.currentIface)} belum punya alamat IP untuk nat server current-interface` };
   }
   m = t.match(/^undo\s+nat\s+server/i);
   if (m && mem.currentIface) {

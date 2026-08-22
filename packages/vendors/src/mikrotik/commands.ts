@@ -3,7 +3,7 @@ import type { CommandResult, ChainEntry, ChainEnv } from '../common/types';
 import { registerEntries } from '../common/chain';
 import { recordArray, recordObject } from '../common/types';
 
-import { resolveIfaceName, networkOfMask, bitsToMask } from '../common/ip';
+import { resolveIfaceName, networkOfMask, bitsToMask, isValidIpv6RouteDst, isValidRouteGateway } from '../common/ip';
 import { setShutdownState, upsertSubinterface, grantDhcpClient, pushTrunk } from '../common/state';
 
 export const mikrotikEntries: ChainEntry[] = [
@@ -155,8 +155,12 @@ export const mikrotikEntries: ChainEntry[] = [
           const dst = rawInput.trim().match(/dst-address=(\S+)/i)?.[1];
           const gw = rawInput.trim().match(/gateway=(\S+)/i)?.[1];
           if (dst && gw) {
-            if (!mem.routes6.some((r) => r.dst === dst)) mem.routes6.push({ dst, gateway: gw });
-            cmdResult = { raw: '' };
+            if (!isValidIpv6RouteDst(String(dst)) || !isValidRouteGateway(String(gw))) {
+              cmdResult = { raw: `bad argument \`${!isValidIpv6RouteDst(String(dst)) ? 'dst-address' : 'gateway'}\` (invalid IPv6 value "${!isValidIpv6RouteDst(String(dst)) ? String(dst) : String(gw)}")` };
+            } else {
+              if (!mem.routes6.some((r) => r.dst === dst)) mem.routes6.push({ dst, gateway: gw });
+              cmdResult = { raw: '' };
+            }
           } else {
             cmdResult = { raw: '% Usage: /ipv6 route add dst-address=<jaringan/prefix> gateway=<gw>' };
           }

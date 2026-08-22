@@ -48,6 +48,9 @@ export class SimulationCore {
   readonly arpBuffers = new Map<string, BufferedFrame[]>();
   private _eventLog: SimEvent[] = [];
 
+  /** Batas event log (bounded history, deterministik — evict oldest). */
+  static readonly MAX_EVENT_LOG = 5000;
+
   constructor(
     private readonly ctx: SimulationContext,
     /** Status daya perangkat (poweredOff) — state milik ConfigStore. */
@@ -82,7 +85,8 @@ export class SimulationCore {
     };
     this._eventLog.push(evt);
     // Batasi log agar sesi panjang tidak menumpuk memori tanpa batas.
-    if (this._eventLog.length > 5000) this._eventLog.splice(0, this._eventLog.length - 5000);
+    // Eviksi deterministik: buang event paling lama (depan array).
+    if (this._eventLog.length > SimulationCore.MAX_EVENT_LOG) this._eventLog.splice(0, this._eventLog.length - SimulationCore.MAX_EVENT_LOG);
     this.ctx.bus.emit(evt);
   }
 

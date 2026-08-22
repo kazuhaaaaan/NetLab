@@ -13,6 +13,7 @@ import { buildLease } from '../services/DhcpService';
 import { UDP_BOOTPC } from '../layer4/Udp';
 import { inSameSubnet } from '../core/ip';
 import { isIpv6Address, inSameIpv6Subnet } from '../core/ipv6';
+import { nextDhcpXid } from '../core/deterministic';
 import { ndpResolveAndSend } from './ndpUtils';
 
 export class HostProcessor extends RouterProcessor {
@@ -66,7 +67,7 @@ export class HostProcessor extends RouterProcessor {
     const dev = this.device;
     const iface = this.pickClientIface();
     if (!iface) return false;
-    const xid = Math.floor(Math.random() * 0xffffffff) >>> 0;
+    const xid = nextDhcpXid(dev.id, iface.name, dev);
     dev.dhcpClient = { xid, state: 'discover', ifaceName: iface.name };
     const discover = core.createPacket({
       protocol: 'udp',
@@ -91,7 +92,7 @@ export class HostProcessor extends RouterProcessor {
     const dev = this.device;
     const iface = this.pickClientIface();
     if (!iface || !iface.ip) return false;
-    const xid = Math.floor(Math.random() * 0xffffffff) >>> 0;
+    const xid = nextDhcpXid(dev.id, iface.name, dev);
     dev.dhcpClient = { xid, state: 'renew', ifaceName: iface.name, offered: { ip: lease.ip, gateway: String(lease.gateway || ''), prefix: Number(lease.prefix) || 24 } };
     const req = core.createPacket({
       protocol: 'udp',
@@ -117,7 +118,8 @@ export class HostProcessor extends RouterProcessor {
     const dev = this.device;
     const iface = this.pickClientIface();
     if (!iface) return false;
-    dev.dhcpClient = { xid: Math.floor(Math.random() * 0xffffffff) >>> 0, state: 'released', ifaceName: iface.name };
+    const xid = nextDhcpXid(dev.id, iface.name, dev);
+    dev.dhcpClient = { xid, state: 'released', ifaceName: iface.name };
     const rel = core.createPacket({
       protocol: 'udp',
       srcMac: iface.mac,
@@ -128,7 +130,7 @@ export class HostProcessor extends RouterProcessor {
       dstPort: 67,
       ttl: 64,
       traceId,
-      payload: { type: 'release', xid: Math.floor(Math.random() * 0xffffffff) >>> 0, ip: lease.ip },
+      payload: { type: 'release', xid, ip: lease.ip },
     });
     core.emit('DHCP_RELEASE', traceId, { ip: lease.ip, mac: iface.mac }, dev.id, iface.name);
     core.transmit(dev, rel, iface.name, traceId);

@@ -52,7 +52,15 @@ export function parseCidr(cidr: string): { address: string; prefix: number } | n
   const [ip, p] = cleaned.split('/');
   if (!isValidIp(ip)) return null;
   if (p === undefined) return { address: ip, prefix: 24 };
-  if (isValidIp(p)) return { address: ip, prefix: maskToPrefix(ipToInt(p)) };
+  if (isValidIp(p)) {
+    // Mask dotted-quad harus kontigu (255.255.0.0 sah; 255.255.0.1 ditolak).
+    const m = ipToInt(p);
+    const bits = maskToPrefix(m);
+    const contiguous = bits === 0 ? m === 0 : (prefixToMask(bits) >>> 0) === m;
+    if (!contiguous) return null;
+    return { address: ip, prefix: bits };
+  }
+  if (!/^\d{1,3}$/.test(p)) return null; // tolak '24x', '-1', '' dsb.
   const prefix = parseInt(p, 10);
   if (isNaN(prefix) || prefix < 0 || prefix > 32) return null;
   return { address: ip, prefix };

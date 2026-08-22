@@ -373,6 +373,8 @@ export interface NodeMemory {
   dhcpPools: DhcpPool[];
   dhcpClients: DhcpClient[];
   dhcpExcluded?: string[];
+  /** Layanan DHCP aktif global (mis. Huawei `dhcp enable` di system view). */
+  dhcpEnabled?: boolean;
   /** Reservasi statis MAC → IP (fixed-address), mis. /ip dhcp-server lease add. */
   dhcpReservations?: { mac: string; ip: string }[];
   natRules: NatRule[];

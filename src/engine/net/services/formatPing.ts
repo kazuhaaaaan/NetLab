@@ -1,4 +1,5 @@
 import { PingSimResult, TracerouteResult } from "../compat";
+import { fnv1a32 } from "../core/deterministic";
 
 const REASON_TEXT: Record<string, string> = {
   'no-ip': 'no usable source IP configured on this device (set one first, e.g. /ip address add)',
@@ -14,10 +15,12 @@ const REASON_TEXT: Record<string, string> = {
 
 function errorLines(vendorId: string, host: string, r: PingSimResult): string[] {
   const why = REASON_TEXT[r.reason || 'unreachable'];
+  // Deterministik: fraksi RTT diturunkan dari hash host, bukan Math.random.
+  const frac = 100 + (fnv1a32(host) % 900);
   const rtt = (ms: number) =>
     ms === 0
       ? '<1ms'
-      : `${Math.max(1, Math.round(ms))}.${Math.floor(Math.random() * 900 + 100)}ms`;
+      : `${Math.max(1, Math.round(ms))}.${frac}ms`;
 
   if (vendorId === 'mikrotik') {
     return [

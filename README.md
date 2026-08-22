@@ -163,8 +163,14 @@ npm run dev
 
 ```bash
 npm run typecheck   # TypeScript (strict)
-npm test            # 1000+ unit/scenario/interop tests
+npm test            # 2200+ unit/scenario/interop tests
 npm run build       # production build
+
+# Matriks fitur per vendor (98 kasus, gagal = exit 1)
+npx tsx scripts/verify-all-vendors.mts
+
+# Skor konformansi perilaku per vendor (diturunkan dari eksekusi nyata)
+npx tsx scripts/conformance-score.mts --json=docs/conformance-report.json
 ```
 
 ### AI Mentor (optional)

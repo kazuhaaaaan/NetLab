@@ -4,7 +4,7 @@ import { registerEntries } from '../common/chain';
 import { recordArray, recordObject } from '../common/types';
 
 import { upsertSubinterface, setShutdownState, grantDhcpClient, pushTrunk } from '../common/state';
-import { resolveIfaceName, wildcardToCidr } from '../common/ip';
+import { resolveIfaceName, wildcardToCidr, isContiguousMask, isValidIpv4, isValidIpv6RouteDst, isValidRouteGateway } from '../common/ip';
 
 export const ciscoiosEntries: ChainEntry[] = [
   {
@@ -262,8 +262,12 @@ export const ciscoiosEntries: ChainEntry[] = [
     // Cisco: "ipv6 route 2001:db8:2::/64 2001:db8:ff::2"
           const m = rawInput.trim().match(/^ipv6\s+route\s+(\S+)\s+(\S+)/i);
           if (m) {
-            if (!mem.routes6.some((r) => r.dst === m![1] && r.gateway === m![2])) mem.routes6.push({ dst: m[1], gateway: m[2] });
-            cmdResult = { raw: '' };
+            if (!isValidIpv6RouteDst(String(m[1])) || !isValidRouteGateway(String(m[2]))) {
+              cmdResult = { raw: `% Invalid input detected at '^' marker.\n% Error: invalid IPv6 route "${String(m[1])} ${String(m[2])}"` };
+            } else {
+              if (!mem.routes6.some((r) => r.dst === m![1] && r.gateway === m![2])) mem.routes6.push({ dst: m[1], gateway: m[2] });
+              cmdResult = { raw: '' };
+            }
           }
         
     return cmdResult;
@@ -328,8 +332,16 @@ export const ciscoiosEntries: ChainEntry[] = [
     // IOS-style: "ip route 0.0.0.0 0.0.0.0 <gateway>"
           const m = rawInput.trim().match(/^ip\s+route\s+(\S+)\s+(\S+)\s+(\S+)/i);
           if (m) {
-            mem.routes.push({ dst: `${String(m[1])} ${String(m[2])}`, gateway: m[3], distance: 1 });
-            cmdResult = { raw: '' };
+            const dstOk = isValidIpv4(String(m[1])) && isContiguousMask(String(m[2]));
+            const gwOk = isValidIpv4(String(m[3]));
+            if (!dstOk) {
+              cmdResult = { raw: `% Invalid input detected at '^' marker.\n% Error: invalid route destination "${String(m[1])} ${String(m[2])}"` };
+            } else if (!gwOk) {
+              cmdResult = { raw: `% Invalid input detected at '^' marker.\n% Error: invalid gateway "${String(m[3])}"` };
+            } else {
+              mem.routes.push({ dst: `${String(m[1])} ${String(m[2])}`, gateway: m[3], distance: 1 });
+              cmdResult = { raw: '' };
+            }
           } else {
             cmdResult = { raw: '% Usage: ip route <dst> <mask> <gateway>' };
           }

@@ -7,7 +7,7 @@ import { registerEntries } from './chain';
 import { handleDeletion } from './deletion';
 import { snmpCommand } from './snmp';
 import { upsertSubinterface, mergeIps } from './state';
-import { resolveIfaceName, isKnownInterface, isValidIpv6, isValidIpv4, isValidPrefix } from './ip';
+import { resolveIfaceName, isKnownInterface, isValidIpv6, isValidIpv4, isValidPrefix, isValidIpv4RouteDst, isValidIpv6RouteDst, isValidRouteGateway, isValidIpCidrValue } from './ip';
 import { generateRunningConfig } from './format';
 import { payloadStr, recordArray, recordObject } from './types';
 import type { ASTNode } from './types';
@@ -290,8 +290,12 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
               // JANGAN diterapkan sebagian — tolak jujur tanpa mengubah state.
               cmdResult = { raw: `% Unknown "set" path: '${extra.join(' ')}'` };
             } else if (ip) {
-              mem.configuredIps[resolveIfaceName(context?.ports, iface)] = ip;
-              cmdResult = { raw: '' };
+              if (!isValidIpCidrValue(String(ip))) {
+                cmdResult = { raw: `% Error: invalid address "${String(ip)}"` };
+              } else {
+                mem.configuredIps[resolveIfaceName(context?.ports, iface)] = ip;
+                cmdResult = { raw: '' };
+              }
             } else {
               cmdResult = { raw: '% Usage: set interfaces <iface> unit 0 family inet address <ip/mask>' };
             }
@@ -302,8 +306,17 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
             const dst = ri >= 0 ? path[ri + 1] : undefined;
             const gw = ni >= 0 ? path[ni + 1] : undefined;
             if (dst && gw) {
-              mem.routes.push({ dst, gateway: gw, distance: 1 });
-              cmdResult = { raw: '' };
+              const v6 = String(dst).includes(':') || String(gw).includes(':');
+              const dstOk = v6 ? isValidIpv6RouteDst(String(dst)) : isValidIpv4RouteDst(String(dst));
+              const gwOk = isValidRouteGateway(String(gw));
+              if (!dstOk) {
+                cmdResult = { raw: `% Error: invalid route destination "${String(dst)}"` };
+              } else if (!gwOk) {
+                cmdResult = { raw: `% Error: invalid next-hop "${String(gw)}"` };
+              } else {
+                mem.routes.push({ dst, gateway: gw, distance: 1 });
+                cmdResult = { raw: '' };
+              }
             } else {
               cmdResult = { raw: '% Usage: set routing-options static route <dst> next-hop <gw>' };
             }
@@ -314,8 +327,17 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
             const dst = ri >= 0 ? path[ri + 1] : undefined;
             const gw = ni >= 0 ? path[ni + 1] : undefined;
             if (dst && gw) {
-              mem.routes.push({ dst, gateway: gw, distance: 1 });
-              cmdResult = { raw: '' };
+              const v6 = String(dst).includes(':') || String(gw).includes(':');
+              const dstOk = v6 ? isValidIpv6RouteDst(String(dst)) : isValidIpv4RouteDst(String(dst));
+              const gwOk = isValidRouteGateway(String(gw));
+              if (!dstOk) {
+                cmdResult = { raw: `% Error: invalid route destination "${String(dst)}"` };
+              } else if (!gwOk) {
+                cmdResult = { raw: `% Error: invalid next-hop "${String(gw)}"` };
+              } else {
+                mem.routes.push({ dst, gateway: gw, distance: 1 });
+                cmdResult = { raw: '' };
+              }
             } else {
               cmdResult = { raw: '% Usage: set protocols static route <dst> next-hop <gw>' };
             }
@@ -398,8 +420,17 @@ cmdResult = snmpCommand(rawInput, vendorId, mem, context);
           if (dst && gw) {
             const rawDist = parseInt(String(payload?.distance ?? 1), 10);
             const distance = Number.isFinite(rawDist) && rawDist >= 1 ? Math.floor(rawDist) : 1;
-            mem.routes.push({ dst, gateway: gw, distance });
-            cmdResult = { raw: '' };
+            const v6 = String(dst).includes(':') || String(gw).includes(':');
+            const dstOk = v6 ? isValidIpv6RouteDst(String(dst)) : isValidIpv4RouteDst(String(dst));
+            const gwOk = isValidRouteGateway(String(gw));
+            if (!dstOk) {
+              cmdResult = { raw: `% Error: invalid route destination "${String(dst)}"` };
+            } else if (!gwOk) {
+              cmdResult = { raw: `% Error: invalid gateway address "${String(gw)}"` };
+            } else {
+              mem.routes.push({ dst, gateway: gw, distance });
+              cmdResult = { raw: '' };
+            }
           } else {
             cmdResult = { raw: '% Error: missing dst-address or gateway' };
           }

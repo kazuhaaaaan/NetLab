@@ -142,6 +142,7 @@ export class MemoryRegistryImpl implements MemoryRegistry {
       if (Array.isArray(m.websites)) target.websites = m.websites as NodeMemory['websites'];
       if (Array.isArray(m.dhcpPools)) target.dhcpPools = m.dhcpPools as NodeMemory['dhcpPools'];
       if (Array.isArray(m.dhcpClients)) target.dhcpClients = m.dhcpClients as NodeMemory['dhcpClients'];
+      if (typeof m.dhcpEnabled === 'boolean') target.dhcpEnabled = m.dhcpEnabled;
       if (Array.isArray(m.natRules)) target.natRules = m.natRules as NodeMemory['natRules'];
       if (Array.isArray(m.acls)) target.acls = m.acls as NodeMemory['acls'];
       if (m.portVlans && typeof m.portVlans === 'object') target.portVlans = { ...target.portVlans, ...(m.portVlans as Record<string, number>) };

@@ -3,9 +3,17 @@
  * VLAN, ACL, routing (OSPF/RIP), BGP, wireless, queue, web server.
  * Jalankan: npx tsx scripts/verify-all-vendors.mts
  */
+import { pathToFileURL } from 'node:url';
+import path from 'node:path';
 import { VendorDispatcher } from '../packages/vendors/src/index';
 
 const VENDORS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux'];
+
+/** Nama port autentik per vendor (selaras deviceModels.ts) — huawei memakai
+ *  GigabitEthernet0/0/N, vendor lain generik p1..p3 sesuai kasus matriks. */
+const VENDOR_PORTS: Record<string, string[]> = {
+  huawei: ['GigabitEthernet0/0/1', 'GigabitEthernet0/0/2', 'GigabitEthernet0/0/3'],
+};
 
 const mkCtx = (nodeId: string, name: string, portNames: string[]) => ({
   nodeId,
@@ -124,7 +132,7 @@ const matrix: VendorMatrix = {
     },
   ],
   huawei: [
-    { name: 'DHCP server (global)', cmds: ['dhcp enable'], check: (m) => m.dhcpPools.length === 1 },
+    { name: 'DHCP server (global)', cmds: ['dhcp enable'], check: (m) => m.dhcpEnabled === true },
     { name: 'DHCP client', cmds: ['interface GigabitEthernet0/0/2', 'ip address dhcp'], check: (m) => (m.dhcpClients || []).length === 1 },
     { name: 'DNS', cmds: ['dns server 8.8.8.8'], check: (m) => m.dnsServers.length === 1 },
     { name: 'VLAN', cmds: ['vlan 10'], check: (m) => m.vlans.length === 1 },
@@ -132,7 +140,7 @@ const matrix: VendorMatrix = {
     {
       name: 'DHCP server (ip pool + gateway)',
       cmds: ['ip pool LAN1', 'network 192.168.88.0 mask 255.255.255.0', 'gateway-list 192.168.88.1'],
-      check: (m) => m.dhcpPools.length === 2 && m.dhcpPools[1].name === 'LAN1' && m.dhcpPools[1].gateway === '192.168.88.1' && m.dhcpPools[1].network === '192.168.88.0 255.255.255.0',
+      check: (m) => m.dhcpPools.some((p: any) => p.name === 'LAN1' && p.gateway === '192.168.88.1' && p.network === '192.168.88.0 255.255.255.0'),
     },
     {
       name: 'BGP (bgp/peer/network)',
@@ -148,13 +156,14 @@ const matrix: VendorMatrix = {
       name: 'NAT (outbound + server)',
       cmds: [
         'interface GigabitEthernet0/0/1',
+        'ip address 203.0.113.1 255.255.255.0',
         'nat outbound 3000',
         'nat server protocol tcp global current-interface 8080 inside 192.168.1.10 80',
       ],
       check: (m) => {
         const src = m.natRules.find((r: any) => r.chain === 'srcnat');
         const dst = m.natRules.find((r: any) => r.chain === 'dstnat');
-        return !!src && !!dst && dst.toAddresses === '192.168.1.10' && dst.toPorts === '80';
+        return !!src && !!dst && dst.dstAddress === '203.0.113.1' && dst.toAddresses === '192.168.1.10' && dst.toPorts === '80';
       },
     },
     { name: 'DNS static record', cmds: ['ip host web.site 203.0.113.10'], check: (m) => m.dnsRecords.length === 1 },
@@ -232,7 +241,14 @@ const matrix: VendorMatrix = {
   fortinet: [
     {
       name: 'DHCP server (full config)',
+      // Alur FortiOS nyata: interface wajib punya IP dulu — network pool
+      // diturunkan dari subnet interface (bukan dikarang dari range).
       cmds: [
+        'config system interface',
+        'edit port1',
+        'set ip 192.168.88.1 255.255.255.0',
+        'next',
+        'end',
         'config system dhcp server',
         'edit 1',
         'set interface port1',
@@ -335,59 +351,96 @@ const matrix: VendorMatrix = {
   ],
 };
 
-let pass = 0;
-let fail = 0;
-let skip = 0;
-const failures: string[] = [];
-
-const d = new VendorDispatcher();
-
-for (const vendor of VENDORS) {
-  console.log(`\n== ${vendor} ==`);
-  const cases = matrix[vendor] ?? [];
-  if (cases.length === 0) {
-    console.log('  (tidak ada fitur lanjutan yang didefinisikan — SKIP)');
-    skip++;
-    continue;
-  }
-  const id = `t_${vendor}`;
-  const c = mkCtx(id, `${vendor}-gw`, ['p1', 'p2', 'p3']);
-  const mem = d.getNodeMemory(id);
-  for (const tc of cases) {
-    let out = '';
-    for (const cmd of tc.cmds) out = d.dispatch(vendor, cmd, c);
-    const ok = tc.check(mem);
-    const detail = tc.detail ? tc.detail(mem) : JSON.stringify({
-      dhcpPools: mem.dhcpPools.length,
-      dhcpClients: (mem.dhcpClients || []).length,
-      dnsServers: mem.dnsServers.length,
-      dnsRecords: mem.dnsRecords.length,
-      natRules: mem.natRules.length,
-      vlans: mem.vlans.length,
-      acls: mem.acls.length,
-      ospf: mem.routing.ospf.enabled,
-      rip: mem.routing.rip.enabled,
-      bgp: mem.bgp.asn,
-      peers: mem.bgp.peers.length,
-      queues: (mem.queues || []).length,
-      wireless: mem.wireless ? Object.keys(mem.wireless) : [],
-      web: mem.webServer,
-    });
-    if (ok) {
-      pass++;
-      console.log(`  PASS · ${tc.name}`);
-    } else if (tc.detail) {
-      skip++;
-      console.log(`  SKIP · ${tc.name} — ${detail}`);
-    } else {
-      fail++;
-      failures.push(`${vendor}: ${tc.name}`);
-      console.log(`  FAIL · ${tc.name}\n         ${detail}`);
-    }
-  }
+export interface MatrixCaseResult {
+  name: string;
+  status: 'PASS' | 'FAIL' | 'SKIP';
+  detail?: string;
 }
 
-console.log(`\nRESULT: ${pass} passed, ${fail} failed, ${skip} skipped (vendor matrix)`);
-if (failures.length) console.log('FAILURES:\n  ' + failures.join('\n  '));
-// Gagal = exit code 1 — CI wajib gagal bila ada regresi vendor.
-if (fail > 0) process.exit(1);
+export interface VendorMatrixResult {
+  vendor: string;
+  total: number;
+  pass: number;
+  fail: number;
+  skip: number;
+  cases: MatrixCaseResult[];
+}
+
+export interface VerifyReport {
+  vendors: VendorMatrixResult[];
+  pass: number;
+  fail: number;
+  skip: number;
+}
+
+/** Jalankan matriks fitur untuk semua vendor dan kembalikan hasil terstruktur.
+ *  Dipakai langsung oleh CLI ini maupun diimpor scripts/conformance-score.mts —
+ *  skor konformansi SELALU diturunkan dari eksekusi nyata, bukan angka hardcode. */
+export function runVerifyMatrix(opts?: { quiet?: boolean }): VerifyReport {
+  const log = (...a: unknown[]) => { if (!opts?.quiet) console.log(...a); };
+  const d = new VendorDispatcher();
+  const report: VerifyReport = { vendors: [], pass: 0, fail: 0, skip: 0 };
+
+  for (const vendor of VENDORS) {
+    log(`\n== ${vendor} ==`);
+    const cases = matrix[vendor] ?? [];
+    const res: VendorMatrixResult = { vendor, total: cases.length, pass: 0, fail: 0, skip: 0, cases: [] };
+    if (cases.length === 0) {
+      log('  (tidak ada fitur lanjutan yang didefinisikan — SKIP)');
+      res.skip++;
+      continue;
+    }
+    const id = `t_${vendor}`;
+    const c = mkCtx(id, `${vendor}-gw`, VENDOR_PORTS[vendor] ?? ['p1', 'p2', 'p3']);
+    const mem = d.getNodeMemory(id);
+    for (const tc of cases) {
+      let out = '';
+      for (const cmd of tc.cmds) out = d.dispatch(vendor, cmd, c);
+      const ok = tc.check(mem);
+      const detail = tc.detail ? tc.detail(mem) : JSON.stringify({
+        dhcpPools: mem.dhcpPools.length,
+        dhcpClients: (mem.dhcpClients || []).length,
+        dnsServers: mem.dnsServers.length,
+        dnsRecords: mem.dnsRecords.length,
+        natRules: mem.natRules.length,
+        vlans: mem.vlans.length,
+        acls: mem.acls.length,
+        ospf: mem.routing.ospf.enabled,
+        rip: mem.routing.rip.enabled,
+        bgp: mem.bgp.asn,
+        peers: mem.bgp.peers.length,
+        queues: (mem.queues || []).length,
+        wireless: mem.wireless ? Object.keys(mem.wireless) : [],
+        web: mem.webServer,
+      });
+      if (ok) {
+        res.pass++;
+        res.cases.push({ name: tc.name, status: 'PASS' });
+        log(`  PASS · ${tc.name}`);
+      } else if (tc.detail) {
+        res.skip++;
+        res.cases.push({ name: tc.name, status: 'SKIP', detail });
+        log(`  SKIP · ${tc.name} — ${detail}`);
+      } else {
+        res.fail++;
+        res.cases.push({ name: tc.name, status: 'FAIL', detail });
+        log(`  FAIL · ${tc.name}\n         ${detail}`);
+      }
+    }
+    report.pass += res.pass;
+    report.fail += res.fail;
+    report.skip += res.skip;
+    report.vendors.push(res);
+  }
+
+  log(`\nRESULT: ${report.pass} passed, ${report.fail} failed, ${report.skip} skipped (vendor matrix)`);
+  return report;
+}
+
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (invokedDirectly) {
+  const failures = runVerifyMatrix().vendors.flatMap((v) => v.cases.filter((c) => c.status === 'FAIL').map((c) => `${v.vendor}: ${c.name}`));
+  // Gagal = exit code 1 — CI wajib gagal bila ada regresi vendor.
+  process.exit(failures.length ? 1 : 0);
+}

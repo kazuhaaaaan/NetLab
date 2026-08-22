@@ -21,7 +21,7 @@ otomatis hanya membuktikan level ≤4; bukti E2E lintas vendor (V2: pasangan
 mikrotik↔{cisco_ios, cisco_nxos, juniper, huawei, ubiquiti, vyos, fortinet,
 aruba, openwrt, linux} dan cisco_ios↔sisanya; V3: scenario engine penuh)
 menaikkan sel-sel IPv4/Static Route/DHCP/OSPF/BGP vendor inti menjadi 5 —
-semua pasangan V2 lulus di suite (1498 test).
+semua pasangan V2 lulus di suite (2240 test).
 
 ## Matriks
 
@@ -38,10 +38,23 @@ semua pasangan V2 lulus di suite (1498 test).
 | Static Route | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
 | Firewall/ACL | 4 | 2 | 2 | 4 | 4 | 4 | 4 | 4 | 2 | 4 | 2 |
 | DNS | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
-| Commit/Rollback | 0 | 0 | 0 | 4 | 0 | 2 | 2 | 0 | 0 | 4 | 0 |
+| Commit/Rollback | 0 | 0 | 0 | 4 | 0 | 4 | 4 | 0 | 0 | 4 | 0 |
 
 ## Perubahan iterasi audit terakhir
 
+- **upgrade fidelity 90%-drive (iterasi ini)**:
+  - **vyos/ubiquiti commit: 2 → 4** — rollback snapshot terbukti nyata
+    (round-trip test), catatan registry yang stale dikoreksi.
+  - **huawei**: `dhcp enable` kini menyimpan state nyata (`dhcpEnabled`),
+    `nat server ... current-interface` diresolv ke IP interface (bukan string kosong).
+  - **validasi ketat lintas vendor** — rute & alamat invalid ditolak TANPA
+    mutasi state: mask tak kontigu, prefix sampah (`/33`, `24x`), gateway bukan
+    IP, oktet > 255 (juniper/vyos/ubiquiti/generic, cisco-ios/nxos, huawei,
+    fortinet, linux, openwrt/uci, mikrotik-ipv6).
+  - **determinisme** — xid DHCP host & RTT pesan error ping kini deterministik
+    (FNV-1a); event log dibatasi `MAX_EVENT_LOG=5000`.
+  - **openwrt** — rute UCI tak lengkap/tak valid tidak lagi dimaterialkan
+    diam-diam; `network.routeN.*` tidak diterjemahkan sebagai interface.
 - **openwrt.ospf: 4 → 0** — OSPF OpenWrt (bird/zebra) tidak disimulasikan;
   sebelumnya `partial` (klaim berlebihan). CLI kini menjawab jujur.
 - **fortinet.vrrp: 0 (tetap 0)** — VRRP FortiOS tidak diimplementasikan;
@@ -58,8 +71,9 @@ semua pasangan V2 lulus di suite (1498 test).
 - **cisco_nxos**: NAT & ACL teruji level memori; VRRP belum teruji.
 - **juniper**: commit/rollback nyata (snapshot state); VRRP belum ada.
 - **huawei** (VRP v8): VRRP & IPv6 level-2 belum teruji E2E.
-- **ubiquiti/vyos** (EdgeOS/VyOS): model set/commit sederhana tanpa snapshot
-  rollback; VRRP belum ada.
+- **ubiquiti/vyos** (EdgeOS/VyOS): set diterapkan seketika; `commit` menyimpan
+  snapshot & `rollback [0-9]` mengembalikan ke commit terakhir — teruji
+  round-trip (set→commit→set→rollback). VRRP belum ada.
 - **fortinet** (FortiOS): NAT via policy & VIP teruji; VRRP tidak ada (jujur).
 - **aruba** (AOS-CX): NAT (0) & BGP (2) belum diimplementasikan — tidak ada
   klaim sukses palsu.

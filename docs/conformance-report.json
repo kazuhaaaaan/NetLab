@@ -1,0 +1,243 @@
+{
+  "scores": [
+    {
+      "vendor": "mikrotik",
+      "cli": 82.9,
+      "config": 100,
+      "engine": 100,
+      "protocols": 88.8,
+      "validation": 100,
+      "testing": 100,
+      "total": 94.3,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 13,
+        "matrixPass": 13,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "cisco_ios",
+      "cli": 94.3,
+      "config": 100,
+      "engine": 100,
+      "protocols": 100,
+      "validation": 100,
+      "testing": 100,
+      "total": 98.9,
+      "pass": true,
+      "detail": {
+        "matrixTotal": 7,
+        "matrixPass": 7,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "cisco_nxos",
+      "cli": 84.3,
+      "config": 100,
+      "engine": 100,
+      "protocols": 96.8,
+      "validation": 100,
+      "testing": 100,
+      "total": 96.2,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 7,
+        "matrixPass": 7,
+        "matrixFail": 0,
+        "validationProbes": 1,
+        "validationPassed": 1,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "juniper",
+      "cli": 82.9,
+      "config": 100,
+      "engine": 100,
+      "protocols": 84,
+      "validation": 100,
+      "testing": 100,
+      "total": 93.4,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 10,
+        "matrixPass": 10,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "huawei",
+      "cli": 82.9,
+      "config": 100,
+      "engine": 100,
+      "protocols": 84,
+      "validation": 100,
+      "testing": 100,
+      "total": 93.4,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 10,
+        "matrixPass": 10,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "ubiquiti",
+      "cli": 82.9,
+      "config": 100,
+      "engine": 100,
+      "protocols": 84,
+      "validation": 100,
+      "testing": 100,
+      "total": 93.4,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 10,
+        "matrixPass": 10,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "vyos",
+      "cli": 82.9,
+      "config": 100,
+      "engine": 100,
+      "protocols": 84,
+      "validation": 100,
+      "testing": 100,
+      "total": 93.4,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 10,
+        "matrixPass": 10,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "fortinet",
+      "cli": 68.6,
+      "config": 100,
+      "engine": 100,
+      "protocols": 76,
+      "validation": 100,
+      "testing": 100,
+      "total": 88.9,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 9,
+        "matrixPass": 9,
+        "matrixFail": 0,
+        "validationProbes": 1,
+        "validationPassed": 1,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "aruba",
+      "cli": 62.9,
+      "config": 100,
+      "engine": 100,
+      "protocols": 72.8,
+      "validation": 100,
+      "testing": 100,
+      "total": 87.1,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 7,
+        "matrixPass": 7,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "openwrt",
+      "cli": 61.4,
+      "config": 100,
+      "engine": 100,
+      "protocols": 0,
+      "validation": 100,
+      "testing": 100,
+      "total": 72.3,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 8,
+        "matrixPass": 8,
+        "matrixFail": 0,
+        "validationProbes": 1,
+        "validationPassed": 1,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "linux",
+      "cli": 48.6,
+      "config": 100,
+      "engine": 100,
+      "protocols": 0,
+      "validation": 100,
+      "testing": 100,
+      "total": 69.7,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 7,
+        "matrixPass": 7,
+        "matrixFail": 0,
+        "validationProbes": 2,
+        "validationPassed": 2,
+        "validationFailed": []
+      }
+    },
+    {
+      "vendor": "windows",
+      "cli": 17.1,
+      "config": null,
+      "engine": 100,
+      "protocols": null,
+      "validation": null,
+      "testing": 100,
+      "total": null,
+      "pass": false,
+      "detail": {
+        "matrixTotal": 0,
+        "matrixPass": 0,
+        "matrixFail": 0,
+        "validationProbes": 0,
+        "validationPassed": 0,
+        "validationFailed": []
+      }
+    }
+  ],
+  "globals": {
+    "engineChecks": 74,
+    "enginePassed": 74,
+    "interopChecks": 517,
+    "interopPassed": 517,
+    "matrixPass": 98,
+    "matrixFail": 0,
+    "matrixSkip": 0
+  },
+  "generatedAt": "2026-08-22T19:52:13.247Z",
+  "commit": "925ffe5"
+}
