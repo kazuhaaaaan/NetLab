@@ -396,6 +396,8 @@ export interface NodeMemory {
   currentDhcpPool: string;
   currentProto: string;
   currentIface: string;
+  /** Aruba AOS-CX: VRID aktif saat berada di konteks `ip vrrp <id>` (interface view). */
+  currentVrrp?: number;
   currentVlan: string;
   natInsideIfaces: string[];
   natOutsideIfaces: string[];

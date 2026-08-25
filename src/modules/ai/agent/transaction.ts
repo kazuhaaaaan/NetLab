@@ -48,13 +48,6 @@ export function restoreSnapshot(runtime: AgentRuntime, snap: Snapshot): boolean 
   }
 }
 
-/** Batasi verifikasi hanya action pada plan ini. */
-export function verificationScope(verification: VerificationEngine, actionId: string) {
-  return {
-    clear: () => verification.clearForAction(actionId),
-  };
-}
-
 /** Kelas transaksi: mulai → eksekusi → commit/rollback. */
 export class Transaction {
   private snap: Snapshot | null = null;

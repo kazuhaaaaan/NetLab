@@ -28,101 +28,143 @@ export interface DiagnoseParams {
   destination: string;
 }
 
-/** Alasan drop yang umum → saran perbaikan terstruktur. */
-function fixFromReason(reason: string | undefined, params: DiagnoseParams): { fixes: PlanAction[]; rootCause: string } {
+/** /24-prefix dari IP (untuk inferensi subnet sederhana). */
+function prefixOf(ip: string): string | null {
+  const m = ip.match(/^(\d+\.\d+\.\d+)\.\d+$/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Cari kandidat gateway untuk `source`: device LAIN yang punya interface
+ * aktif di subnet /24 yang sama dengan interface aktif source.
+ * Berdasarkan state engine nyata (getDeviceStats), bukan tebakan.
+ */
+function findGatewayCandidate(
+  sim: NetworkSimulator,
+  sourceId: string
+): { gateway: string; iface: string } | null {
+  const srcStats = sim.getDeviceStats(sourceId);
+  if (!srcStats) return null;
+  const srcIfaces = srcStats.interfaces.filter((i) => i.ip && i.up);
+  if (srcIfaces.length === 0) return null;
+
+  for (const dev of sim.getDevices()) {
+    if (dev.id === sourceId) continue;
+    const st = sim.getDeviceStats(dev.id);
+    if (!st) continue;
+    for (const iface of st.interfaces) {
+      if (!iface.ip || !iface.up) continue;
+      const ip = iface.ip.split('/')[0];
+      for (const si of srcIfaces) {
+        const sip = (si.ip as string).split('/')[0];
+        if (prefixOf(sip) && prefixOf(ip) === prefixOf(sip) && ip !== sip) {
+          return { gateway: ip, iface: si.name };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Susun perbaikan yang BENAR-BENAR BISA dieksekusi tool AI (params lengkap,
+ * lolos validasi registry). Penyebab yang butuh tindakan manusia (power,
+ * nama tujuan salah, layanan mati) TIDAK menghasilkan action karangan —
+ * root cause + evidence sudah cukup untuk operator.
+ */
+function fixFromReason(
+  reason: string | undefined,
+  params: DiagnoseParams,
+  sim: NetworkSimulator
+): { fixes: PlanAction[]; rootCause: string } {
   const { source, destination } = params;
-  const device = (d: string) => ({ deviceId: d });
   const fixes: PlanAction[] = [];
+  const dstIsIp = /^\d+\.\d+\.\d+\.\d+$/.test(destination);
 
   switch (reason) {
-    case 'no-ip':
-      fixes.push({
-        id: 'fix-no-ip',
-        type: 'configure_ip_address',
-        target: source,
-        params: device(source),
-        reason: `${source} tidak punya alamat IP pada interface sumber.`,
-        expectedEffect: `interface sumber ${source} memiliki IP aktif.`,
-        risk: 'medium',
-        validation: 'perlu alamat IP yang valid di subnet tujuan.',
-      });
+    case 'no-ip': {
+      // Inferensi konkret: subnet dari device lain yang reachable di topologi.
+      let address = '';
+      let iface = '';
+      const srcStats = sim.getDeviceStats(source);
+      const bare = srcStats?.interfaces.find((i) => !i.ip) ?? srcStats?.interfaces[0];
+      if (bare) iface = bare.name;
+      if (dstIsIp) {
+        const pfx = prefixOf(destination);
+        // Pastikan prefix ini memang terpasang di device lain (subnet nyata).
+        for (const dev of sim.getDevices()) {
+          if (dev.id === source) continue;
+          const st = sim.getDeviceStats(dev.id);
+          if (st?.interfaces.some((i) => i.ip?.startsWith(pfx + '.'))) {
+            address = `${pfx}.2/24`;
+            break;
+          }
+        }
+      }
+      if (iface && address) {
+        fixes.push({
+          id: 'fix-no-ip',
+          type: 'configure_ip_address',
+          target: source,
+          params: { deviceId: source, interface: iface, address },
+          reason: `${source} tidak punya alamat IP pada interface ${iface}; subnet ${pfxOf(address)} terdeteksi dari tetangga.`,
+          expectedEffect: `interface ${iface} pada ${source} memiliki IP ${address}`,
+          risk: 'medium',
+          validation: 'IP di subnet tetangga; sesuaikan bila skema addressing berbeda.',
+        });
+      }
       return { rootCause: `${source} tidak memiliki alamat IP aktif (no-ip)`, fixes };
+    }
     case 'not-found':
     case 'invalid':
-      fixes.push({
-        id: 'fix-target',
-        type: 'execute_cli',
-        target: destination,
-        params: { ...device(destination), command: '' },
-        reason: `tujuan ${destination} tidak ditemukan atau alamat tidak valid.`,
-        expectedEffect: `tujuan ${destination} valid dan dapat dijangkau.`,
-        risk: 'low',
-        validation: 'periksa nama/alamat tujuan.',
-      });
-      return { rootCause: `tujuan ${destination} tidak ditemukan (${reason})`, fixes };
+      // Tujuan tidak valid → bukan hal yang bisa "diperbaiki" lewat config.
+      return { rootCause: `tujuan ${destination} tidak ditemukan atau alamat tidak valid (${reason}) — periksa nama/alamat tujuan`, fixes: [] };
     case 'ttl':
-      fixes.push({
-        id: 'fix-ttl',
-        type: 'execute_cli',
-        target: source,
-        params: { ...device(source), command: '' },
-        reason: 'paket melebihi TTL — kemungkinan loop routing. Periksa rute statik/dinamis.',
-        expectedEffect: 'rute tidak berloop; TTL cukup.',
-        risk: 'high',
-        validation: 'audit rute pada seluruh perangkat di jalur.',
-      });
-      return { rootCause: `loop routing / TTL habis pada jalur ${source} → ${destination}`, fixes };
-    case 'unreachable':
-      fixes.push({
-        id: 'fix-route',
-        type: 'configure_route',
-        target: source,
-        params: { ...device(source), dst: '', gateway: '' },
-        reason: `tidak ada rute menuju ${destination} dari ${source}.`,
-        expectedEffect: `rute menuju ${destination} tersedia di ${source}.`,
-        risk: 'medium',
-        validation: 'pastikan gateway dapat dijangkau.',
-      });
+      // Loop routing → perbaikan otomatis berisiko; butuh audit rute manual.
+      return { rootCause: `loop routing / TTL habis pada jalur ${source} → ${destination} — audit rute statik/dinamis diperlukan`, fixes: [] };
+    case 'unreachable': {
+      const gw = findGatewayCandidate(sim, source);
+      const dst = dstIsIp ? `${destination}/32` : '0.0.0.0/0';
+      if (gw) {
+        fixes.push({
+          id: 'fix-route',
+          type: 'configure_route',
+          target: source,
+          params: { deviceId: source, dst, gateway: gw.gateway },
+          reason: `tidak ada rute menuju ${destination} dari ${source}; tetangga ${gw.gateway} ada di subnet interface ${gw.iface}.`,
+          expectedEffect: `rute ${dst} via ${gw.gateway} terpasang di ${source}`,
+          risk: 'medium',
+          validation: 'gateway harus dapat dijangkau di Layer 2.',
+        });
+      }
       return { rootCause: `tidak ada rute menuju ${destination} dari ${source}`, fixes };
+    }
     case 'blocked':
-    case 'rejected':
+    case 'rejected': {
+      const fwParams: Record<string, unknown> = { deviceId: source, action: 'accept' };
+      if (dstIsIp) fwParams['dst'] = `${destination}/32`;
       fixes.push({
         id: 'fix-firewall',
         type: 'configure_firewall',
         target: source,
-        params: { ...device(source), action: 'accept' },
+        params: fwParams,
         reason: 'paket diblokir firewall/ACL pada jalur.',
-        expectedEffect: `firewall mengizinkan lalu lintas ${source} → ${destination}.`,
+        expectedEffect: `firewall ${source} mengizinkan lalu lintas menuju ${destination}`,
         risk: 'high',
-        validation: 'konfirmasi rule firewall tujuan/forward.',
+        validation: 'konfirmasi rule firewall pada perangkat di jalur sebelum melonggarkan kebijakan.',
       });
       return { rootCause: `paket diblokir oleh firewall/ACL pada jalur ${source} → ${destination}`, fixes };
+    }
     case 'refused':
-      fixes.push({
-        id: 'fix-service',
-        type: 'execute_cli',
-        target: destination,
-        params: { ...device(destination), command: '' },
-        reason: 'koneksi ditolak (port tidak terbuka) pada tujuan.',
-        expectedEffect: `layanan pada ${destination} menerima koneksi.`,
-        risk: 'low',
-        validation: 'periksa layanan/port tujuan.',
-      });
-      return { rootCause: `koneksi ditolak oleh ${destination} (refused)`, fixes };
+      return { rootCause: `koneksi ditolak oleh ${destination} (refused) — layanan/port tujuan tidak terbuka`, fixes: [] };
     case 'power':
-      fixes.push({
-        id: 'fix-power',
-        type: 'execute_cli',
-        target: '',
-        params: {},
-        reason: 'perangkat mati (power off).',
-        expectedEffect: 'perangkat menyala.',
-        risk: 'low',
-        validation: 'nyalakan perangkat.',
-      });
-      return { rootCause: 'perangkat dalam keadaan mati (power)', fixes };
+      return { rootCause: 'perangkat dalam keadaan mati (power) — nyalakan perangkat', fixes: [] };
     default:
       return { rootCause: `koneksi gagal ${source} → ${destination} (${reason ?? 'alasan tidak diketahui'})`, fixes };
+  }
+
+  function pfxOf(cidr: string): string {
+    return cidr.split('/')[0].split('.').slice(0, 3).join('.');
   }
 }
 
@@ -160,11 +202,30 @@ export function diagnoseConnectivity(
   // 2. Buat kandidat tuan rumah resolusi nama → IP
   const dstIp = destination;
 
-  // 3. Bukti rute dari sumber
-  const routes = verification.verifyRoute({ source, dst: 'probe', actionId: 'diagnose' });
-  void routes;
-  const routeInfo = sim.getDeviceByName?.(source) ?? null;
-  void routeInfo;
+  // 3. Bukti rute dari sumber — state engine nyata (bukan dead code):
+  //    apakah ada rute spesifik/default aktif menuju tujuan?
+  const srcStats = sim.getDeviceStats(source);
+  const routes = srcStats?.routes ?? [];
+  const dstIsIp = /^\d+\.\d+\.\d+\.\d+$/.test(dstIp);
+  const dstPrefix = dstIsIp ? prefixOf(dstIp) : null;
+  const matchingRoute = routes.find(
+    (r) =>
+      r.active &&
+      (r.dst === '0.0.0.0/0' ||
+        r.dst === dstIp ||
+        r.gateway !== '' ||
+        (dstPrefix && r.dst.startsWith(dstPrefix + '.')))
+  );
+  evidence.push({
+    step: 'routes',
+    data:
+      routes.length === 0
+        ? ['tidak ada rute di tabel routing sumber']
+        : [
+            ...routes.slice(0, 5).map((r) => `${r.dst}${r.gateway ? ` via ${r.gateway}` : ''}${r.active ? '' : ' [inactive]'}`),
+            `default/spesifik aktif: ${matchingRoute ? 'ya' : 'tidak'}`,
+          ],
+  });
 
   // 4. Bukti ARP/NDP
   const arp = verification.verifyArp({ source, destination: dstIp, actionId: 'diagnose' });
@@ -198,8 +259,8 @@ export function diagnoseConnectivity(
     evidence.push({ step: 'packet-trace', data: ['traceroute tidak tersedia'] });
   }
 
-  // 8. Root cause: dari reason ping + data per hop
-  const { rootCause, fixes } = fixFromReason(ping.reason, params);
+  // 8. Root cause: dari reason ping + data per hop; fix hanya yang executable.
+  const { rootCause, fixes } = fixFromReason(ping.reason, params, sim);
   const finalReason = packetTrace.some((l) => l.includes('DROP'))
     ? `${rootCause} (drop terdeteksi di ${packetTrace.find((l) => l.includes('DROP')) ?? 'jalur'})`
     : rootCause;

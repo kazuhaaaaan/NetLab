@@ -160,8 +160,11 @@ export function syncNodeToEngine(sim: SimulationEngine, dis: VendorDispatcher, n
   sim.setHostname(nodeId, mem.hostname || undefined);
   sim.setSubinterfaces(nodeId, mem.subinterfaces || undefined);
   sim.setShutdownIfaces(nodeId, mem.shutdownIfaces || undefined);
-  sim.applyNodeConfig(nodeId, mem.configuredIps, mem.routes.filter(isRouteEntry));
-  sim.applyNodeConfig6(nodeId, mem.configuredIps6 || {}, mem.routes6.filter(isRouteEntry));
+  // REPLACE (bukan merge): configuredIps adalah himpunan otoritatif penuh —
+  // key yang hilang (hasil `no ip address`) wajib dihapus dari engine,
+  // bukan dipertahankan oleh merge ConfigStore.
+  sim.replaceNodeIps(nodeId, mem.configuredIps, mem.routes.filter(isRouteEntry));
+  sim.replaceNodeIps6(nodeId, mem.configuredIps6 || {}, mem.routes6.filter(isRouteEntry));
   sim.setRouting(nodeId, mem.routing || undefined);
   sim.setBgp(nodeId, bgpConfigOf(mem.bgp));
   sim.setSnmp(nodeId, mem.snmp || undefined);
@@ -194,6 +197,69 @@ export function syncNodeToEngine(sim: SimulationEngine, dis: VendorDispatcher, n
   sim.setIpv6DhcpClients(nodeId, mem.ipv6DhcpClients || undefined);
   sim.computeDynamicRoutes();
 }
+
+// ── Konvergensi display canvas (audit R2) ──────────────────────────────
+
+/** Bentuk minimal proyek yang dibutuhkan helper IP (LabProject memenuhi ini). */
+export interface IpProjectLike {
+  nodes: Array<{
+    id: string;
+    ports: Array<{ id?: string; name?: string; ipAddress?: string }>;
+  }>;
+}
+
+/** Isi `configuredIps` yang hilang di memori vendor dari ipAddress proyek.
+ *  Preset/template/import menyimpan IP hanya di state canvas — tanpa seeding,
+ *  perintah CLI `print` mengaku perangkat kosong padahal canvas menampilkan
+ *  IP (divergensi tampilan). Kebenaran CLI yang sudah ada TIDAK ditimpa. */
+export function seedMemoryIpsFromProject(project: IpProjectLike, dis: VendorDispatcher): void {
+  for (const n of project.nodes) {
+    const mem = dis.getNodeMemory(n.id);
+    if (!mem.configuredIps) mem.configuredIps = {};
+    for (const p of n.ports) {
+      if (!p.ipAddress) continue;
+      const name = p.name || p.id;
+      if (!name) continue;
+      if (!(name in mem.configuredIps) && !(p.id && p.id in mem.configuredIps)) {
+        mem.configuredIps[name] = p.ipAddress;
+      }
+    }
+  }
+}
+
+/** Cermin IP memori vendor → state proyek untuk SATU node (display canvas).
+ *  Memori kosong → node dibiarkan apa adanya (IP preset tetap tampil).
+ *  Memori terisi → mirror eksak: interface tanpa IP di memori ikut bersih
+ *  (hasil `no ip address` tidak lagi meninggalkan tampilan basi).
+ *  Mengembalikan proyek baru bila ada perubahan, atau null bila tidak ada. */
+export function mirrorNodeIpsToProject(
+  project: IpProjectLike,
+  dis: VendorDispatcher,
+  nodeId: string
+): IpProjectLike | null {
+  const node = project.nodes.find((n) => n.id === nodeId);
+  if (!node) return null;
+  const ips = dis.getNodeMemory(nodeId)?.configuredIps || {};
+  if (Object.keys(ips).length === 0) return null;
+  let changed = false;
+  const ports = node.ports.map((p) => {
+    const name = p.name || p.id || '';
+    const target = ips[name] ?? (p.id ? ips[p.id] : undefined);
+    if (target) {
+      if (p.ipAddress !== target) {
+        changed = true;
+        return { ...p, ipAddress: target };
+      }
+    } else if (p.ipAddress !== undefined) {
+      changed = true;
+      return { ...p, ipAddress: undefined };
+    }
+    return p;
+  });
+  if (!changed) return null;
+  return { ...project, nodes: project.nodes.map((n) => (n.id === nodeId ? { ...n, ports } : n)) };
+}
+
 
 /** Sinkronkan pool DHCP dari konfigurasi CLI (MikroTik/Cisco/etc.) ke simulation engine.
  *  excluded-address global (Cisco) berlaku untuk semua pool perangkat. */

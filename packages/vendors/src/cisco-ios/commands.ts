@@ -278,7 +278,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     order: 37,
     vendors: 'all',
     cap: 'vrrp',
-    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(vrrp|standby)\s+(\d+)\s+ip\s+(\S+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(vrrp|standby)\s+(\d+)\s+ip\s+(\S+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
 
@@ -302,7 +302,7 @@ export const ciscoiosEntries: ChainEntry[] = [
     order: 38,
     vendors: 'all',
     cap: 'vrrp',
-    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(vrrp|standby)\s+(\d+)\s+priority\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos' || vendorId === 'aruba')),
+    match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(vrrp|standby)\s+(\d+)\s+priority\s+(\d+)/i.test(rawInput.trim()) && mem.currentIface && (vendorId === 'cisco_ios' || vendorId === 'cisco_nxos')),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {
     let cmdResult: CommandResult | undefined;
 

@@ -17,18 +17,22 @@ import type { VendorContext } from '../../packages/vendors/src/common/types';
 import { portLinksOfNode } from './configExport';
 
 export interface CliContextInput {
-  node: LabNode;
+  /** Node sumber CLI; boleh undefined → context minim (perilaku terminal lama). */
+  node?: LabNode;
   project: LabProject;
   sim: NetworkSimulator;
+  /** Hook aktivitas UI (mis. refresh stats) — dipanggil saat context mengubah state engine. */
+  onActivity?: () => void;
 }
 
 /** Bangun VendorContext lengkap untuk sebuah node (sama untuk manusia & AI). */
-export function buildCliContext({ node, project, sim }: CliContextInput): VendorContext {
-  const nodeId = node.id;
+export function buildCliContext({ node, project, sim, onActivity }: CliContextInput): VendorContext {
+  const nodeId = node?.id || '';
+  const touch = () => onActivity?.();
   return {
     nodeId,
-    name: node.name,
-    ports: node.ports.map((p) => ({ ...p })),
+    name: node?.name || nodeId,
+    ports: (node?.ports || []).map((p) => ({ ...p })),
     portLinks: portLinksOfNode(node, project.edges),
     pingSimulator: (host: string, vendorId: string, size?: number) => {
       const result = sim.simulatePing(nodeId, host, size);
@@ -41,8 +45,9 @@ export function buildCliContext({ node, project, sim }: CliContextInput): Vendor
     routeProvider: () => sim.getDeviceStats(nodeId)?.routes || [],
     dhcpClientGrant: (iface: string, addDefaultRoute: boolean) => {
       const granted = sim.grantDhcpLease(nodeId, iface);
+      if (granted) touch();
       return granted
-        ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId }
+        ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId, dnsServers: granted.dnsServers }
         : null;
     },
     connectivitySimulator: (host: string, vendorId: string, port?: number) => {
@@ -61,6 +66,7 @@ export function buildCliContext({ node, project, sim }: CliContextInput): Vendor
         if (reason === 'ttl') return 'curl: (28) Timeout: TTL exceeded menuju ' + label;
         return `curl: (7) Failed to connect to ${label} port ${port || 80} after 3000 ms: Connection refused`;
       }
+      touch();
       const body =
         conn.body ||
         `<html><head><title>Welcome to ${label}</title></head><body><h1>It works!</h1></body></html>`;

@@ -211,8 +211,19 @@ export class NetworkSimulator implements SimulatorCore {
     this.configStore.applyNodeConfig(nodeId, ips, routes);
   }
 
+  /** REPLACE semantics (bukan merge): key yang hilang dihapus dari device.
+   *  Dipakai jalur sinkronisasi CLI → engine yang selalu mengirim set penuh. */
+  replaceNodeIps(nodeId: string, ips: Record<string, string>, routes: Array<{ dst: string; gateway: string; distance?: number }>): void {
+    this.configStore.replaceNodeIps(nodeId, ips, routes);
+  }
+
   applyNodeConfig6(nodeId: string, ips6: Record<string, string>, routes6: Array<{ dst: string; gateway: string }>): void {
     this.configStore.applyNodeConfig6(nodeId, ips6, routes6);
+  }
+
+  /** REPLACE semantics untuk IPv6 (bukan merge). */
+  replaceNodeIps6(nodeId: string, ips6: Record<string, string>, routes6: Array<{ dst: string; gateway: string }>): void {
+    this.configStore.replaceNodeIps6(nodeId, ips6, routes6);
   }
 
   setDhcpPools(poolsByNode: Record<string, DhcpPoolInfo[]>): void {

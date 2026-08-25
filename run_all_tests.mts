@@ -40,6 +40,7 @@ import { runWindowsMasterFixTests } from './tests/unit/windowsMasterFix.test';
 import { runDataPlaneUpgradeTests } from './tests/unit/dataPlaneUpgrade.test';
 import { runServicesUpgradeTests } from './tests/unit/servicesUpgrade.test';
 import { runPhase1CoreTests } from './tests/unit/phase1CoreCorrectness.test';
+import { runCliFidelityTests } from './tests/unit/cliFidelity.test';
 import { dropCodeOf } from './src/engine/net/core/dropReasons';
 import { NatTranslator } from './src/engine/net/layer4/Nat';
 import type { Packet } from './src/engine/net/core/types';
@@ -2766,6 +2767,12 @@ const p1rep = runPhase1CoreTests();
 passed += p1rep.passed;
 failed += p1rep.failed;
 fails.push(...p1rep.fails);
+
+// ── 24c. CLI Fidelity conformance probes (dimensi cli skor konformansi).
+const cfres = runCliFidelityTests();
+passed += cfres.passed;
+failed += cfres.failed;
+fails.push(...cfres.fails);
 
 // ── 25. Port Inspector: derivasi koneksi dari topologi + lifecycle paket.
 console.log('\n== 25. Port Inspector & packet lifecycle ==');

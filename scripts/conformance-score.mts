@@ -2,21 +2,30 @@
  * Mesin skor konformansi NetLab — SEMUA skor diturunkan dari eksekusi nyata.
  *
  * Dimensi & sumber data (tidak ada angka hardcode):
- *  - cli        : registry kapabilitas (capabilities.ts), bobot status
- *                 supported=100, partial=60, parser-only=25, not-supported=0.
+ *  - cli        : probe perilaku CLI per vendor (tests/unit/cliFidelity.test.ts)
+ *                 — mode/help/error gaya vendor/mutasi state/penolakan input
+ *                 invalid/show reflektif/persistensi/abbreviasi. Registry
+ *                 kapabilitas tetap dilaporkan sebagai detail featureBreadth.
  *  - config     : matriks fitur per vendor (verify-all-vendors.mts).
  *  - engine     : suite kebenaran inti (tests/unit/phase1CoreCorrectness.test.ts)
  *                 — determinisme, parsing ketat, validasi core (shared engine).
  *  - protocols  : 60% kasus protokol pada matriks fitur (OSPF/BGP/RIP)
- *                 + 40% share status kapabilitas protokol di registry.
+ *                 + 40% share status kapabilitas protokol di registry,
+ *                 dinormalisasi atas PROTOCOL_SET vendor (protokol yang memang
+ *                 tidak ada di produk aslinya tidak menghukum vendor).
  *  - validation : probe input-tidak-valid PER VENDOR — CLI wajib menolak dengan
  *                 pesan error DAN tidak mengubah state (routes/configuredIps).
  *  - testing    : rasio lulus suite interop+registry (vendorInterop.test.ts).
  *
- * Formula: total = .20*cli + .20*config + .20*engine + .20*protocols
- *                 + .10*validation + .10*testing
+ * Formula: total = Σ(w_d × skor_d) dengan bobot dasar
+ *   cli .20, config .20, engine .20, protocols .20, validation .10, testing .10.
+ * Vendor device-class "client-host" (mis. Windows) dan vendor dengan
+ * protocolSet kosong di registry (mis. OpenWrt/Linux dasar tanpa daemon
+ * routing dinamis) tidak mensimulasikan protokol routing → dimensi protocols
+ * dikeluarkan dan bobot direnormalisasi.
  * PASS ≥90 hanya jika total ≥90 DAN floor sub-dimensi terpenuhi
- * (cli≥85, config≥85, engine≥90, protocols≥85, validation≥80, testing≥90).
+ * (cli≥85, config≥85, engine≥90, protocols≥85, validation≥80, testing≥90;
+ * floor protocols tidak berlaku untuk client-host).
  *
  * Jalankan: npx tsx scripts/conformance-score.mts [--json=path]
  */
@@ -25,10 +34,11 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { VendorDispatcher } from '../packages/vendors/src/index';
-import { VENDOR_CAPABILITIES } from '../packages/vendors/src/capabilities';
+import { VENDOR_CAPABILITIES, VENDOR_PROTOCOL_SETS } from '../packages/vendors/src/capabilities';
 import { runVerifyMatrix } from './verify-all-vendors.mts';
 import { runPhase1CoreTests } from '../tests/unit/phase1CoreCorrectness.test';
 import { runVendorInteropTests } from '../tests/unit/vendorInterop.test';
+import { runCliFidelityDetailed } from '../tests/unit/cliFidelity.test';
 
 const WEIGHTS = { cli: 0.2, config: 0.2, engine: 0.2, protocols: 0.2, validation: 0.1, testing: 0.1 };
 const FLOORS = { cli: 85, config: 85, engine: 90, protocols: 85, validation: 80, testing: 90 };
@@ -81,9 +91,15 @@ const VALIDATION_PROBES: Record<string, { name: string; cmds: string[] }[]> = {
     { name: 'Prefix > 32', cmds: ['ip route add 10.9.9.0/33 via 10.0.0.1'] },
     { name: 'Oktet IP > 255', cmds: ['ip addr add 10.0.0.999/24 dev p1'] },
   ],
+  windows: [
+    { name: 'IP oktet > 255 (netsh)', cmds: ['netsh interface ipv4 set address name="Ethernet" static 300.1.1.1 255.255.255.0'] },
+    { name: 'Prefix > 32 pada route', cmds: ['route add 10.9.9.0/33 mask 255.255.255.0 10.0.0.1'] },
+  ],
 };
 
-const ERROR_RE = /%|invalid|incomplete|failed|unknown|unrecognized|not supported|bad argument|must be|error/i;
+// Marker penolakan CLI lintas vendor — termasuk gaya Windows
+// ("The parameter is incorrect.") agar penolakan autentik tetap terdeteksi.
+const ERROR_RE = /%|invalid|incomplete|failed|unknown|unrecognized|not recognized|not supported|bad argument|must be|error|\bincorrect\b/i;
 const isProtoCase = (name: string) => /ospf|bgp|rip/i.test(name);
 
 function capsScore(vendorId: string, keys?: readonly string[]): number {
@@ -133,6 +149,7 @@ export interface VendorScore {
   testing: number;
   total: number | null;
   pass: boolean;
+  deviceClass: string;
   detail: Record<string, unknown>;
 }
 
@@ -141,21 +158,27 @@ export function computeConformance(): { scores: VendorScore[]; globals: Record<s
   const matrix = runVerifyMatrix({ quiet: true });
   const byVendor = new Map(matrix.vendors.map((v) => [v.vendor, v]));
 
-  // 2. Suite inti (engine global) + suite interop (testing global).
+  // 2. Suite inti (engine global) + suite interop (testing global) + probe CLI.
   const core = runPhase1CoreTests();
   const enginePct = core.passed / Math.max(1, core.passed + core.failed) * 100;
   const interop = runVendorInteropTests();
   const testingPct = interop.passed / Math.max(1, interop.passed + interop.failed) * 100;
+  const fidelity = runCliFidelityDetailed();
 
   let commit = 'unknown';
   try { commit = execSync('git rev-parse --short HEAD').toString().trim(); } catch { /* bukan repo */ }
 
   const scores: VendorScore[] = [];
   for (const vid of Object.keys(VENDOR_CAPABILITIES)) {
+    const reg = VENDOR_CAPABILITIES[vid];
     const m = byVendor.get(vid);
     const hasMatrix = !!m && m.total > 0;
 
-    const cli = capsScore(vid);
+    // CLI fidelity: hasil probe perilaku nyata; registry dilaporkan sebagai
+    // featureBreadth (lebar fitur deklaratif), bukan lagi sumber dimensi cli.
+    const fid = fidelity.perVendor[vid];
+    const cli = fid ? fid.pct : capsScore(vid);
+    const featureBreadth = capsScore(vid);
     const config = hasMatrix ? (m!.pass / m!.total) * 100 : null;
 
     let protoMatrixRate: number | null = null;
@@ -165,45 +188,72 @@ export function computeConformance(): { scores: VendorScore[]; globals: Record<s
         protoMatrixRate = protoCases.filter((c) => c.status === 'PASS').length / protoCases.length * 100;
       }
     }
-    const protoCapsShare = capsScore(vid, PROTOCOL_CAPS);
+    // Normalisasi atas protocol set vendor: protokol yang memang tidak ada di
+    // produk aslinya (mis. EIGRP non-Cisco, RIP pasca FortiOS 7.0) tidak
+    // menghukum skor — hanya set yang berlaku yang dirata-ratakan.
+    const protoSet = (VENDOR_PROTOCOL_SETS as Record<string, readonly string[]>)[vid] ?? PROTOCOL_CAPS;
+    const protoCapsShare = capsScore(vid, protoSet);
     // Vendor tanpa kasus protokol di matriks → pakai share registry saja.
     const protocols = protoMatrixRate !== null ? 0.6 * protoMatrixRate + 0.4 * protoCapsShare : hasMatrix ? protoCapsShare : null;
 
     const vp = runValidationProbes(vid);
     const validation = vp.total ? (vp.passed / vp.total) * 100 : null;
 
-    const dims: (number | null)[] = [cli, config, enginePct, protocols, validation, testingPct];
-    const complete = dims.every((v) => v !== null);
+    // Device-class "client-host" tidak mensimulasikan protokol routing, dan
+    // vendor dengan protocolSet KOSONG (mis. OpenWrt/Linux dasar tanpa daemon
+    // FRR/bird) memang tidak menjalankan routing dinamis di profil dasarnya —
+    // keduanya: dimensi protocols dikeluarkan dan bobot direnormalisasi.
+    const deviceClass = String(reg?.deviceClass ?? 'router');
+    const skipProtocols = deviceClass === 'client-host' || protoSet.length === 0;
+    const dims: (number | null)[] = [cli, config, enginePct, skipProtocols ? null : protocols, validation, testingPct];
+    // Kelengkapan dinilai hanya atas dimensi yang IKUT dihitung — dimensi
+    // yang dikeluarkan (protocols untuk client-host/protocolSet kosong)
+    // tidak boleh membuat total menjadi n/a (bug lama: renormalisasi tak
+    // pernah tercapai karena null menggagalkan complete).
+    const counted = dims.filter((v, i) => !(i === 3 && skipProtocols));
+    const complete = counted.every((v) => v !== null);
     let total: number | null = null;
     let pass = false;
     if (complete) {
+      const wSum =
+        WEIGHTS.cli + WEIGHTS.config + WEIGHTS.engine + WEIGHTS.validation + WEIGHTS.testing +
+        (skipProtocols ? 0 : WEIGHTS.protocols);
       total =
         WEIGHTS.cli * cli +
         WEIGHTS.config * (config as number) +
         WEIGHTS.engine * enginePct +
-        WEIGHTS.protocols * (protocols as number) +
+        (skipProtocols ? 0 : WEIGHTS.protocols * (protocols as number)) +
         WEIGHTS.validation * (validation as number) +
         WEIGHTS.testing * testingPct;
-      total = Math.round(total * 10) / 10;
+      total = Math.round((total / wSum) * 10) / 10;
       pass = total >= 90 &&
         cli >= FLOORS.cli && (config as number) >= FLOORS.config && enginePct >= FLOORS.engine &&
-        (protocols as number) >= FLOORS.protocols && (validation as number) >= FLOORS.validation && testingPct >= FLOORS.testing;
+        (skipProtocols || (protocols as number) >= FLOORS.protocols) &&
+        (validation as number) >= FLOORS.validation && testingPct >= FLOORS.testing;
     }
+
+    // Vendor dengan dimensi protocols dikeluarkan → laporkan null (n/a),
+    // bukan 0, agar tabel tidak menyiratkan kegagalan protokol.
+    const protoFinal = skipProtocols ? null : protocols;
 
     scores.push({
       vendor: vid,
       cli: Math.round(cli * 10) / 10,
       config: config === null ? null : Math.round(config * 10) / 10,
       engine: Math.round(enginePct * 10) / 10,
-      protocols: protocols === null ? null : Math.round(protocols * 10) / 10,
+      protocols: protoFinal === null ? null : Math.round(protoFinal * 10) / 10,
       validation: validation === null ? null : Math.round(validation * 10) / 10,
       testing: Math.round(testingPct * 10) / 10,
       total,
       pass,
+      deviceClass,
       detail: {
         matrixTotal: m?.total ?? 0,
         matrixPass: m?.pass ?? 0,
         matrixFail: m?.fail ?? 0,
+        featureBreadth: Math.round(featureBreadth * 10) / 10,
+        cliProbes: fid ? { passed: fid.passed, total: fid.total } : null,
+        protocolSet: [...protoSet],
         validationProbes: vp.total,
         validationPassed: vp.passed,
         validationFailed: vp.failed,

@@ -338,6 +338,29 @@ export function generateRunningConfig(context: VendorContext, mem: NodeMemory, v
       if (r.toPorts) line += ` to-ports=${String(r.toPorts)}`;
       lines.push(line);
     });
+  } else if (vendor === 'windows') {
+    // Windows client: export sebagai perintah konfigurasi autentik
+    // (netsh/route) sehingga round-trip import menghasilkan state yang sama.
+    lines.push('# Windows configuration export');
+    withIp.forEach((p) => {
+      const [ip, pref] = String(p.ipAddress).split('/');
+      const mask = bitsToMask(Number(pref || '24'));
+      lines.push(`netsh interface ipv4 set address name="${String(p.name)}" static ${String(ip)} ${String(mask)}`);
+    });
+    const dnsIface =
+      Object.keys(mem.configuredIps || {})[0] ||
+      (withIp[0] ? String(withIp[0].name) : '') ||
+      (context?.ports && context.ports[0] ? String((context.ports[0] as Record<string, unknown>).name || '') : '') ||
+      'Ethernet';
+    mem.dnsServers.forEach((dns) => {
+      lines.push(`netsh interface ipv4 set dnsservers name="${dnsIface}" static ${String(dns)} primary`);
+    });
+    mem.routes.forEach((r) => {
+      if (!r.gateway || !r.dst) return;
+      const [dst, pref] = String(r.dst).split('/');
+      const mask = bitsToMask(Number(pref ?? '32'));
+      lines.push(`route add ${String(dst)} mask ${String(mask)} ${String(r.gateway)}`);
+    });
   } else if (vendor === 'juniper') {
     lines.push(`set system host-name ${String(hostname)}`);
     withIp.forEach((p) => lines.push(`set interfaces ${String(p.name)} unit 0 family inet address ${String(cidrOf(p.ipAddress))}`));
@@ -732,10 +755,20 @@ export function generateRunningConfig(context: VendorContext, mem: NodeMemory, v
     (mem.routes6 || []).forEach((r) => {
       lines.push(`ipv6 route ${String(r.dst)} ${String(r.gateway)}`);
     });
-    // VRRP/HSRP: virtual IP di interface
+    // VRRP/HSRP: virtual IP di interface — Aruba AOS-CX memakai blok
+    // `ip vrrp` autentik, vendor lain sintaks Cisco.
     (mem.fhrpGroups || []).forEach((g) => {
-      lines.push(`interface ${String(g.interface || 'ether1')}`);
       const ipOnly = String(g.virtualAddress || '').split('/')[0];
+      if (vendor === 'aruba') {
+        lines.push(`interface ${String(g.interface || 'ether1')}`);
+        lines.push(` ip vrrp ${String(g.vrid || 1)}`);
+        lines.push('  address-family ipv4');
+        if (ipOnly && ipOnly !== '0.0.0.0') lines.push(`   virtual-ip ${String(ipOnly)} primary`);
+        lines.push(`  priority ${String(g.priority ?? 100)}`);
+        lines.push('  enable');
+        return;
+      }
+      lines.push(`interface ${String(g.interface || 'ether1')}`);
       if (ipOnly && ipOnly !== '0.0.0.0') lines.push(` vrrp ${String(g.vrid || 1)} ip ${String(ipOnly)}`);
       lines.push(` vrrp ${String(g.vrid || 1)} priority ${String(g.priority ?? 100)}`);
     });

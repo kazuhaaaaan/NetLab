@@ -90,7 +90,11 @@ export function runVendorHardeningTests(): Report {
   const BLOCKED: Record<string, { cap: CapabilityKey; setup: string[]; cmds: string[]; expectLabel: string; vendorLabel: string }[]> = {
     aruba: [
       { cap: 'nat', setup: ['interface ether1'], cmds: ['ip nat inside', 'ip nat outside', 'ip nat inside source list 1 interface ether2 overload'], expectLabel: 'NAT', vendorLabel: 'Aruba AOS-CX' },
-      { cap: 'vrrp', setup: ['interface ether1'], cmds: ['vrrp 1 ip 192.168.9.254'], expectLabel: 'VRRP', vendorLabel: 'Aruba AOS-CX' },
+      // Catatan: vrrp aruba KELUAR dari daftar blocked — kini didukung dengan
+      // blok autentik AOS-CX (`ip vrrp <id>` → address-family ipv4 →
+      // virtual-ip → enable); bukti ada di FEATURES (V0) & matriks vendor.
+      // Penolakan sintaks IOS-style (`vrrp 1 ip …`) diuji positif di matriks
+      // verify-all-vendors ('VRRP sintaks IOS ditolak').
       { cap: 'rip', setup: [], cmds: ['router rip'], expectLabel: 'RIP', vendorLabel: 'Aruba AOS-CX' },
       { cap: 'eigrp', setup: [], cmds: ['router eigrp 100'], expectLabel: 'EIGRP', vendorLabel: 'Aruba AOS-CX' },
     ],
@@ -475,7 +479,7 @@ export function runVendorHardeningTests(): Report {
       windows: ['netsh winsock reset'],
     },
   };
-  const HONEST = /not supported|not currently simulated|bad command name|syntax error|Unrecognized command|Invalid input|command not found|Entry not found|no servers could be reached|error:|Unknown "set" path/i;
+  const HONEST = /not supported|not currently simulated|bad command name|syntax error|Unrecognized command|Invalid input|command not found|Entry not found|no servers could be reached|error:|Unknown "set" path|is not recognized as an internal or external command/i;
   const FAKE_MARKERS2 = /Success rate|packets transmitted|Reply from|icmp_seq|0% packet loss|received, 0|200 OK|<!DOCTYPE|Configuration saved successfully|Saved configuration|commit complete/i;
   const familyOf = (vid: string): string =>
     vid === 'cisco_ios' || vid === 'cisco_nxos' ? 'cisco'

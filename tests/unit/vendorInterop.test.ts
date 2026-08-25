@@ -193,6 +193,10 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'staticRoute', cmds: ['ip route 10.99.0.0 255.255.255.0 10.0.1.2'], assert: (m) => routeStored(m, '10.99.0.0/24', '10.0.1.2') },
     { cap: 'vlan', cmds: ['vlan 10'], assert: (m) => (m.vlans || []).length >= 1 },
     { cap: 'ospf', cmds: ['router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
+    // BGP AOS-CX: neighbor + network bentuk CIDR (sintaks autentik AOS-CX).
+    { cap: 'bgp', cmds: ['router bgp 65001', 'neighbor 192.168.1.2 remote-as 65002', 'network 10.0.1.0/24'], assert: (m) => m.bgp.asn === 65001 && m.bgp.peers.length >= 1 && (m.bgp.networks || []).includes('10.0.1.0/24') },
+    // VRRP blok autentik AOS-CX: ip vrrp → address-family ipv4 → virtual-ip → enable.
+    { cap: 'vrrp', cmds: ['interface ether1', 'ip vrrp 10', 'address-family ipv4', 'virtual-ip 192.168.9.254 primary', 'enable', 'end'], assert: (m) => m.fhrpGroups.some((g: any) => g.vrid === 10 && g.virtualAddress === '192.168.9.254/24' && g.enabled === true && g.interface === 'ether1') },
     { cap: 'dhcp', cmds: ['ip dhcp pool LAN1', 'network 192.168.88.0 255.255.255.0', 'default-router 192.168.88.1'], assert: (m) => m.dhcpPools.some((p: any) => p.gateway === '192.168.88.1') },
     { cap: 'dns', cmds: ['ip name-server 8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
     // commit: write memory → snapshot startup-config → reload memulihkannya.
@@ -217,6 +221,12 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'nat', cmds: ['iptables -t nat -A POSTROUTING -o ether2 -j MASQUERADE'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
     { cap: 'dhcp', cmds: ['echo "subnet 192.168.88.0 netmask 255.255.255.0 { range 192.168.88.100 192.168.88.200; option routers 192.168.88.1; }" > /etc/dhcp/dhcpd.conf'], assert: (m) => m.dhcpPools.some((p: any) => p.range === '192.168.88.100-192.168.88.200' && p.gateway === '192.168.88.1') },
     { cap: 'dns', cmds: ['echo "nameserver 8.8.8.8" > /etc/resolv.conf'], assert: (m) => (m.dnsServers || []).length >= 1 },
+  ],
+  windows: [
+    // CLI konfiguratif Windows autentik: netsh (IP/DNS) & route add bentuk mask.
+    { cap: 'ipv4', cmds: ['netsh interface ipv4 set address name="ether1" static 10.0.1.1 255.255.255.252 10.0.1.2'], assert: (m) => ipStored(m, 'ether1', '10.0.1.1/30') },
+    { cap: 'dns', cmds: ['netsh interface ipv4 set dnsservers name="ether1" static 8.8.8.8 primary'], assert: (m) => (m.dnsServers || []).includes('8.8.8.8') },
+    { cap: 'staticRoute', cmds: ['route add 10.99.0.0 mask 255.255.255.0 10.0.1.2'], assert: (m) => routeStored(m, '10.99.0.0/24', '10.0.1.2') },
   ],
 };
 
@@ -425,7 +435,9 @@ export function runVendorInteropTests(): Report {
   const UNSUPPORTED: Record<string, { cap: CapabilityKey; cmds: string[] }[]> = {
     aruba: [
       { cap: 'nat', cmds: ['ip nat inside', 'ip nat outside'] },
-      { cap: 'vrrp', cmds: ['vrrp 1 ip 192.168.9.254'] },
+      // vrrp aruba keluar dari daftar ini: kini supported via blok autentik
+      // AOS-CX (bukti V0/matriks); sintaks IOS-style tetap ditolak jujur
+      // dan diuji di matriks verify-all-vendors.
       { cap: 'rip', cmds: ['router rip'] },
       { cap: 'eigrp', cmds: ['router eigrp 100'] },
     ],

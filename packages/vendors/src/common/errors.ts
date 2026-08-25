@@ -16,6 +16,8 @@ export function unknownCommand(vendorId: string, rawInput: string): string {
     case 'linux':
     case 'openwrt':
       return `bash: ${first || '""'}: command not found`;
+    case 'windows':
+      return `'${first || rawInput.trim() || '""'}' is not recognized as an internal or external command, operable program or batch file.`;
     default:
       return `% Invalid input detected at '^' marker.`;
   }

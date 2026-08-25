@@ -313,6 +313,16 @@ export class NetworkDevice {
     return true;
   }
 
+  /** Hapus alamat IPv6 interface (hasil `no ipv6 address ...` / clear). */
+  removeIpv6ByName(ifaceName: string): boolean {
+    const key = this.nameIndex.get(ifaceName.toLowerCase());
+    const iface = key ? this.interfaces.get(key) : null;
+    if (!iface || !iface.ipv6) return false;
+    iface.ipv6 = undefined;
+    this.rebuildConnectedRoutes6();
+    return true;
+  }
+
   getIpv6Address(): string | null {
     for (const iface of this.interfaces.values()) {
       if (iface.ipv6) return iface.ipv6.address;
@@ -347,6 +357,17 @@ export class NetworkDevice {
     if (!iface || !parsed) return false;
     iface.ip = parsed;
     iface.up = true;
+    this.rebuildConnectedRoutes();
+    return true;
+  }
+
+  /** Hapus alamat IP interface (hasil `no ip address` / clear konfigurasi).
+   *  Mengembalikan true bila interface dikenal dan sempat memegang IP. */
+  removeIpByName(ifaceName: string): boolean {
+    const key = this.nameIndex.get(ifaceName.toLowerCase());
+    const iface = key ? this.interfaces.get(key) : null;
+    if (!iface || !iface.ip) return false;
+    iface.ip = undefined;
     this.rebuildConnectedRoutes();
     return true;
   }

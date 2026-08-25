@@ -5,25 +5,39 @@
 // dengan terminal manusia via runCliCommand). Tool di sini hanya
 // menyusun command vendor-valid; vendor yang tidak didukung
 // mengembalikan UNSUPPORTED — tidak pernah mengarang command.
+//
+// Aturan integritas:
+//   1. Kapabilitas dicek dari REGISTRY (packages/vendors
+//      capabilities.ts) — satu sumber kebenaran, bukan daftar
+//      hardcoded di sini.
+//   2. Generator command hanya ada untuk vendor yang syntax-nya
+//      benar-benar diproses adapter. Tidak ada koersi diam-diam
+//      ke syntax vendor lain.
+//   3. Hasil CLI yang gagal (isCliFailure) TIDAK boleh dilaporkan
+//      sukses — ok:false dengan output error sebagai bukti.
 // ============================================================
 
 import type { ToolResult, ToolExecCtx } from './types';
+import { getVendorCapabilities } from '../../../../packages/vendors/src/index';
+import type { CapabilityKey, CapabilityStatus } from '../../../../packages/vendors/src/index';
 
-const SUPPORTED_VENDORS = [
+/**
+ * Vendor yang PUNYA generator command autentik di modul ini.
+ * Windows tidak termasuk: CLI-nya read-only (lihat notes registry).
+ */
+const GENERATOR_VENDORS = [
   'mikrotik',
   'cisco_ios',
   'cisco_nxos',
   'juniper',
   'huawei',
-  'fortinet',
   'linux',
+  'fortinet',
   'vyos',
   'ubiquiti',
-  'openwrt',
   'aruba',
+  'openwrt',
 ] as const;
-
-type SupportedVendor = (typeof SUPPORTED_VENDORS)[number];
 
 /** Vendor untuk CLI config generator. */
 export type ConfigVendor =
@@ -33,25 +47,111 @@ export type ConfigVendor =
   | 'juniper'
   | 'huawei'
   | 'linux'
-  | 'fortinet';
+  | 'fortinet'
+  | 'vyos'
+  | 'ubiquiti'
+  | 'aruba'
+  | 'openwrt';
+
+/**
+ * Fitur tool → CapabilityKey registry. Dipakai untuk gate SEBELUM
+ * command dibangun: fitur not-supported/parser-only pada vendor
+ * ditolak jujur tanpa menyentuh state.
+ */
+const FEATURE_CAPS: Record<string, CapabilityKey> = {
+  ip: 'ipv4',
+  route: 'staticRoute',
+  vlan: 'vlan',
+  trunk: 'vlan',
+  ospf: 'ospf',
+  bgp: 'bgp',
+  dhcp: 'dhcp',
+  nat: 'nat',
+  firewall: 'firewall',
+};
 
 function vendorOf(ctx: ToolExecCtx, deviceId: string): { vendor: string; ok: boolean; error?: string } {
   const dev = ctx.runtime.sim.getDevice(deviceId) ?? ctx.runtime.sim.getDeviceByName(deviceId);
   if (!dev) return { vendor: '', ok: false, error: `device tidak ditemukan: ${deviceId}` };
   const vendor = dev.vendor ?? dev.deviceType;
-  if (!(SUPPORTED_VENDORS as readonly string[]).includes(vendor)) {
+  // Registry = sumber kebenaran; vendor tak dikenal registry → tolak jujur.
+  if (!getVendorCapabilities(vendor)) {
     return { vendor: '', ok: false, error: `vendor "${vendor}" tidak didukung untuk konfigurasi AI` };
   }
   return { vendor, ok: true };
 }
 
-function normalizeVendor(vendor: string): ConfigVendor {
-  if (vendor === 'mikrotik') return 'mikrotik';
-  if (vendor === 'cisco_ios' || vendor === 'cisco_nxos') return vendor;
-  if (vendor === 'juniper') return 'juniper';
-  if (vendor === 'huawei') return 'huawei';
-  if (vendor === 'linux' || vendor === 'openwrt') return 'linux';
-  return 'linux';
+function normalizeVendor(vendor: string): ConfigVendor | null {
+  return (GENERATOR_VENDORS as readonly string[]).includes(vendor) ? (vendor as ConfigVendor) : null;
+}
+
+/**
+ * Gate kapabilitas dari registry (konsisten dengan isCapabilityBlocked
+ * di chain guard): 'not-supported' & 'parser-only' ditolak sebelum
+ * ada mutasi state; 'partial' diizinkan sesuai perilaku yang memang ada.
+ */
+function capabilityGate(
+  vendor: string,
+  feature: keyof typeof FEATURE_CAPS
+): { blocked: boolean; status?: CapabilityStatus; label: string } {
+  const cap = FEATURE_CAPS[feature];
+  const reg = getVendorCapabilities(vendor);
+  if (!reg || !cap) return { blocked: true, label: `vendor "${vendor}" tidak dikenal registry kapabilitas` };
+  const status: CapabilityStatus | undefined = reg.caps[cap];
+  if (status === 'not-supported' || status === 'parser-only') {
+    return {
+      blocked: true,
+      status,
+      label: `fitur ${feature} (${cap}) berstatus '${status}' pada ${vendor} menurut capability registry`,
+    };
+  }
+  return { blocked: false, status, label: '' };
+}
+
+interface CliOutcome {
+  ok: boolean;
+  outputs: string[];
+  failedCommand?: string;
+  failureOutput?: string;
+}
+
+/** Eksekusi serangkaian command + deteksi kegagalan JUJUR via res.ok (isCliFailure). */
+function runCommands(ctx: ToolExecCtx, deviceId: string, vendor: string, commands: string[]): CliOutcome {
+  const outputs: string[] = [];
+  for (const cmd of commands) {
+    const res = ctx.runtime.executeCli(deviceId, vendor, cmd);
+    if (cmd.trim() !== 'exit') outputs.push(res.output);
+    if (!res.ok) {
+      return { ok: false, outputs, failedCommand: cmd, failureOutput: res.output };
+    }
+  }
+  return { ok: true, outputs };
+}
+
+/** Bentuk ToolResult dari outcome CLI — sukses hanya bila semua command diterima vendor. */
+function cliResult(
+  devName: string,
+  commands: string[],
+  outcome: CliOutcome,
+  successMessage: string,
+  data: Record<string, unknown>
+): ToolResult {
+  const output = outcome.outputs.filter((o) => o.trim().length > 0).join('\n');
+  if (!outcome.ok) {
+    return {
+      ok: false,
+      message: `Perintah "${outcome.failedCommand}" DITOLAK oleh ${devName}: ${(outcome.failureOutput ?? '').trim().slice(0, 200)}`,
+      error: 'cli-error',
+      data: { ...data, commands, output },
+      evidence: [output.slice(0, 400)],
+    };
+  }
+  return {
+    ok: true,
+    message: successMessage,
+    data: { ...data, commands, output },
+    evidence: [output.slice(0, 400)].filter((e) => e.trim().length > 0),
+  };
 }
 
 /** Eksekusi CLI inti — semua tool config lain berakhir di sini. */
@@ -67,23 +167,15 @@ export function toolExecuteCli(ctx: ToolExecCtx, p: Record<string, unknown>): To
   const commands = command.split('\n').map((c) => c.trim()).filter(Boolean);
   if (commands.length === 0) return { ok: false, message: 'command kosong', error: 'empty-command' };
 
-  const outputs: string[] = [];
-  for (const cmd of commands) {
-    const res = ctx.runtime.executeCli(dev.id, vendor, cmd);
-    outputs.push(cmd.trim() === 'exit' ? '' : res.output);
-  }
-  const output = outputs.filter((o) => o.trim().length > 0).join('\n');
-  return {
-    ok: true,
-    message: `Perintah dieksekusi di ${dev.name} (${commands.length} baris).`,
-    data: { deviceId: dev.id, commands, output },
-    evidence: [output.slice(0, 400)],
-  };
+  const outcome = runCommands(ctx, dev.id, vendor, commands);
+  return cliResult(dev.name, commands, outcome, `Perintah dieksekusi di ${dev.name} (${commands.length} baris).`, {
+    deviceId: dev.id,
+  });
 }
 
 // ── Generator command vendor (syntax VALID per vendor) ────────────
 
-/** IP address (CIDR) per vendor. */
+/** IP address (CIDR) per vendor — hanya syntax yang diproses adapter (bukti: adapter + conformance test). */
 function ipCommand(v: ConfigVendor, iface: string, cidr: string, remove: boolean): string[] {
   switch (v) {
     case 'mikrotik':
@@ -91,10 +183,11 @@ function ipCommand(v: ConfigVendor, iface: string, cidr: string, remove: boolean
         ? [`/ip address remove [find where address="${cidr}" and interface="${iface}"]`]
         : [`/ip address add address=${cidr} interface=${iface}`];
     case 'cisco_ios':
-    case 'cisco_nxos': {
+    case 'cisco_nxos':
+    case 'aruba': {
       const [ip, prefix] = cidr.split('/');
       const mask = prefix ? maskOf(Number(prefix)) : '255.255.255.0';
-      return [`interface ${iface}`, remove ? `no ip address ${ip} ${mask}` : `ip address ${ip} ${mask}`];
+      return [`interface ${iface}`, remove ? `no ip address ${ip} ${mask}` : `ip address ${ip} ${mask}`, 'exit'];
     }
     case 'juniper':
       return remove
@@ -107,6 +200,26 @@ function ipCommand(v: ConfigVendor, iface: string, cidr: string, remove: boolean
     }
     case 'linux':
       return remove ? [`ip addr del ${cidr} dev ${iface}`] : [`ip addr add ${cidr} dev ${iface}`];
+    case 'vyos':
+    case 'ubiquiti':
+      // EdgeOS/VyOS: set interfaces ethernet <if> address <ip/prefix> (dihapus via delete … address)
+      return remove
+        ? [`delete interfaces ethernet ${iface} address ${cidr}`]
+        : [`set interfaces ethernet ${iface} address ${cidr}`];
+    case 'openwrt': {
+      // UCI buffered → atomic di `uci commit` (commitUci). Section pakai
+      // NAMA INTERFACE fisik agar resolveIfaceName memetakan langsung ke
+      // port engine (network.<iface>.ipaddr).
+      if (remove) return [`uci delete network.${iface}.ipaddr`, `uci commit`];
+      const [ip, prefix] = cidr.split('/');
+      const mask = prefix ? maskOf(Number(prefix)) : '255.255.255.0';
+      return [
+        `uci set network.${iface}.proto=static`,
+        `uci set network.${iface}.ipaddr=${ip}`,
+        `uci set network.${iface}.netmask=${mask}`,
+        `uci commit`,
+      ];
+    }
     case 'fortinet': {
       const [ip, prefix] = cidr.split('/');
       const mask = prefix ? maskOf(Number(prefix)) : '255.255.255.0';
@@ -125,7 +238,8 @@ function routeCommand(v: ConfigVendor, dst: string, gateway: string): string[] {
     case 'mikrotik':
       return [`/ip route add dst-address=${dst} gateway=${gateway}`];
     case 'cisco_ios':
-    case 'cisco_nxos': {
+    case 'cisco_nxos':
+    case 'aruba': {
       const [ip, prefix] = dst.split('/');
       const mask = prefix ? maskOf(Number(prefix)) : '255.255.255.0';
       return [`ip route ${ip} ${mask} ${gateway}`];
@@ -138,6 +252,20 @@ function routeCommand(v: ConfigVendor, dst: string, gateway: string): string[] {
     }
     case 'linux':
       return [`ip route add ${dst} via ${gateway}`];
+    case 'vyos':
+    case 'ubiquiti':
+      // VyOS/EdgeOS: set protocols static route <dst> next-hop <gw> (generic.ts b141)
+      return [`set protocols static route ${dst} next-hop ${gateway}`];
+    case 'openwrt': {
+      // UCI route section: network.routeN.target/.gateway/.netmask (commitUci)
+      const [ip, prefix] = dst.split('/');
+      return [
+        `uci set network.route1.target=${ip}`,
+        `uci set network.route1.netmask=${prefix ? maskOf(Number(prefix)) : '255.255.255.0'}`,
+        `uci set network.route1.gateway=${gateway}`,
+        `uci commit`,
+      ];
+    }
     case 'fortinet':
       return ['config router static', 'edit 0', `set dst ${dst}`, `set gateway ${gateway}`, 'end'];
   }
@@ -151,17 +279,18 @@ function vlanCommand(v: ConfigVendor, vlanId: number, name: string, iface: strin
         : [`/interface vlan add name=vlan${vlanId} vlan-id=${vlanId}`];
     case 'cisco_ios':
     case 'cisco_nxos':
-      return ['vlan ' + vlanId, name ? `name ${name}` : ''].filter(Boolean);
+    case 'aruba':
+      return ['vlan ' + vlanId, name ? `name ${name}` : '', 'exit'].filter(Boolean);
     case 'juniper':
       return [`set vlans vlan${vlanId} vlan-id ${vlanId}${name ? ` description "${name}"` : ''}`];
     case 'huawei':
       return ['vlan ' + vlanId, name ? `description ${name}` : ''].filter(Boolean);
     case 'linux':
       return iface ? [`ip link add link ${iface} name ${iface}.${vlanId} type vlan id ${vlanId}`] : [];
-    case 'fortinet':
-      return iface
-        ? ['config system interface', `edit vlan${vlanId}`, `set vdom "root"`, `set type vlan`, `set interface ${iface}`, `set vlanid ${vlanId}`, 'end']
-        : [];
+    // vyos/ubiquiti/openwrt/fortinet: belum ada generator AI terverifikasi —
+    // wrapper melaporkan 'no-generator' (bukan mengarang syntax).
+    default:
+      return [];
   }
 }
 
@@ -171,14 +300,13 @@ function trunkCommand(v: ConfigVendor, iface: string): string[] {
       return [`/interface bridge port set [find where interface=${iface}] pvid=1`];
     case 'cisco_ios':
     case 'cisco_nxos':
+    case 'aruba': // switchport mode trunk juga diproses untuk AOS-CX (cisco-ios b131, cap vlan)
       return [`interface ${iface}`, 'switchport mode trunk'];
     case 'huawei':
       return [`interface ${iface}`, 'port link-type trunk'];
     case 'juniper':
       return [`set interfaces ${iface} unit 0 family ethernet-switching port-mode trunk`];
-    case 'linux':
-      return [];
-    case 'fortinet':
+    default:
       return [];
   }
 }
@@ -207,7 +335,8 @@ function ospfCommand(v: ConfigVendor, network: string, area: number): string[] {
       ];
     case 'linux':
       return [];
-    case 'fortinet':
+    // vyos/ubiquiti/aruba/openwrt/fortinet: belum ada generator AI terverifikasi.
+    default:
       return [];
   }
 }
@@ -242,7 +371,8 @@ function bgpCommand(v: ConfigVendor, asn: number, neighborIp: string, remoteAs: 
       ];
     case 'linux':
       return [];
-    case 'fortinet':
+    // vyos/ubiquiti/aruba/openwrt/fortinet: belum ada generator AI terverifikasi.
+    default:
       return [];
   }
 }
@@ -285,7 +415,8 @@ function dhcpCommand(v: ConfigVendor, poolName: string, range: string, gateway: 
       ];
     case 'linux':
       return [];
-    case 'fortinet':
+    // vyos/ubiquiti/aruba/openwrt/fortinet: belum ada generator AI terverifikasi.
+    default:
       return [];
   }
 }
@@ -379,7 +510,8 @@ function firewallCommand(
       ];
     case 'linux':
       return [`iptables -A ${chain} ${src ? `-s ${src} ` : ''}${dst ? `-d ${dst} ` : ''}${protocol && protocol !== 'any' ? `-p ${protocol} ` : ''}${port != null ? `--dport ${port} ` : ''}-j ${action.toUpperCase()}`];
-    case 'fortinet':
+    // vyos/ubiquiti/aruba/openwrt/fortinet: belum ada generator AI terverifikasi.
+    default:
       return [];
   }
 }
@@ -425,46 +557,82 @@ function wildcardOf(cidr: string): string {
 }
 
 // ── Tool publik (thin wrapper atas execute_cli) ─────────────────
+//
+// Pola setiap tool:
+//   1. vendorOf — device ada + vendor dikenal registry.
+//   2. capabilityGate(feature) — tolak jujur bila registry bilang
+//      not-supported/parser-only (konsisten dengan chain guard).
+//   3. Generator syntax autentik; tanpa generator → 'no-generator'
+//      (tool AI belum punya syntax terverifikasi, BUKAN klaim vendor).
+//   4. runCommands + cliResult — kegagalan CLI = ok:false dengan bukti.
+
+/** Resolusi vendor + gate kapabilitas bersama untuk semua tool config. */
+function prepare(
+  ctx: ToolExecCtx,
+  deviceId: string,
+  feature: keyof typeof FEATURE_CAPS
+): { vendor: string; gen: ConfigVendor } | { fail: ToolResult } {
+  const v = vendorOf(ctx, deviceId);
+  if (!v.ok) return { fail: { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true } };
+  const gate = capabilityGate(v.vendor, feature);
+  if (gate.blocked) {
+    return { fail: { ok: false, message: `${gate.label} — konfigurasi AI ditolak`, error: 'unsupported', unsupported: true } };
+  }
+  const gen = normalizeVendor(v.vendor);
+  if (!gen) return { fail: { ok: false, message: `Tool AI belum menyediakan generator syntax ${feature} untuk ${v.vendor}. Gunakan execute_cli dengan syntax ${v.vendor} yang valid.`, error: 'no-generator', unsupported: true } };
+  return { vendor: v.vendor, gen };
+}
+
+function noGenerator(vendor: string): ToolResult {
+  return { ok: false, message: `Tool AI belum menyediakan generator command ${vendor} untuk fitur ini. Gunakan execute_cli dengan syntax vendor yang valid.`, error: 'no-generator', unsupported: true };
+}
 
 export function toolConfigureIpAddress(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const deviceId = p['deviceId'] as string;
   const iface = p['interface'] as string;
   const address = p['address'] as string;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = ipCommand(normalizeVendor(v.vendor), iface, address, false);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  const outputs = cmds.map((c) => ctx.runtime.executeCli(deviceId, v.vendor, c).output);
-  return {
-    ok: true,
-    message: `IP ${address} dikonfigurasi di ${deviceId}:${iface} (${cmds.length} perintah).`,
-    data: { deviceId, interface: iface, address, commands: cmds },
-    evidence: outputs.filter((o) => o.trim()).map((o) => o.slice(0, 200)),
-  };
+  const prep = prepare(ctx, deviceId, 'ip');
+  if ('fail' in prep) return prep.fail;
+  const cmds = ipCommand(prep.gen, iface, address, false);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `IP ${address} dikonfigurasi di ${deviceId}:${iface} (${cmds.length} perintah).`, {
+    deviceId,
+    interface: iface,
+    address,
+  });
 }
 
 export function toolRemoveIpAddress(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const deviceId = p['deviceId'] as string;
   const iface = p['interface'] as string;
   const address = p['address'] as string;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = ipCommand(normalizeVendor(v.vendor), iface, address, true);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `IP ${address} dihapus dari ${deviceId}:${iface}.`, data: { deviceId, interface: iface, address } };
+  const prep = prepare(ctx, deviceId, 'ip');
+  if ('fail' in prep) return prep.fail;
+  const cmds = ipCommand(prep.gen, iface, address, true);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `IP ${address} dihapus dari ${deviceId}:${iface}.`, {
+    deviceId,
+    interface: iface,
+    address,
+  });
 }
 
 export function toolConfigureRoute(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const deviceId = p['deviceId'] as string;
   const dst = p['dst'] as string;
   const gateway = p['gateway'] as string;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = routeCommand(normalizeVendor(v.vendor), dst, gateway);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `Rute ${dst} via ${gateway} ditambahkan di ${deviceId}.`, data: { deviceId, dst, gateway } };
+  const prep = prepare(ctx, deviceId, 'route');
+  if ('fail' in prep) return prep.fail;
+  const cmds = routeCommand(prep.gen, dst, gateway);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `Rute ${dst} via ${gateway} ditambahkan di ${deviceId}.`, {
+    deviceId,
+    dst,
+    gateway,
+  });
 }
 
 export function toolConfigureVlan(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
@@ -472,35 +640,47 @@ export function toolConfigureVlan(ctx: ToolExecCtx, p: Record<string, unknown>):
   const vlanId = p['vlanId'] as number;
   const name = (p['name'] as string | undefined) ?? `vlan${vlanId}`;
   const iface = p['interface'] as string | undefined;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = vlanCommand(normalizeVendor(v.vendor), vlanId, name, iface);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `VLAN ${vlanId} (${name}) dikonfigurasi di ${deviceId}.`, data: { deviceId, vlanId, name, iface } };
+  const prep = prepare(ctx, deviceId, 'vlan');
+  if ('fail' in prep) return prep.fail;
+  const cmds = vlanCommand(prep.gen, vlanId, name, iface);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `VLAN ${vlanId} (${name}) dikonfigurasi di ${deviceId}.`, {
+    deviceId,
+    vlanId,
+    name,
+    iface,
+  });
 }
 
 export function toolConfigureTrunk(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const deviceId = p['deviceId'] as string;
   const iface = p['interface'] as string;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = trunkCommand(normalizeVendor(v.vendor), iface);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `${iface} dijadikan trunk di ${deviceId}.`, data: { deviceId, interface: iface } };
+  const prep = prepare(ctx, deviceId, 'trunk');
+  if ('fail' in prep) return prep.fail;
+  const cmds = trunkCommand(prep.gen, iface);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `${iface} dijadikan trunk di ${deviceId}.`, {
+    deviceId,
+    interface: iface,
+  });
 }
 
 export function toolConfigureOspf(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const deviceId = p['deviceId'] as string;
   const network = p['network'] as string;
   const area = (p['area'] as number | undefined) ?? 0;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = ospfCommand(normalizeVendor(v.vendor), network, area);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `OSPF network ${network} area ${area} dikonfigurasi di ${deviceId}.`, data: { deviceId, network, area } };
+  const prep = prepare(ctx, deviceId, 'ospf');
+  if ('fail' in prep) return prep.fail;
+  const cmds = ospfCommand(prep.gen, network, area);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `OSPF network ${network} area ${area} dikonfigurasi di ${deviceId}.`, {
+    deviceId,
+    network,
+    area,
+  });
 }
 
 export function toolConfigureBgp(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
@@ -509,12 +689,17 @@ export function toolConfigureBgp(ctx: ToolExecCtx, p: Record<string, unknown>): 
   const neighborIp = p['neighborIp'] as string;
   const remoteAs = p['remoteAs'] as number;
   const network = p['network'] as string | undefined;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = bgpCommand(normalizeVendor(v.vendor), asn, neighborIp, remoteAs, network);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `BGP AS${asn} neighbor ${neighborIp} AS${remoteAs} dikonfigurasi di ${deviceId}.`, data: { deviceId, asn, neighborIp, remoteAs } };
+  const prep = prepare(ctx, deviceId, 'bgp');
+  if ('fail' in prep) return prep.fail;
+  const cmds = bgpCommand(prep.gen, asn, neighborIp, remoteAs, network);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `BGP AS${asn} neighbor ${neighborIp} AS${remoteAs} dikonfigurasi di ${deviceId}.`, {
+    deviceId,
+    asn,
+    neighborIp,
+    remoteAs,
+  });
 }
 
 export function toolConfigureDhcp(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
@@ -522,24 +707,33 @@ export function toolConfigureDhcp(ctx: ToolExecCtx, p: Record<string, unknown>):
   const poolName = p['poolName'] as string;
   const range = p['range'] as string;
   const gateway = p['gateway'] as string;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = dhcpCommand(normalizeVendor(v.vendor), poolName, range, gateway);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `DHCP pool ${poolName} (${range}, gw ${gateway}) dikonfigurasi di ${deviceId}.`, data: { deviceId, poolName, range, gateway } };
+  const prep = prepare(ctx, deviceId, 'dhcp');
+  if ('fail' in prep) return prep.fail;
+  const cmds = dhcpCommand(prep.gen, poolName, range, gateway);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `DHCP pool ${poolName} (${range}, gw ${gateway}) dikonfigurasi di ${deviceId}.`, {
+    deviceId,
+    poolName,
+    range,
+    gateway,
+  });
 }
 
 export function toolConfigureNat(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const deviceId = p['deviceId'] as string;
   const outInterface = p['outInterface'] as string;
   const masquerade = (p['masquerade'] as boolean | undefined) ?? true;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = natCommand(normalizeVendor(v.vendor), outInterface, masquerade);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `NAT ${masquerade ? 'masquerade' : 'srcnat'} out-interface ${outInterface} dikonfigurasi di ${deviceId}.`, data: { deviceId, outInterface, masquerade } };
+  const prep = prepare(ctx, deviceId, 'nat');
+  if ('fail' in prep) return prep.fail;
+  const cmds = natCommand(prep.gen, outInterface, masquerade);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `NAT ${masquerade ? 'masquerade' : 'srcnat'} out-interface ${outInterface} dikonfigurasi di ${deviceId}.`, {
+    deviceId,
+    outInterface,
+    masquerade,
+  });
 }
 
 export function toolConfigureFirewall(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
@@ -550,12 +744,18 @@ export function toolConfigureFirewall(ctx: ToolExecCtx, p: Record<string, unknow
   const dst = p['dst'] as string | undefined;
   const protocol = p['protocol'] as string | undefined;
   const port = p['port'] as number | undefined;
-  const v = vendorOf(ctx, deviceId);
-  if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = firewallCommand(normalizeVendor(v.vendor), action, chain, src, dst, protocol, port);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `Firewall ${action} ${protocol ?? 'any'} ${src ?? '*'} → ${dst ?? '*'}${port != null ? `:${port}` : ''} di ${deviceId}.`, data: { deviceId, action, chain } };
+  const prep = prepare(ctx, deviceId, 'firewall');
+  if ('fail' in prep) return prep.fail;
+  const cmds = firewallCommand(prep.gen, action, chain, src, dst, protocol, port);
+  if (cmds.length === 0) return noGenerator(prep.vendor);
+  const outcome = runCommands(ctx, deviceId, prep.vendor, cmds);
+  return cliResult(
+    deviceId,
+    cmds,
+    outcome,
+    `Firewall ${action} ${protocol ?? 'any'} ${src ?? '*'} → ${dst ?? '*'}${port != null ? `:${port}` : ''} di ${deviceId}.`,
+    { deviceId, action, chain }
+  );
 }
 
 export function toolConfigureWireless(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
@@ -565,8 +765,14 @@ export function toolConfigureWireless(ctx: ToolExecCtx, p: Record<string, unknow
   const password = p['password'] as string | undefined;
   const v = vendorOf(ctx, deviceId);
   if (!v.ok) return { ok: false, message: v.error ?? 'vendor unsupported', error: 'unsupported', unsupported: true };
-  const cmds = wirelessCommand(normalizeVendor(v.vendor), ssid, mode, password);
-  if (cmds.length === 0) return { ok: false, message: `vendor ${v.vendor} tidak mendukung perintah ini`, unsupported: true };
-  cmds.forEach((c) => ctx.runtime.executeCli(deviceId, v.vendor, c));
-  return { ok: true, message: `Wireless ${mode} SSID ${ssid} dikonfigurasi di ${deviceId}.`, data: { deviceId, ssid, mode } };
+  const gen = normalizeVendor(v.vendor);
+  if (!gen) return noGenerator(v.vendor);
+  const cmds = wirelessCommand(gen, ssid, mode, password);
+  if (cmds.length === 0) return noGenerator(v.vendor);
+  const outcome = runCommands(ctx, deviceId, v.vendor, cmds);
+  return cliResult(deviceId, cmds, outcome, `Wireless ${mode} SSID ${ssid} dikonfigurasi di ${deviceId}.`, {
+    deviceId,
+    ssid,
+    mode,
+  });
 }

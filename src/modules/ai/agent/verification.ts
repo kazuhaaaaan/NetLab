@@ -413,6 +413,54 @@ export class VerificationEngine {
     );
   }
 
+  /**
+   * Verifikasi negatif: device TIDAK ADA lagi (delete_device).
+   * Tanpa ini, verifikasi positif setelah penghapusan sukses selalu
+   * gagal → rollback palsu atas aksi yang benar.
+   */
+  verifyDeviceAbsent(nodeId: string, actionId?: string): VerificationResult {
+    const dev = this.sim.getDevice(nodeId) ?? this.sim.getDeviceByName(nodeId);
+    return this.record(
+      {
+        success: !dev,
+        testType: 'topology',
+        source: nodeId,
+        reason: dev ? 'device-still-present' : undefined,
+        evidence: dev ? [`device ${dev.name} masih ada di engine`] : [`device ${nodeId} tidak ada lagi`],
+        timestamp: Date.now(),
+        actionId,
+      },
+      { source: nodeId, actionId, label: `device ${nodeId} absent` }
+    );
+  }
+
+  /** Verifikasi negatif: TIDAK ada link antara dua device (disconnect_devices). */
+  verifyLinkAbsent(nodeA: string, nodeB: string, actionId?: string): VerificationResult {
+    const links = this.sim.topology.links.all;
+    const aId = this.sim.getDevice(nodeA)?.id ?? this.sim.getDeviceByName(nodeA)?.id ?? nodeA;
+    const bId = this.sim.getDevice(nodeB)?.id ?? this.sim.getDeviceByName(nodeB)?.id ?? nodeB;
+    const hit = links.some(
+      (l) =>
+        (l.a.nodeId === aId && l.b.nodeId === bId) ||
+        (l.a.nodeId === bId && l.b.nodeId === aId)
+    );
+    return this.record(
+      {
+        success: !hit,
+        testType: 'topology',
+        source: nodeA,
+        destination: nodeB,
+        reason: hit ? 'link-still-exists' : undefined,
+        evidence: hit
+          ? links.filter((l) => (l.a.nodeId === aId && l.b.nodeId === bId) || (l.a.nodeId === bId && l.b.nodeId === aId)).map((l) => `${l.a.nodeId}:${l.a.port} ↔ ${l.b.nodeId}:${l.b.port}`)
+          : ['tidak ada link lagi'],
+        timestamp: Date.now(),
+        actionId,
+      },
+      { source: nodeA, destination: nodeB, actionId, label: `link ${nodeA} ↮ ${nodeB} absent` }
+    );
+  }
+
   // ── Riwayat ───────────────────────────────────────────────────
 
   /** Catat hasil verifikasi buatan (dipakai verifyAction & tool lain). */

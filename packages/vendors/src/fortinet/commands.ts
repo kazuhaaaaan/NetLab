@@ -4,6 +4,7 @@ import { registerEntries } from '../common/chain';
 
 import { resolveIfaceName, cidrOf, networkOfMask, bitsToMask, isValidIpv4 } from '../common/ip';
 import { grantDhcpClient, upsertSubinterface } from '../common/state';
+import { generateRunningConfig } from '../common/format';
 import type { NodeMemory, VendorContext } from '../common/types';
 
 export const fortinetEntries: ChainEntry[] = [
@@ -499,6 +500,10 @@ export function fortinetCommand(raw: string, context: VendorContext, mem: NodeMe
   }
   if (/^(?:get|show)\s+router\s+info\s+bgp/i.test(t) || /^show\s+router\s+bgp/i.test(t)) {
     return { type: 'proto_print', routing: mem.routing, bgp: mem.bgp };
+  }
+  // FortiOS "show" tanpa argumen — tampilkan seluruh running config.
+  if (/^show\s*$/i.test(t)) {
+    return { raw: generateRunningConfig(context, mem, 'fortinet') };
   }
   return undefined;
 }

@@ -395,6 +395,12 @@ export function runProtocolFidelityTests(): Report {
     };
     const out = dis.dispatch('cisco_ios', 'ip nat inside source static tcp 10.0.2.10 80 10.0.1.1 8080', ctx);
     check('F9 CLI Cisco dstnat diterima', !/% Error|% Invalid/i.test(out), out);
+    // Sinkronisasi CLI→engine kini REPLACE (bukan merge): IP yang sebelumnya
+    // dipasang langsung ke engine harus dicerminkan di memori CLI, persis
+    // seperti alur produksi (setiap konfigurasi CLI melewati NodeMemory).
+    const memR1 = dis.getNodeMemory('r1');
+    memR1.configuredIps['ether1'] = '10.0.1.1/24';
+    memR1.configuredIps['ether2'] = '10.0.2.1/24';
     syncNodeToEngine(sim, dis, 'r1');
 
     const conn = sim.simulateTcpConnect('pc1', '10.0.1.1', 8080);
@@ -432,6 +438,10 @@ export function runProtocolFidelityTests(): Report {
     };
     const out = dis.dispatch('cisco_nxos', 'access-list 101 deny icmp 10.0.1.0 0.0.0.255 10.0.2.0 0.0.0.255', ctx);
     check('F10 CLI NX-OS ACL diterima', !/% Error|% Invalid/i.test(out), out);
+    // REPLACE semantics (lihat F9): cermin IP engine ke memori CLI sebelum sync.
+    const memR1 = dis.getNodeMemory('r1');
+    memR1.configuredIps['ether1'] = '10.0.1.1/24';
+    memR1.configuredIps['ether2'] = '10.0.2.1/24';
     syncNodeToEngine(sim, dis, 'r1');
 
     const blocked = sim.simulatePing('pc1', '10.0.2.10');

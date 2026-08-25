@@ -34,6 +34,9 @@ export class ArubaVendorAdapter implements _IV {
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'cx', payload: { raw: rawInput, ast, host: subs[0] } };
     if (isPrefix(action, 'write')) return { action: 'write_mem', target: 'cx', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ip') && isPrefix(subs[0], 'address')) return { action: 'add_ip', target: 'cx', payload: { raw: rawInput, ast, ip: subs[1], mask: subs[2] } };
+    // AOS-CX BGP (10.x): "router bgp <asn>" → config-router; neighbor remote-as.
+    if (isPrefix(action, 'router') && isPrefix(subs[0], 'bgp')) return { action: 'bgp_router', target: 'cx', payload: { raw: rawInput, ast, as: subs[1] } };
+    if (isPrefix(action, 'neighbor') && isPrefix(subs[1], 'remote-as')) return { action: 'bgp_neighbor', target: 'cx', payload: { raw: rawInput, ast, ip: subs[0], remoteAs: subs[2] } };
     return { action: action || 'EXEC_COMMAND', target: 'cx', payload: { raw: rawInput, ast } };
   }
 

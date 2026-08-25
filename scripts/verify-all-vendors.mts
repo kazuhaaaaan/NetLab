@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { VendorDispatcher } from '../packages/vendors/src/index';
 
-const VENDORS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux'];
+const VENDORS = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux', 'windows'];
 
 /** Nama port autentik per vendor (selaras deviceModels.ts) — huawei memakai
  *  GigabitEthernet0/0/N, vendor lain generik p1..p3 sesuai kasus matriks. */
@@ -305,6 +305,17 @@ const matrix: VendorMatrix = {
     { name: 'ACL', cmds: ['access-list 100 deny icmp any any'], check: (m) => m.acls.length === 1 },
     { name: 'OSPF', cmds: ['router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], check: (m) => m.routing.ospf.enabled },
     { name: 'DNS static record', cmds: ['ip host web.site 203.0.113.10'], check: (m) => m.dnsRecords.length === 1 },
+    {
+      name: 'BGP (neighbor + network CIDR AOS-CX)',
+      cmds: ['router bgp 65001', 'neighbor 192.168.1.2 remote-as 65002', 'network 10.0.1.0/24'],
+      check: (m) => m.bgp.asn === 65001 && m.bgp.peers.length === 1 && m.bgp.networks.includes('10.0.1.0/24'),
+    },
+    {
+      name: 'VRRP (blok autentik ip vrrp)',
+      cmds: ['interface p1', 'ip vrrp 10', 'address-family ipv4', 'virtual-ip 192.168.88.254 primary', 'priority 120', 'enable', 'end'],
+      check: (m) => m.fhrpGroups.length === 1 && m.fhrpGroups[0].vrid === 10 && m.fhrpGroups[0].virtualAddress === '192.168.88.254/24' && m.fhrpGroups[0].priority === 120 && m.fhrpGroups[0].enabled === true && m.fhrpGroups[0].interface === 'p1',
+    },
+    { name: 'VRRP sintaks IOS ditolak (autentik AOS-CX)', cmds: ['interface p1', 'vrrp 1 ip 192.168.88.253'], check: (m) => m.fhrpGroups.length === 1 },
   ],
   openwrt: [
     { name: 'DNS', cmds: ['echo "nameserver 8.8.8.8" > /etc/resolv.conf'], check: (m) => m.dnsServers.length === 1 },
@@ -348,6 +359,20 @@ const matrix: VendorMatrix = {
       check: (m) => m.natRules.length === 2 && m.natRules[1].chain === 'dstnat' && m.natRules[1].toAddresses === '192.168.1.10' && m.natRules[1].toPorts === '80' && m.natRules[1].dstPort === '8080',
     },
     { name: 'DNS static record', cmds: ['echo "203.0.113.10 web.site" >> /etc/hosts'], check: (m) => m.dnsRecords.length === 1 },
+  ],
+  windows: [
+    {
+      name: 'IP statis + gateway (netsh)',
+      cmds: ['netsh interface ipv4 set address name="p1" static 192.168.10.5 255.255.255.0 192.168.10.1'],
+      check: (m) => m.configuredIps['p1'] === '192.168.10.5/24' && m.routes.some((r) => r.dst === '0.0.0.0/0' && r.gateway === '192.168.10.1'),
+    },
+    { name: 'DNS statis (netsh dnsservers)', cmds: ['netsh interface ipv4 set dnsservers name="p1" static 8.8.8.8 primary'], check: (m) => m.dnsServers.includes('8.8.8.8') },
+    { name: 'DHCP client (netsh source=dhcp)', cmds: ['netsh interface ipv4 set address name="p2" source=dhcp'], check: (m) => (m.dhcpClients || []).some((c) => c.iface === 'p2') },
+    {
+      name: 'Route add/delete (bentuk mask Windows)',
+      cmds: ['route add -p 10.9.9.0 mask 255.255.255.0 192.168.10.254 metric 10'],
+      check: (m) => m.routes.some((r) => r.dst === '10.9.9.0/24' && r.gateway === '192.168.10.254'),
+    },
   ],
 };
 

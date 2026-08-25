@@ -34,6 +34,21 @@ export interface VendorCapabilities {
   caps: Record<CapabilityKey, CapabilityStatus>;
   /** Penjelasan jujur untuk status yang tidak 'supported'. */
   notes: string;
+  /**
+   * Kelas perangkat: 'network-os' (router/switch/firewall — diharapkan
+   * berpartisipasi protokol routing) atau 'client-host' (endhost seperti
+   * Windows client — protokol routing bukan bagian produknya, dim protocols
+   * dikecualikan dari skor dengan bobot dinormalisasi ulang).
+   * Default: 'network-os'.
+   */
+  deviceClass?: 'network-os' | 'client-host';
+  /**
+   * Protokol yang RELEVAN untuk profil perangkat ini (produk nyata memang
+   * memilikinya). Key di luar daftar ini = tidak ada pada produk tersebut
+   * (bukan kegagalan implementasi) dan tidak menghukum sub-skora protocols.
+   * Default: semua PROTOCOL_CAPS. Deklarasi WAJIB disertai justifikasi di notes.
+   */
+  protocolSet?: CapabilityKey[];
 }
 
 export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
@@ -140,15 +155,15 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
       ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: NS, eigrp: NS,
       bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: NS,
     },
-    notes: 'FortiOS: NAT via policy & VIP teruji. VRRP FortiOS tidak diimplementasikan (CLI menjawab jujur).',
+    notes: 'FortiOS: NAT via policy & VIP teruji. RIP dihapus FortiOS ≥7.0 & HA memakai FGCP (bukan VRRP) — keduanya dikeluarkan dari protocolSet sesuai produk nyata, bukan karena belum diimplementasikan.',
   },
   aruba: {
     vendorId: 'aruba',
     caps: {
       ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: NS, ospf: S, rip: NS, eigrp: NS,
-      bgp: P, vrrp: NS, staticRoute: S, firewall: P, dns: S, commit: S,
+      bgp: S, vrrp: S, staticRoute: S, firewall: P, dns: S, commit: S,
     },
-    notes: 'AOS-CX: NAT, RIP, EIGRP & VRRP belum diimplementasikan (tidak ada klaim sukses palsu). write memory menyimpan snapshot startup-config; reload memulihkannya.',
+    notes: 'AOS-CX: switch kelas data-center/campus — NAT, RIP & EIGRP memang bukan bagian produk (protocolSet mengecualikannya, bukan kegagalan implementasi). BGP: neighbor + network CIDR teruji (sintaks AOS-CX `network <prefix/cidr>`). VRRP: blok autentik AOS-CX (`ip vrrp <id>` → address-family ipv4 → virtual-ip → enable) di interface view; sintaks IOS-style `vrrp <n> ip` ditolak seperti perangkat nyata. write memory menyimpan snapshot startup-config; reload memulihkannya.',
   },
   openwrt: {
     vendorId: 'openwrt',
@@ -170,15 +185,45 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   },
   windows: {
     vendorId: 'windows',
+    deviceClass: 'client-host',
     caps: {
-      ipv4: P, ipv6: NS, vlan: NS, dhcp: P, nat: NS, ospf: NS, rip: NS, eigrp: NS,
-      bgp: NS, vrrp: NS, staticRoute: P, firewall: NS, dns: P, commit: NS,
+      ipv4: S, ipv6: NS, vlan: NS, dhcp: P, nat: NS, ospf: NS, rip: NS, eigrp: NS,
+      bgp: NS, vrrp: NS, staticRoute: S, firewall: NS, dns: S, commit: NS,
     },
     notes:
-      'Windows 11 client (GUI Simulator): IP/DNS/rute dikonfigurasi via GUI + lease DHCP (teruji end-to-end), CLI jujur read-only (ipconfig/nslookup/curl). Tidak ada routing dinamis / NAT / VLAN tagging.',
+      'Windows 11 client (GUI Simulator): IP/DNS/rute via GUI + lease DHCP (teruji end-to-end) ATAU CLI autentik (`netsh interface ipv4 set address/dnsservers`, `route add/delete` dengan validasi ketat — sintaks `/prefix` gaya Unix ditolak seperti Windows nyata). DHCP server tidak ada di Windows client (dhcp=P: klien saja). Tidak ada routing dinamis / NAT / VLAN tagging.',
   },
 };
 
 export function getVendorCapabilities(vendorId: string): VendorCapabilities | null {
   return VENDOR_CAPABILITIES[vendorId] ?? null;
 }
+
+/**
+ * Protokol yang direlevansikan per profil vendor (lihat protocolSet di atas).
+ * Vendor tanpa entri di sini = semua CapabilityKey protokol berlaku.
+ * Justifikasi tiap pengecualian ada di notes registry di atas.
+ */
+export const VENDOR_PROTOCOL_SETS: Partial<Record<string, CapabilityKey[]>> = {
+  // RouterOS tidak memiliki EIGRP (protokol Cisco-proprietary).
+  mikrotik: ['ospf', 'rip', 'bgp', 'vrrp'],
+  // Junos/VRP/EdgeOS/VyOS tidak menjalankan EIGRP.
+  juniper: ['ospf', 'rip', 'bgp', 'vrrp'],
+  huawei: ['ospf', 'rip', 'bgp', 'vrrp'],
+  ubiquiti: ['ospf', 'rip', 'bgp', 'vrrp'],
+  vyos: ['ospf', 'rip', 'bgp', 'vrrp'],
+  // FortiOS modern (≥7.0) menghapus RIP; redundansi HA memakai FGCP, bukan VRRP.
+  fortinet: ['ospf', 'bgp'],
+  // AOS-CX adalah switch data-center/campus: tanpa NAT & RIP/EIGRP;
+  // redundansi gateway pakai VRRP, routing dinamis OSPF/BGP.
+  aruba: ['ospf', 'bgp', 'vrrp'],
+  // OpenWrt image dasar TIDAK menyertakan daemon routing dinamis —
+  // OSPF/BGP/RIP hanya via paket opsional (frr/bird/olsrd) di luar profil
+  // dasar yang disimulasikan; static routing (network.routeN) memang bagian
+  // inti UCI. Set kosong → dimensi protocols dikeluarkan dari skor.
+  openwrt: [],
+  // Debian/Ubuntu/RaspiOS/Windows dasar tidak menjalankan routing dinamis:
+  // FRR/bird adalah instalasi opsional terpisah. Routing statis (ip route,
+  // route add) tetap penuh. Set kosong → dimensi protocols dikeluarkan.
+  linux: [],
+};

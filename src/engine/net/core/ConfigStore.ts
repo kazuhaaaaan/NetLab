@@ -436,6 +436,47 @@ export class ConfigStore {
     if (dev) this.applyConfig6ToDevice(dev, cfg);
   }
 
+  /** Versi REPLACE dari applyNodeConfig: `ips` adalah himpunan otoritatif penuh
+   *  (dipakai jalur sinkronisasi CLI → engine). Key yang ada di konfigurasi
+   *  tersimpan sebelumnya tapi hilang dari `ips` dihapus dari device — tanpa ini
+   *  `no ip address` hanya menghapus key dari memori vendor sementara engine
+   *  terus memakai IP lama (divergensi state). */
+  replaceNodeIps(nodeId: string, ips: Record<string, string>, routes: Array<{ dst: string; gateway: string; distance?: number }>): void {
+    const existing = this.configs.get(nodeId);
+    const cfg = {
+      ips: { ...ips },
+      routes: routes.map((r) => ({ dst: r.dst, gateway: r.gateway || null, distance: r.distance })),
+    };
+    const dev = this.ctx.nodes.get(nodeId);
+    if (existing && dev) {
+      for (const name of Object.keys(existing.ips)) {
+        if (!(name in cfg.ips)) dev.removeIpByName(name);
+      }
+    }
+    this.configs.set(nodeId, cfg);
+    if (dev) this.applyConfigToDevice(dev, cfg);
+  }
+
+  /** Versi REPLACE dari applyNodeConfig6 (semantik sama dengan replaceNodeIps). */
+  replaceNodeIps6(nodeId: string, ips6: Record<string, string>, routes6: Array<{ dst: string; gateway: string }>): void {
+    const existing = this.configs6.get(nodeId);
+    const cfg = {
+      ips6: { ...ips6 },
+      routes6: routes6.map((r) => ({ dst: r.dst, gateway: r.gateway || null })),
+    };
+    const dev = this.ctx.nodes.get(nodeId);
+    if (existing && dev) {
+      for (const name of Object.keys(existing.ips6)) {
+        if (!(name in cfg.ips6)) {
+          dev.removeIpv6ByName(name);
+          dev.configuredIpv6s.delete(name);
+        }
+      }
+    }
+    this.configs6.set(nodeId, cfg);
+    if (dev) this.applyConfig6ToDevice(dev, cfg);
+  }
+
   setDhcpPools(poolsByNode: Record<string, DhcpPoolInfo[]>): void {
     this.dhcpPools.clear();
     for (const [nodeId, pools] of Object.entries(poolsByNode)) {

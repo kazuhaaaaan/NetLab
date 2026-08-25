@@ -13,6 +13,7 @@ import type { LabProject, LabNode, LabEdge, PortSpec } from '../../../types';
 import { cloneProject, uid } from './runtime';
 import { getPortsForModel, getDefaultModel } from '../../../data/deviceModels';
 import { inferCableType } from '../../../connection';
+import { parseCidr, isValidHostIp } from '../../../engine/net/core/ip';
 
 const DEVICE_TYPES = ['router', 'switch', 'firewall', 'pc', 'server', 'wireless', 'windows-client'] as const;
 type DeviceType = (typeof DEVICE_TYPES)[number];
@@ -50,16 +51,33 @@ function portOf(node: LabNode, ref: string): PortSpec | undefined {
   return node.ports.find((p) => p.id === ref || p.name.toLowerCase() === ref.toLowerCase());
 }
 
+/**
+ * Posisi default DETERMINISTIK untuk device baru (grid, collision-aware).
+ * Menggantikan Math.random — same topology + same call sequence = layout
+ * identik (aturan determinism; AI-generated topology harus reproducible).
+ */
+function defaultPosition(project: LabProject): { x: number; y: number } {
+  const GRID = 200;
+  const ORIGIN = { x: 160, y: 140 };
+  const COLS = 5;
+  const occupied = new Set(project.nodes.map((n) => `${Math.round(n.position.x / GRID)}:${Math.round(n.position.y / GRID)}`));
+  for (let i = project.nodes.length; i < project.nodes.length + 64; i++) {
+    const x = ORIGIN.x + (i % COLS) * GRID;
+    const y = ORIGIN.y + Math.floor(i / COLS) * GRID;
+    if (!occupied.has(`${Math.round(x / GRID)}:${Math.round(y / GRID)}`)) return { x, y };
+  }
+  // Semua slot awal penuh → baris baru di bawah grid (tetap deterministik).
+  const row = Math.ceil((project.nodes.length + 1) / COLS);
+  return { x: ORIGIN.x, y: ORIGIN.y + row * GRID };
+}
+
 /** Buat perangkat baru di proyek. */
 export function toolCreateDevice(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const deviceType = p['type'] as DeviceType;
   const vendor = p['vendor'] as VendorId;
   const name = (p['name'] as string | undefined) ?? `${vendor.split('_')[0].toUpperCase()}-${deviceType.toUpperCase()}`;
   const id = (p['id'] as string | undefined) ?? uid('node', p['seed'] as string | undefined);
-  const position = (p['position'] as { x: number; y: number } | undefined) ?? {
-    x: 200 + Math.floor(Math.random() * 400),
-    y: 200 + Math.floor(Math.random() * 300),
-  };
+  const position = (p['position'] as { x: number; y: number } | undefined) ?? null;
 
   const base = projectOf(ctx);
   if ('error' in base) return base.error;
@@ -94,7 +112,7 @@ export function toolCreateDevice(ctx: ToolExecCtx, p: Record<string, unknown>): 
     vendor,
     model,
     deviceType,
-    position,
+    position: position ?? defaultPosition(project),
     ports,
     powered: true,
   };
@@ -305,11 +323,16 @@ export function toolUpdateDeviceProperties(ctx: ToolExecCtx, p: Record<string, u
   };
 }
 
-/** Perbarui properti interface (ipAddress di UI, dipakai display awal). */
+/** Perbarui properti interface (ipAddress di UI, dipakai display awal).
+ *  Dual-write wajib (audit R2): project port.ipAddress (canvas) +
+ *  NodeMemory.configuredIps (otoritatif CLI) + engine — menulis satu
+ *  representasi saja membuat state divergen (UI menampilkan IP yang tidak
+ *  pernah dimiliki engine). */
 export function toolUpdateInterfaceProperties(ctx: ToolExecCtx, p: Record<string, unknown>): ToolResult {
   const ref = p['deviceId'] as string;
   const ifaceRef = p['interfaceId'] as string;
-  const ip = (p['ipAddress'] as string | undefined) ?? null;
+  const raw = p['ipAddress'] as string | undefined;
+  const ip = raw === undefined || raw.trim() === '' ? null : raw.trim();
   const base = projectOf(ctx);
   if ('error' in base) return base.error;
   const project = base.project;
@@ -318,6 +341,29 @@ export function toolUpdateInterfaceProperties(ctx: ToolExecCtx, p: Record<string
   const port = portOf(node, ifaceRef);
   if (!port) return { ok: false, message: `interface tidak ditemukan: ${ifaceRef}`, error: 'interface-not-found' };
 
+  // Validasi ketat: hanya CIDR IPv4 host-valid atau null (hapus). Tanpa ini
+  // UI bisa menampilkan IP acuan yang ditolak engine (fake display).
+  let cidr: string | undefined;
+  if (ip !== null) {
+    const parsed = parseCidr(ip);
+    if (!parsed || !isValidHostIp(parsed.address, parsed.prefix)) {
+      return {
+        ok: false,
+        message: `IP tidak valid (harus CIDR host-valid, contoh 192.168.1.10/24): ${ip}`,
+        error: 'invalid-cidr',
+      };
+    }
+    cidr = `${parsed.address}/${parsed.prefix}`;
+  }
+
+  // 1) NodeMemory (sumber CLI) → sinkronisasi otoritatif ke engine.
+  const mem = ctx.runtime.dispatcher.getNodeMemory(node.id);
+  if (!mem.configuredIps) mem.configuredIps = {};
+  if (cidr) mem.configuredIps[port.name] = cidr;
+  else delete mem.configuredIps[port.name];
+  ctx.runtime.syncNodeToEngine(node.id);
+
+  // 2) Project state (canvas display) mengikuti memori.
   const next: LabProject = {
     ...project,
     nodes: project.nodes.map((n) =>
@@ -325,12 +371,12 @@ export function toolUpdateInterfaceProperties(ctx: ToolExecCtx, p: Record<string
         ? {
             ...n,
             ports: n.ports.map((x) =>
-              x.id === port.id ? { ...x, ipAddress: ip === null ? undefined : ip } : x
+              x.id === port.id ? { ...x, ipAddress: cidr } : x
             ),
           }
         : n
     ),
   };
   ctx.runtime.applyProject(next);
-  return { ok: true, message: `${node.name}:${port.name} ip=${ip ?? '(hapus)'}`, data: { deviceId: node.id, interfaceId: port.id, ipAddress: ip } };
+  return { ok: true, message: `${node.name}:${port.name} ip=${cidr ?? '(hapus)'}`, data: { deviceId: node.id, interfaceId: port.id, ipAddress: cidr ?? null } };
 }

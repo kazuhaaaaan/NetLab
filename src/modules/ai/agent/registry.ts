@@ -269,8 +269,8 @@ export function buildRegistry(): ToolDef[] {
       { deviceId: 'id atau nama device', powered: 'true/false' },
       { deviceId: devId(), powered: { optional: true, check: vBool, label: 'powered' } },
       (ctx, p) => topologyTools.toolUpdateDeviceProperties(ctx, p)),
-    def('update_interface_properties', 'Perbarui properti interface (ipAddress tampilan awal)', 'topology', 'execute', true,
-      { deviceId: 'id atau nama device', interfaceId: 'interface', ipAddress: 'CIDR (opsional)' },
+    def('update_interface_properties', 'Set/hapus IP interface (CIDR host-valid; tersinkron ke engine + memori CLI)', 'topology', 'execute', true,
+      { deviceId: 'id atau nama device', interfaceId: 'interface', ipAddress: 'CIDR (mis. 192.168.1.10/24; kosong = hapus)' },
       { deviceId: devId(), interfaceId: { optional: false, check: vStr, label: 'interfaceId' }, ipAddress: { optional: true, check: vStrOrEmpty, label: 'ipAddress' } },
       (ctx, p) => topologyTools.toolUpdateInterfaceProperties(ctx, p)),
 

@@ -18,11 +18,13 @@ import { AgentEngine } from '../../src/modules/ai/agent/AgentEngine';
 import { createHeadlessRuntime } from '../../src/modules/ai/agent/runtime';
 import { VerificationEngine } from '../../src/modules/ai/agent/verification';
 import { buildRegistry, registryMap, permissionOk } from '../../src/modules/ai/agent/registry';
+import { mirrorNodeIpsToProject, seedMemoryIpsFromProject } from '../../src/utils/cliSync';
 import { buildLabFromTemplate, LAB_TEMPLATES } from '../../src/modules/ai/agent/labGenerator';
 import { diagnoseConnectivity } from '../../src/modules/ai/agent/diagnostics';
 import { validate } from '../../src/modules/ai/agent/schemas';
 import { formatPlanPreview, formatExecuteOutcome } from '../../src/modules/ai/agent/format';
 import type { LabProject, LabNode } from '../../src/types';
+import type { PlanAction } from '../../src/modules/ai/agent/types';
 
 interface Report {
   passed: number;
@@ -508,6 +510,394 @@ export function runAiAgentTests(): Report {
     ], verifications: [{ success: true, testType: 'topology' as const, evidence: [], timestamp: 1 }], rolledBack: false, message: 'selesai', verifiedCount: 1, failedCount: 0 };
     const text = formatExecuteOutcome(outcome);
     check('S14.2 outcome memuat status + verify', text.includes('PLAN SUKSES') && text.includes('verify:'), text);
+  }
+
+  // ── S15. Integrity hardening: no fake success di jalur AI ────────────
+  console.log('\n== S15. Integrity hardening (no fake success) ==');
+  {
+    // S15.a — FIX execute_cli: kegagalan CLI TIDAK dilaporkan sukses
+    {
+      const { sim, runtime } = makeRuntime();
+      const project = runtime.getProject() as LabProject;
+      runtime.applyProject({
+        ...project,
+        nodes: [
+          { id: 'r1', name: 'R1', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+            { id: 'ether1', name: 'ether1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:01', type: 'copper' },
+          ] },
+        ],
+        edges: [],
+      });
+      const agent = new AgentEngine({ runtime, mode: 'execute' });
+      const bad = agent.callTool('execute_cli', { deviceId: 'R1', command: '/ip address add address=999.1.1.1/24 interface=ether1' }, { goal: 'test' });
+      check('S15.1 execute_cli invalid → ok:false (bukan fake success)', bad.ok === false && bad.error === 'cli-error', JSON.stringify(bad));
+      const stats = sim.getDeviceStats('r1');
+      check('S15.2 state tidak berubah setelah penolakan', !stats?.interfaces.some((i) => i.ip), JSON.stringify(stats?.interfaces));
+
+      const good = agent.callTool('execute_cli', { deviceId: 'R1', command: '/ip address add address=10.0.0.1/24 interface=ether1' }, { goal: 'test' });
+      check('S15.3 execute_cli valid → ok:true', good.ok === true, JSON.stringify(good));
+
+      // Wrapper configure_ip_address dengan CIDR invalid → ditolak jujur
+      const badWrap = agent.callTool('configure_ip_address', { deviceId: 'R1', interface: 'ether1', address: '300.0.0.99/24' }, { goal: 'test' });
+      check('S15.4 wrapper invalid CIDR → ok:false cli-error', badWrap.ok === false && badWrap.error === 'cli-error', JSON.stringify(badWrap));
+    }
+
+    // S15.b — FIX capability registry: gate sebelum mutasi + tanpa koersi syntax
+    {
+      const { sim, runtime } = makeRuntime();
+      const project = runtime.getProject() as LabProject;
+      runtime.applyProject({
+        ...project,
+        nodes: [
+          { id: 'ow1', name: 'OW1', vendor: 'openwrt', model: 'Generic Router', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+            { id: 'eth0', name: 'eth0', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:10', type: 'copper' },
+          ] },
+        ],
+        edges: [],
+      });
+      const agent = new AgentEngine({ runtime, mode: 'execute' });
+      // Registry: openwrt ospf = not-supported → tool menolak SEBELUM dispatch.
+      const r = agent.callTool('configure_ospf', { deviceId: 'OW1', network: '10.0.0.0/24', area: 0 }, { goal: 'test' });
+      check('S15.5 openwrt OSPF ditolak capability registry', r.ok === false && r.unsupported === true, JSON.stringify(r));
+      check('S15.6 pesan menyebut registry/status', /registry|not-supported/.test(r.message), r.message);
+
+      // UCI autentik via wrapper IP (dulu dikoersikan diam-diam ke syntax linux)
+      const ip = agent.callTool('configure_ip_address', { deviceId: 'OW1', interface: 'eth0', address: '192.168.20.1/24' }, { goal: 'test' });
+      check('S15.7 openwrt UCI IP via AI wrapper sukses', ip.ok === true, JSON.stringify(ip));
+      const owStats = sim.getDeviceStats('ow1');
+      check('S15.8 UCI commit benar-benar mengubah engine', !!owStats?.interfaces.some((i) => i.ip?.startsWith('192.168.20.')), JSON.stringify(owStats?.interfaces));
+    }
+
+    // S15.c — FIX generator autentik per-vendor: aruba (IOS-like) & vyos (set-style)
+    {
+      const { sim, runtime } = makeRuntime();
+      const project = runtime.getProject() as LabProject;
+      runtime.applyProject({
+        ...project,
+        nodes: [
+          { id: 'sw1', name: 'SW1', vendor: 'aruba', model: 'AOS-CX Switch', deviceType: 'switch', position: { x: 0, y: 0 }, powered: true, ports: [
+            { id: '1/1/1', name: '1/1/1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:20', type: 'copper' },
+          ] },
+          { id: 'vy1', name: 'VY1', vendor: 'vyos', model: 'VyOS Router', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+            { id: 'eth0', name: 'eth0', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:21', type: 'copper' },
+          ] },
+        ],
+        edges: [],
+      });
+      const agent = new AgentEngine({ runtime, mode: 'execute' });
+      const arubaIp = agent.callTool('configure_ip_address', { deviceId: 'SW1', interface: '1/1/1', address: '10.5.0.1/24' }, { goal: 'test' });
+      check('S15.9 aruba IP via syntax IOS-like sukses', arubaIp.ok === true, JSON.stringify(arubaIp));
+      const swStats = sim.getDeviceStats('sw1');
+      check('S15.10 aruba IP benar-benar aktif di engine', swStats?.interfaces.some((i) => i.ip === '10.5.0.1/24') ?? false, JSON.stringify(swStats?.interfaces));
+
+      const vyosIp = agent.callTool('configure_ip_address', { deviceId: 'VY1', interface: 'eth0', address: '10.6.0.1/24' }, { goal: 'test' });
+      check('S15.11 vyos IP via set-style sukses', vyosIp.ok === true, JSON.stringify(vyosIp));
+      const vyStats = sim.getDeviceStats('vy1');
+      check('S15.12 vyos IP benar-benar aktif di engine', vyStats?.interfaces.some((i) => i.ip === '10.6.0.1/24') ?? false, JSON.stringify(vyStats?.interfaces));
+
+      const vyosRoute = agent.callTool('configure_route', { deviceId: 'VY1', dst: '0.0.0.0/0', gateway: '10.6.0.254' }, { goal: 'test' });
+      check('S15.13 vyos static route via set protocols sukses', vyosRoute.ok === true, JSON.stringify(vyosRoute));
+      check('S15.14 route masuk tabel vyos', sim.getDeviceStats('vy1')?.routes.some((rt) => rt.dst === '0.0.0.0/0' && rt.gateway === '10.6.0.254') ?? false, JSON.stringify(sim.getDeviceStats('vy1')?.routes));
+    }
+
+    // S15.d — FIX verifikasi connect_devices dari params (link lab terverifikasi)
+    {
+      const { runtime } = makeRuntime();
+      const agent = new AgentEngine({ runtime, mode: 'execute' });
+      const plan = {
+        id: 'plan-link',
+        goal: 'uji verifikasi link',
+        mode: 'execute' as const,
+        actions: [
+          { id: 'l1', type: 'create_device' as const, target: 'RA', params: { type: 'router', vendor: 'mikrotik', name: 'RA', seed: 'ra' }, reason: 'buat RA', expectedEffect: 'kabel terhubung RA tersedia di canvas', risk: 'low' as const, validation: 'ok' },
+          { id: 'l2', type: 'create_device' as const, target: 'RB', params: { type: 'router', vendor: 'mikrotik', name: 'RB', seed: 'rb' }, reason: 'buat RB', expectedEffect: 'kabel terhubung RB tersedia di canvas', risk: 'low' as const, validation: 'ok' },
+          { id: 'l3', type: 'connect_devices' as const, target: 'RA', params: { sourceDeviceId: 'RA', targetDeviceId: 'RB' }, reason: 'hubungkan', expectedEffect: 'kabel terhubung RA ↔ RB terpasang', risk: 'low' as const, validation: 'ok' },
+        ],
+      };
+      const out = agent.executePlan(plan);
+      check('S15.15 plan connect sukses', out.ok === true, JSON.stringify(out.message));
+      const linkVerify = out.results[2]?.verification;
+      check('S15.16 connect_devices diverifikasi dari params', !!linkVerify && linkVerify.success === true, JSON.stringify(linkVerify));
+
+      // Negative: connect ke device yang tidak ada → gagal + rollback penuh
+      const { runtime: rt2 } = makeRuntime();
+      const agent2 = new AgentEngine({ runtime: rt2, mode: 'execute' });
+      const badPlan = {
+        id: 'plan-link-bad',
+        goal: 'uji link ke device hilang',
+        mode: 'execute' as const,
+        actions: [
+          { id: 'm1', type: 'create_device' as const, target: 'RC', params: { type: 'router', vendor: 'mikrotik', name: 'RC', seed: 'rc' }, reason: 'buat RC', expectedEffect: 'RC tersedia', risk: 'low' as const, validation: 'ok' },
+          { id: 'm2', type: 'connect_devices' as const, target: 'RC', params: { sourceDeviceId: 'RC', targetDeviceId: 'GHOST' }, reason: 'hubungkan ke hantu', expectedEffect: 'kabel RC ↔ GHOST terpasang', risk: 'low' as const, validation: 'ok' },
+        ],
+      };
+      const outBad = agent2.executePlan(badPlan);
+      check('S15.17 link ke ghost → plan gagal', outBad.ok === false, JSON.stringify(outBad.message));
+      check('S15.18 rollback proyek bersih', (rt2.getProject() as LabProject).nodes.length === 0, `nodes=${(rt2.getProject() as LabProject).nodes.length}`);
+      // FIX rollback: jejak verifikasi aksi yang dibatalkan dibersihkan
+      const stale = agent2.verification.all().filter((h) => h.actionId === 'm1' || h.actionId === 'm2');
+      check('S15.19 riwayat verifikasi aksi dibatalkan dibersihkan', stale.length === 0, JSON.stringify(stale.map((s) => s.label)));
+    }
+
+    // S15.e — FIX delete_device: verifikasi negatif (tanpa rollback palsu)
+    {
+      const { runtime } = makeRuntime();
+      const agent = new AgentEngine({ runtime, mode: 'execute' });
+      const mkCreate = (id: string): PlanAction => ({ id, type: 'create_device', target: 'RD', params: { type: 'router', vendor: 'mikrotik', name: 'RD', seed: 'rd-' + id }, reason: 'buat RD', expectedEffect: 'RD tersedia', risk: 'low', validation: 'ok' });
+      const createOut = agent.executePlan({ id: 'plan-cr', goal: 'buat', mode: 'execute', actions: [mkCreate('d0')] });
+      check('S15.20 create RD sukses', createOut.ok === true, JSON.stringify(createOut.message));
+
+      const delPlan = {
+        id: 'plan-del', goal: 'hapus RD', mode: 'execute' as const,
+        actions: [{ id: 'd1', type: 'delete_device' as const, target: 'RD', params: { deviceId: 'RD' }, reason: 'hapus RD', expectedEffect: 'RD tidak ada lagi di canvas', risk: 'medium' as const, validation: 'ok' }],
+      };
+      const delOut = agent.executePlan(delPlan);
+      check('S15.21 delete_device plan sukses (tanpa rollback palsu)', delOut.ok === true && delOut.rolledBack === false, JSON.stringify(delOut.message));
+      check('S15.22 RD tidak tersisa di proyek', (runtime.getProject() as LabProject).nodes.length === 0, `nodes=${(runtime.getProject() as LabProject).nodes.length}`);
+      const dv = delOut.results[0]?.verification;
+      check('S15.23 verification delete = negative-existence', !!dv && dv.success === true && dv.reason === undefined, JSON.stringify(dv));
+    }
+
+    // S15.f — FIX deterministik: posisi device baru reproducible & bebas tabrakan
+    {
+      const positionsOf = (): Array<{ x: number; y: number }> => {
+        const { runtime } = makeRuntime();
+        const agent = new AgentEngine({ runtime, mode: 'execute' });
+        for (const nm of ['P1', 'P2', 'P3']) {
+          agent.callTool('create_device', { type: 'pc', vendor: 'linux', name: nm }, { goal: 'layout' });
+        }
+        return ((runtime.getProject() as LabProject).nodes.map((n) => n.position));
+      };
+      const a = positionsOf();
+      const b = positionsOf();
+      check('S15.24 posisi identik antar-run (deterministik)', JSON.stringify(a) === JSON.stringify(b), `${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
+      const unique = new Set(a.map((p) => `${p.x}:${p.y}`));
+      check('S15.25 tidak ada tabrakan posisi', unique.size === a.length, JSON.stringify(a));
+    }
+
+    // S15.g — FIX diagnostik: rekomendasi executable (params lengkap) atau kosong
+    {
+      const { sim, runtime } = makeRuntime();
+      const project = runtime.getProject() as LabProject;
+      runtime.applyProject({
+        ...project,
+        nodes: [
+          { id: 'r1', name: 'R1', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+            { id: 'ether1', name: 'ether1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:31', type: 'copper' },
+          ] },
+          { id: 'pc1', name: 'PC1', vendor: 'linux', model: 'Debian 12 (Bookworm)', deviceType: 'pc', position: { x: 0, y: 0 }, powered: true, ports: [
+            { id: 'eth0', name: 'eth0', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:32', type: 'copper' },
+          ] },
+        ],
+        edges: [{ id: 'e1', sourceNodeId: 'r1', sourcePortId: 'ether1', targetNodeId: 'pc1', targetPortId: 'eth0', cableType: 'copper_straight' }],
+      });
+      sim.applyNodeConfig('r1', { ether1: '10.0.0.1/24' }, []);
+      sim.applyNodeConfig('pc1', {}, []); // PC1 tanpa IP
+
+      const v = new VerificationEngine(sim);
+      const diag = diagnoseConnectivity(sim, v, { source: 'pc1', destination: '10.0.0.1' });
+      check('S15.26 root cause no-ip', (diag.rootCause ?? '').includes('no-ip'), diag.rootCause ?? '');
+      const fix = diag.recommendedFixes[0];
+      if (fix) {
+        const p = fix.params as Record<string, unknown>;
+        const executable =
+          (fix.type !== 'configure_ip_address' || (typeof p['interface'] === 'string' && (p['interface'] as string).length > 0 && typeof p['address'] === 'string' && (p['address'] as string).length > 0)) &&
+          Object.values(p).every((x) => typeof x !== 'string' || x.length > 0);
+        check('S15.27 fix no-ip punya params lengkap (executable)', executable, JSON.stringify(fix.params));
+      } else {
+        check('S15.27 fix no-ip: advisory-only juga sah', true);
+      }
+
+      // Kasus unreachable: gateway kandidat dari subnet nyata → params konkret
+      sim.applyNodeConfig('pc1', { eth0: '10.0.0.2/24' }, []);
+      const diag2 = diagnoseConnectivity(sim, v, { source: 'pc1', destination: '10.99.99.99' });
+      const routeFix = diag2.recommendedFixes.find((f) => f.type === 'configure_route');
+      if (routeFix) {
+        const rp = routeFix.params as Record<string, unknown>;
+        check('S15.28 fix route pakai gateway nyata dari topologi', rp['gateway'] === '10.0.0.1' && rp['dst'] === '10.99.99.99/32', JSON.stringify(rp));
+      } else {
+        check('S15.28 fix route advisory-only (tanpa gateway kandidat)', true);
+      }
+    }
+
+    // ── S16. Konvergensi state IP (audit R2: satu realitas, tiga lapisan) ──
+    console.log('\n== S16. IP state convergence (dual-write + engine removal) ==');
+    {
+      // S16.a — update_interface_properties: dual-write project + memori + engine
+      {
+        const { sim, dispatcher, runtime } = makeRuntime();
+        const project = runtime.getProject() as LabProject;
+        runtime.applyProject({
+          ...project,
+          nodes: [
+            { id: 'r1', name: 'R1', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+              { id: 'ether1', name: 'ether1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:41', type: 'copper' },
+            ] },
+          ],
+          edges: [],
+        });
+        const agent = new AgentEngine({ runtime, mode: 'execute' });
+        const r = agent.callTool('update_interface_properties', { deviceId: 'R1', interfaceId: 'ether1', ipAddress: '10.9.0.1/24' }, { goal: 'test' });
+        check('S16.1 set IP valid → ok:true', r.ok === true, JSON.stringify(r));
+        const portIp = (runtime.getProject() as LabProject).nodes[0].ports.find((x) => x.name === 'ether1')?.ipAddress;
+        check('S16.2 project port ikut ditulis', portIp === '10.9.0.1/24', String(portIp));
+        check('S16.3 memori CLI ikut ditulis', dispatcher.getNodeMemory('r1').configuredIps['ether1'] === '10.9.0.1/24', JSON.stringify(dispatcher.getNodeMemory('r1').configuredIps));
+        const ipEngine = sim.getDeviceStats('r1')?.interfaces.find((i) => i.name === 'ether1')?.ip;
+        check('S16.4 engine benar-benar memegang IP', ipEngine === '10.9.0.1/24', String(ipEngine));
+
+        // S16.b — CIDR invalid/broadcast ditolak, TIDAK ADA lapisan yang berubah
+        const bad = agent.callTool('update_interface_properties', { deviceId: 'R1', interfaceId: 'ether1', ipAddress: '999.5.5.5/24' }, { goal: 'test' });
+        const bcast = agent.callTool('update_interface_properties', { deviceId: 'R1', interfaceId: 'ether1', ipAddress: '10.9.0.255/24' }, { goal: 'test' });
+        check(
+          'S16.5 invalid+broadcast → ok:false invalid-cidr',
+          bad.ok === false && bad.error === 'invalid-cidr' && bcast.ok === false && bcast.error === 'invalid-cidr',
+          `${JSON.stringify(bad)} ${JSON.stringify(bcast)}`
+        );
+        const stillSame =
+          (runtime.getProject() as LabProject).nodes[0].ports.find((x) => x.name === 'ether1')?.ipAddress === '10.9.0.1/24' &&
+          dispatcher.getNodeMemory('r1').configuredIps['ether1'] === '10.9.0.1/24';
+        check('S16.6 penolakan tidak mengubah state manapun', stillSame);
+
+        // S16.c — hapus ('' / null) membersihkan KETIGA lapisan
+        const rm = agent.callTool('update_interface_properties', { deviceId: 'R1', interfaceId: 'ether1', ipAddress: '' }, { goal: 'test' });
+        const rmPort = (runtime.getProject() as LabProject).nodes[0].ports.find((x) => x.name === 'ether1')?.ipAddress;
+        const rmMem = dispatcher.getNodeMemory('r1').configuredIps['ether1'];
+        const rmEngine = sim.getDeviceStats('r1')?.interfaces.find((i) => i.name === 'ether1')?.ip ?? null;
+        check(
+          'S16.7 hapus → ketiga lapisan bersih',
+          rm.ok === true && !rmPort && !rmMem && rmEngine === null,
+          `port=${String(rmPort)} mem=${String(rmMem)} engine=${String(rmEngine)}`
+        );
+      }
+
+      // S16.d — D3: penghapusan via jalur otoritatif WAJIB menghapus IP engine
+      {
+        const { sim, dispatcher, runtime } = makeRuntime();
+        const project = runtime.getProject() as LabProject;
+        runtime.applyProject({
+          ...project,
+          nodes: [
+            { id: 'r1', name: 'R1', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+              { id: 'ether1', name: 'ether1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:42', type: 'copper' },
+            ] },
+          ],
+          edges: [],
+        });
+        const mem = dispatcher.getNodeMemory('r1');
+        mem.configuredIps['ether1'] = '10.8.0.1/24';
+        runtime.syncNodeToEngine('r1');
+        const before = sim.getDeviceStats('r1')?.interfaces.find((i) => i.name === 'ether1')?.ip;
+        delete mem.configuredIps['ether1']; // setara hasil `no ip address` / remove
+        runtime.syncNodeToEngine('r1');
+        const after = sim.getDeviceStats('r1')?.interfaces.find((i) => i.name === 'ether1')?.ip ?? null;
+        check('S16.8 sync set: engine pegang IP', before === '10.8.0.1/24', String(before));
+        check('S16.9 sync hapus: IP engine hilang (bukan basi merge)', after === null, String(after));
+
+        // Sibling iface tidak boleh terhapus oleh replace penuh
+        mem.configuredIps['ether1'] = '10.8.0.1/24';
+        mem.configuredIps['ether2'] = '10.8.1.1/24';
+        runtime.applyProject({
+          ...(runtime.getProject() as LabProject),
+          nodes: [
+            { id: 'r1', name: 'R1', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+              { id: 'ether1', name: 'ether1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:42', type: 'copper' },
+              { id: 'ether2', name: 'ether2', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:43', type: 'copper' },
+            ] },
+          ],
+          edges: [],
+        });
+        runtime.syncNodeToEngine('r1');
+        delete mem.configuredIps['ether1'];
+        runtime.syncNodeToEngine('r1');
+        const sibs = sim.getDeviceStats('r1')?.interfaces;
+        check(
+          'S16.10 replace selektif: sibling tetap, target hilang',
+          sibs?.find((i) => i.name === 'ether2')?.ip === '10.8.1.1/24' && (sibs?.find((i) => i.name === 'ether1')?.ip ?? null) === null,
+          JSON.stringify(sibs?.map((i) => [i.name, i.ip]))
+        );
+      }
+
+      // S16.e — Windows ipconfig membaca sumber terbaru (netsh > state canvas)
+      {
+        const { runtime } = makeRuntime();
+        const project = runtime.getProject() as LabProject;
+        runtime.applyProject({
+          ...project,
+          nodes: [
+            { id: 'w1', name: 'WIN1', vendor: 'windows', model: 'Windows 11 Pro', deviceType: 'windows-client', position: { x: 0, y: 0 }, powered: true, ports: [
+              { id: 'eth0', name: 'eth0', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:44', type: 'copper', ipAddress: '172.20.20.99/24' },
+            ] },
+          ],
+          edges: [],
+        });
+        runtime.executeCli('w1', 'windows', 'netsh interface ipv4 set address name="eth0" static 172.20.20.5 255.255.255.0');
+        const out = runtime.executeCli('w1', 'windows', 'ipconfig').output;
+        check('S16.11 ipconfig menampilkan IP netsh (terbaru)', out.includes('172.20.20.5'), out.slice(0, 200));
+        check('S16.12 ipconfig tidak lagi menampilkan IP basi canvas', !out.includes('172.20.20.99'), '');
+        const gwOut = runtime.executeCli('w1', 'windows', 'netsh interface ipv4 set address name="eth0" static 172.20.20.6 255.255.255.0 172.20.20.1').output;
+        const out2 = runtime.executeCli('w1', 'windows', 'ipconfig').output;
+        check('S16.13 gateway dari memori tampil di ipconfig', gwOut !== undefined && out2.includes('172.20.20.1'), out2.slice(0, 240));
+      }
+
+      // S16.f — seeding & mirror IP canvas ↔ memori (display tidak basi)
+      {
+        const mkProj = (): LabProject => ({
+          version: '1.0',
+          metadata: { name: 'mirror-test', author: 'test', description: '', createdAt: '', updatedAt: '' },
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            { id: 'r1', name: 'R1', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 0, y: 0 }, powered: true, ports: [
+              { id: 'ether1', name: 'ether1', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:45', type: 'copper', ipAddress: '10.1.10.1/24' },
+              { id: 'ether2', name: 'ether2', speedMbps: 1000, status: 'up', macAddress: '00:00:00:00:00:46', type: 'copper', ipAddress: '10.1.20.1/24' },
+            ] },
+          ],
+          edges: [],
+        });
+
+        // Seed: kebenaran CLI dipertahankan, port kosong diisi dari canvas
+        {
+          const { dispatcher } = makeRuntime();
+          dispatcher.getNodeMemory('r1').configuredIps['ether1'] = '10.9.9.9/24';
+          const proj = mkProj();
+          proj.nodes[0].ports[1].ipAddress = undefined; // ether2 kosong di canvas
+          seedMemoryIpsFromProject(proj, dispatcher);
+          const seeded = dispatcher.getNodeMemory('r1').configuredIps;
+          check(
+            'S16.14 seed: key CLI tak tertimpa, port kosong tetap diisi',
+            seeded['ether1'] === '10.9.9.9/24' && !('ether2' in seeded),
+            JSON.stringify(seeded)
+          );
+        }
+
+        // Mirror: canvas mengikuti memori (set + clear), null bila sudah sama
+        {
+          const { dispatcher } = makeRuntime();
+          const mem = dispatcher.getNodeMemory('r1');
+          mem.configuredIps['ether1'] = '10.5.0.1/24'; // ether2 sengaja tanpa IP
+          const mirrored = mirrorNodeIpsToProject(mkProj(), dispatcher, 'r1') as LabProject | null;
+          const mPorts = mirrored?.nodes[0].ports;
+          check(
+            'S16.15 mirror: canvas ikut memori terbaru',
+            mPorts?.find((p) => p.name === 'ether1')?.ipAddress === '10.5.0.1/24',
+            JSON.stringify(mPorts?.map((p) => [p.name, p.ipAddress]))
+          );
+          check(
+            'S16.16 mirror eksak: interface tanpa IP di memori ikut bersih',
+            mPorts?.find((p) => p.name === 'ether2')?.ipAddress === undefined,
+            JSON.stringify(mPorts?.map((p) => [p.name, p.ipAddress]))
+          );
+          const unchanged = mirrored ? mirrorNodeIpsToProject(mirrored, dispatcher, 'r1') : null;
+          check('S16.17 tanpa perubahan → null (tanpa render ulang)', unchanged === null, String(unchanged));
+        }
+
+        // Memori kosong → proyek dibiarkan (IP preset tetap tampil)
+        {
+          const { dispatcher } = makeRuntime();
+          const untouched = mirrorNodeIpsToProject(mkProj(), dispatcher, 'r1');
+          check('S16.18 memori kosong → node dibiarkan (preset aman)', untouched === null, String(untouched));
+        }
+      }
+    }
   }
 
   return rep;

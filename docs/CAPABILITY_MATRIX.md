@@ -25,24 +25,53 @@ semua pasangan V2 lulus di suite (2240 test).
 
 ## Matriks
 
-| Protokol | **mikrotik** | **cisco_ios** | **cisco_nxos** | **juniper** | **huawei** | **ubiquiti** | **vyos** | **fortinet** | **aruba** | **openwrt** | **linux** |
+| Protokol | **mikrotik** | **cisco_ios** | **cisco_nxos** | **juniper** | **huawei** | **ubiquiti** | **vyos** | **fortinet** | **aruba** | **openwrt** | **linux** | **windows** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| IPv4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
-| IPv6 | 4 | 4 | 4 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 |
-| VLAN | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 2 |
-| DHCP | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
-| NAT | 4 | 2 | 2 | 4 | 4 | 4 | 4 | 4 | 0 | 4 | 4 |
-| OSPF | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 0 | 0 |
-| BGP | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 2 | 0 | 0 |
-| VRRP/FHRP | 2 | 4 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Static Route | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
-| Firewall/ACL | 4 | 2 | 2 | 4 | 4 | 4 | 4 | 4 | 2 | 4 | 2 |
-| DNS | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
-| Commit/Rollback | 0 | 0 | 0 | 4 | 0 | 4 | 4 | 0 | 0 | 4 | 0 |
+| IPv4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
+| IPv6 | 4 | 4 | 4 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 0 |
+| VLAN | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 2 | 0 |
+| DHCP | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 2 |
+| NAT | 4 | 2 | 2 | 4 | 4 | 4 | 4 | 4 | 0 | 4 | 4 | 0 |
+| OSPF | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 0 | 0 | 0 |
+| BGP | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 0 | 0 | 0 |
+| VRRP/FHRP | 2 | 4 | 2 | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 0 |
+| Static Route | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
+| Firewall/ACL | 4 | 2 | 2 | 4 | 4 | 4 | 4 | 4 | 2 | 4 | 2 | 0 |
+| DNS | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
+| Commit/Rollback | 0 | 0 | 0 | 4 | 0 | 4 | 4 | 0 | 0 | 4 | 0 | 0 |
 
 ## Perubahan iterasi audit terakhir
 
-- **upgrade fidelity 90%-drive (iterasi ini)**:
+- **konvergensi state IP (audit R2)** — satu realitas, tiga lapisan
+  (project port ↔ NodeMemory ↔ engine):
+  - **penghapusan IP kini nyata di engine** — `no ip address` /
+    `update_interface_properties(ip:'')` sebelumnya hanya menghapus key dari
+    memori vendor; engine terus memakai IP lama (merge ConfigStore). Jalur
+    sinkronisasi CLI→engine kini REPLACE (`replaceNodeIps/6`): key yang hilang
+    dihapus dari perangkat + rute connected dibangun ulang.
+  - **AI `update_interface_properties` dual-write** — validasi CIDR host-valid
+    ketat, lalu menulis project port.ipAddress + NodeMemory.configuredIps +
+    sinkron engine; CIDR invalid/broadcast ditolak tanpa mutasi state.
+  - **windows `ipconfig`** membaca sumber terbaru (hasil netsh/DHCP di memori)
+    di atas ipAddress awal canvas; gateway dari rute `0.0.0.0/0` memori.
+  - **backfill display canvas** — setiap sinkronisasi CLI→engine kini
+    mencerminkan IP memori ke state proyek (`mirrorNodeIpsToProject`,
+    tanpa push history); saat load preset/import/.mlab, IP canvas di-seed ke
+    memori vendor (`seedMemoryIpsFromProject`) agar perintah `print` melihat
+    konfigurasi awal — tidak ada lagi tampilan basi di kedua arah.
+- **upgrade fidelity (iterasi conformance-gate)**:
+  - **aruba.bgp: 2 → 4** — bentuk CIDR autentik AOS-CX (`network <prefix/cidr>`
+    di mode `router bgp`) kini diimplementasikan & teruji (matriks + V0).
+  - **aruba.vrrp: 0 → 4** — blok autentik AOS-CX (`ip vrrp <id>` →
+    `address-family ipv4` → `virtual-ip` → `enable`, `priority`) di interface
+    view; sintaks IOS-style `vrrp <n> ip` kini DITOLAK seperti perangkat nyata.
+  - **windows** — CLI konfiguratif autentik: `netsh interface ipv4 set
+    address/dnsservers` + `route add/delete` (validasi ketat; sintaks `/prefix`
+    gaya Unix ditolak seperti Windows nyata); kolom windows ditambahkan.
+  - **protocolSet openwrt/linux = kosong (dokumentasi skor)** — image dasar
+    tanpa daemon routing dinamis (FRR/bird opsional); dimensi protocols
+    dikeluarkan dari total dengan renormalisasi bobot, bukan dihukum 0.
+- **upgrade fidelity 90%-drive (iterasi sebelumnya)**:
   - **vyos/ubiquiti commit: 2 → 4** — rollback snapshot terbukti nyata
     (round-trip test), catatan registry yang stale dikoreksi.
   - **huawei**: `dhcp enable` kini menyimpan state nyata (`dhcpEnabled`),
@@ -75,7 +104,9 @@ semua pasangan V2 lulus di suite (2240 test).
   snapshot & `rollback [0-9]` mengembalikan ke commit terakhir — teruji
   round-trip (set→commit→set→rollback). VRRP belum ada.
 - **fortinet** (FortiOS): NAT via policy & VIP teruji; VRRP tidak ada (jujur).
-- **aruba** (AOS-CX): NAT (0) & BGP (2) belum diimplementasikan — tidak ada
-  klaim sukses palsu.
+- **aruba** (AOS-CX): NAT (0) memang bukan bagian produk switch; BGP (CIDR) &
+  VRRP (blok `ip vrrp`) teruji autentik — tanpa klaim sukses palsu.
 - **openwrt**: UCI commit nyata; OSPF/BGP tidak disimulasikan (jujur).
 - **linux**: host tidak menjalankan protokol routing dinamis (OSPF/BGP).
+- **windows** (client-host): CLI konfiguratif `netsh`/`route` autentik dengan
+  validasi ketat; tanpa routing dinamis/NAT/VLAN tagging (jujur).

@@ -5,6 +5,7 @@ import { registerEntries } from '../common/chain';
 import { cidrOf, resolveIfaceName } from '../common/ip';
 import { grantDhcpClient } from '../common/state';
 import { juniperSnapshot, restoreJuniper } from '../common/memory';
+import { generateRunningConfig } from '../common/format';
 import type { NodeMemory, VendorContext } from '../common/types';
 
 export const vyosEntries: ChainEntry[] = [
@@ -42,6 +43,13 @@ cmdResult = vyosCommand(rawInput, context, mem);
               ? { raw: 'configuration rolled back' }
               : { raw: 'error: no configuration to roll back' };
             if (snap) restoreJuniper(mem, snap);
+          } else if (/^show\s+configuration(\s+commands)?\s*$/i.test(rawInput.trim())) {
+    // VyOS/EdgeOS "show configuration" — render config dari state nyata.
+            cmdResult = { raw: generateRunningConfig(context, mem, vendorId) };
+          } else if (/^save\s*$/i.test(rawInput.trim())) {
+    // VyOS/EdgeOS "save" — snapshot startup-config (reload memulihkannya).
+            registry.saveStartupConfig(nodeId);
+            cmdResult = { raw: 'Saving configuration, please wait...\nDone' };
           } else {
     // Command VyOS yang tidak dikenali: JANGAN pura-pura sukses.
             cmdResult = { raw: '% Command not supported by NetLab simulator (vyos)' };

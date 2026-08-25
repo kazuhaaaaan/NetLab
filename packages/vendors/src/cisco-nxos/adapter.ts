@@ -19,6 +19,7 @@ export class CiscoNxosVendorAdapter implements _IV {
     const subs = ast.subCommands.map(s => s.toLowerCase());
 
     if (isPrefix(action, 'show')) {
+      if (isPrefix(subs[0], 'running-config') || isPrefix(subs[0], 'run')) return { action: 'show_running', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'ip') && isPrefix(subs[1], 'interface')) return { action: 'show_ip_int_brief', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'vlan')) return { action: 'show_vlan', target: 'nxos', payload: { raw: rawInput, ast } };
       if (isPrefix(subs[0], 'interface') && isPrefix(subs[1], 'status')) return { action: 'show_int_status', target: 'nxos', payload: { raw: rawInput, ast } };

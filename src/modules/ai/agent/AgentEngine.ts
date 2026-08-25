@@ -318,7 +318,6 @@ export class AgentEngine {
 
   /** Verifikasi efek yang diharapkan setelah action. */
   private verifyAction(action: PlanAction): VerificationResult | null {
-    const expected = action.expectedEffect?.toLowerCase() ?? '';
     const target = action.target;
     if (!target) return null;
 
@@ -326,6 +325,38 @@ export class AgentEngine {
     // sedangkan verification.getDeviceStats dkk. membaca by-ID.
     const dev = this.runtime.sim.getDevice(target) ?? this.runtime.sim.getDeviceByName(target);
     const source = dev?.id ?? target;
+
+    // ── Verifikasi berbasis TYPE dulu (kuat, tidak bergantung wording
+    // expectedEffect bebas). Keyword matching hanya fallback untuk
+    // action non-topologi. ──
+    switch (action.type) {
+      case 'create_device':
+      case 'rename_device':
+      case 'move_device':
+        return this.verification.verifyDeviceExists(source, action.id);
+      case 'delete_device':
+        // Verifikasi NEGATIF: sukses = device TIDAK ada lagi.
+        // (Dulu: keyword "canvas" memicu verifyDeviceExists → selalu gagal
+        // setelah delete sukses → rollback palsu.)
+        return this.verification.verifyDeviceAbsent(source, action.id);
+      case 'connect_devices': {
+        // Verifikasi dari PARAMS (bukan parse teks): dulu regex
+        // /kabel\s+(\S+)\s*↔\s*(\S+)/ gagal terhadap effect template
+        // "kabel terhubung R1 ↔ R2" → link lab tak pernah diverifikasi.
+        const srcId = String(action.params['sourceDeviceId'] ?? '');
+        const dstId = String(action.params['targetDeviceId'] ?? '');
+        if (!srcId || !dstId) return null;
+        return this.verification.verifyLink(srcId, dstId, action.id, 'link exists');
+      }
+      case 'disconnect_devices': {
+        const srcId = String(action.params['sourceDeviceId'] ?? '');
+        const dstId = String(action.params['targetDeviceId'] ?? '');
+        if (!srcId || !dstId) return null;
+        return this.verification.verifyLinkAbsent(srcId, dstId, action.id);
+      }
+    }
+
+    const expected = action.expectedEffect?.toLowerCase() ?? '';
 
     // CLI setup → verifikasi LEMAH sesuai desain (device ada; command sudah
     // lewat jalur vendor). Verifikasi kuat ada di grading lab — expectedEffect
@@ -462,6 +493,14 @@ export class AgentEngine {
       const actionFailed = !res.ok || (vr !== null && !vr.success);
       if (actionFailed) {
         const rolledBack = tx.rollback();
+        if (rolledBack) {
+          // Bersihkan jejak verifikasi aksi yang dibatalkan — state sudah
+          // dipulihkan, entri sukses dari aksi yang di-rollback tidak boleh
+          // tersisa di riwayat (hasil eksekusi tetap dilaporkan ke pemanggil).
+          for (const v of verifications) {
+            if (v.actionId) this.verification.clearForAction(v.actionId);
+          }
+        }
         return {
           ok: false,
           planId: plan.id,

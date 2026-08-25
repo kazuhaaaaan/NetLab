@@ -27,12 +27,12 @@ import { StorageEngine } from './storage/db';
 import { VENDOR_MAP } from './data/vendors';
 import { getDefaultModel, getModelsForVendor, getPortsForModel } from './data/deviceModels';
 import { VendorDispatcher } from '../packages/vendors/src/index';
-import { SimulationEngine, formatPingOutput, formatTracerouteOutput } from './engine/net';
+import { SimulationEngine } from './engine/net';
 import { runLab, findScenarios, formatLabResult } from './engine/lab';
 import { LAB_SCENARIOS } from './engine/lab/scenarios';
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
 import { validateProject } from './utils/projectValidation';
-import { syncNodeToEngine as syncNodeToEngineAll, syncDhcpPools as syncDhcpPoolsAll } from './utils/cliSync';
+import { syncNodeToEngine as syncNodeToEngineAll, syncDhcpPools as syncDhcpPoolsAll, mirrorNodeIpsToProject, seedMemoryIpsFromProject } from './utils/cliSync';
 import { WinDesktopModal } from './components/windows/WinDesktopModal';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
@@ -47,7 +47,7 @@ import { ConfigGeneratorModal } from './components/ConfigGeneratorModal';
 import { ConfigLibraryModal } from './components/ConfigLibraryModal';
 import { PresetLabModal } from './components/PresetLabModal';
 import { NetworkSimulationModal } from './components/NetworkSimulationModal';
-import { portLinksOfNode } from './utils/configExport';
+import { buildCliContext } from './utils/cliContext';
 import { useAgentEngine } from './hooks/useAgentEngine';
 import { formatExecuteOutcome, formatPlanPreview, formatDiagnostic, formatVerification } from './modules/ai/agent/format';
 import type { ActionPlan, AiPermissionMode, ExecuteOutcome } from './modules/ai/agent/types';
@@ -414,6 +414,11 @@ export default function App() {
    *  interface shutdown/up, subinterface & trunk) — lihat utils/cliSync.ts. */
   const syncNodeToEngine = useCallback((nodeId: string) => {
     syncNodeToEngineAll(simEngineRef.current, vendorDispatcher, nodeId);
+    // Cermin IP memori → canvas (audit R2: satu realitas tiga lapisan).
+    // setProject polos TANPA history push — perubahan display murni kosmetik;
+    // snapshot undo tetap memakai proyek pada saat aksi pengguna.
+    // Null (tanpa perubahan) → reference dipertahankan → React skip render.
+    setProject((prev) => mirrorNodeIpsToProject(prev, vendorDispatcher, nodeId) ?? prev);
     const mem = vendorDispatcher.getNodeMemory(nodeId);
     setShutdownPortsByNode((prev) => {
       const ports = mem.shutdownIfaces && mem.shutdownIfaces.length > 0 ? [...mem.shutdownIfaces] : undefined;
@@ -469,6 +474,7 @@ export default function App() {
       setCanRedo(false);
       // CLI state (IP/rute/VLAN/NAT/ACL/routing) ikut di-restore bila ada di file.
       vendorDispatcher.restoreMemory(result.deviceConfigs || null);
+      seedMemoryIpsFromProject(result.project, vendorDispatcher);
       if (result.deviceConfigs) StorageEngine.saveDeviceConfigs(result.deviceConfigs);
       else StorageEngine.clearDeviceConfigs();
       const mem = vendorDispatcher.serializeMemory();
@@ -493,6 +499,10 @@ export default function App() {
         return;
       }
       setProject(saved);
+      // Seed IP canvas → memori vendor (audit R2): preset/import menyimpan IP
+      // hanya di port proyek; CLI harus melihatnya juga. Kebenaran CLI yang
+      // sudah ada (restore file .mlab) tidak akan tertimpa (restore = merge).
+      seedMemoryIpsFromProject(saved, vendorDispatcher);
       // Undo history dimulai dari proyek tersimpan, bukan template default
       historyRef.current = [saved];
       historyIndexRef.current = 0;
@@ -523,6 +533,7 @@ export default function App() {
         setCanUndo(false);
         setCanRedo(false);
         vendorDispatcher.restoreMemory(payload.configs);
+        seedMemoryIpsFromProject(proj, vendorDispatcher);
         const mem = vendorDispatcher.serializeMemory();
         for (const nodeId of Object.keys(mem)) {
           syncNodeToEngine(nodeId);
@@ -1345,81 +1356,16 @@ export default function App() {
     return outcome;
   }, [agent, pushAiNote, setStatsVersion]);
 
-  // Konteks CLI per node — SATU sumber kebenaran untuk semua jalur terminal
-  // (terminal utama & Windows Terminal memakai jalur engine yang sama).
-  const buildCliContext = (nodeId: string) => {
-    const node = project.nodes.find((n) => n.id === nodeId);
-    return {
-      nodeId,
-      name: node?.name || nodeId,
-      ports: node?.ports || [],
-      portLinks: portLinksOfNode(node, project.edges),
-      pingSimulator: (host: string, vendorId: string, size?: number) => {
-        const result = simEngineRef.current.simulatePing(nodeId, host, size);
-        return formatPingOutput(vendorId, host, result);
-      },
-      tracerouteSimulator: (host: string, vendorId: string) => {
-        const result = simEngineRef.current.simulateTraceroute(nodeId, host);
-        return formatTracerouteOutput(vendorId, host, result);
-      },
-      routeProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.routes || [],
-      dhcpClientGrant: (iface: string, _addDefaultRoute?: boolean) => {
-        const granted = simEngineRef.current.grantDhcpLease(nodeId, iface);
-        return granted
-          ? { ip: granted.ip, gateway: granted.gateway, prefix: granted.prefix, poolNodeId: granted.poolNodeId, dnsServers: granted.dnsServers }
-          : null;
-      },
-      connectivitySimulator: (host: string, vendorId: string, port?: number) => {
-        // curl ke hostname → resolve via DNS yang dikonfigurasi perangkat
-        let target = host;
-        let label = host;
-        if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
-          const res = simEngineRef.current.resolveHostname(nodeId, host);
-          if (!res.resolved) {
-            return `curl: (6) Could not resolve host: ${host}`;
-          }
-          target = res.resolved;
-          label = host;
-        }
-        // Real 3-way TCP handshake (SYN → SYN-ACK → ACK) — port-forward
-        // (dstnat) translates the destination before the handshake begins.
-        const conn = simEngineRef.current.simulateTcpConnect(nodeId, target, port || 80);
-        if (!conn.ok) {
-          const reason = conn.reason;
-          if (reason === 'no-ip') return 'curl: (6) Could not resolve host: ' + host;
-          if (reason === 'ttl') return 'curl: (28) Timeout: TTL exceeded menuju ' + label;
-          return `curl: (7) Failed to connect to ${label} port ${port || 80} after 3000 ms: Connection refused`;
-        }
-        setStatsVersion((v) => v + 1);
-        const body =
-          conn.body ||
-          `<html><head><title>Welcome to ${label}</title></head><body><h1>It works!</h1></body></html>`;
-        return `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\n\r\n${body}`;
-      },
-      dnsResolver: (name: string) => simEngineRef.current.resolveHostname(nodeId, name),
-      neighborProvider: (proto: 'cdp' | 'lldp') => simEngineRef.current.getLldpNeighbors(nodeId),
-      ospfNeighborProvider: () => simEngineRef.current.getOspfNeighbors(nodeId),
-      fhrpProvider: () => simEngineRef.current.getFhrpInfo(nodeId),
-      ipv6Provider: () => simEngineRef.current.getIpv6Info(nodeId),
-      bgpNeighborProvider: () => simEngineRef.current.getBgpNeighborStates(nodeId),
-      tcpProvider: () => simEngineRef.current.getTcpConnections(nodeId),
-      arpProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.arp || [],
-      macTableProvider: () => simEngineRef.current.getDeviceStats(nodeId)?.macTable || [],
-      stpProvider: () => simEngineRef.current.getStpInfo(nodeId),
-      wirelessProvider: () => simEngineRef.current.getWirelessInfo(nodeId),
-      qosProvider: () => simEngineRef.current.getQosStats(nodeId),
-      snmpQueryProvider: (host: string, community: string, oid: string, opts?: { walk?: boolean; setValue?: string }) => {
-        // hostname → resolve via DNS konfigurasi perangkat (seperti curl)
-        let target = host;
-        if (!/^\d+\.\d+\.\d+\.\d+$/.test(host || '')) {
-          const res = simEngineRef.current.resolveHostname(nodeId, host);
-          if (!res.resolved) return { ok: false, reason: 'not-found' };
-          target = res.resolved;
-        }
-        return simEngineRef.current.simulateSnmpQuery(nodeId, target, community, oid, opts || {});
-      },
-    };
-  };
+  // Konteks CLI per node — SATU sumber kebenaran (src/utils/cliContext.ts)
+  // untuk semua jalur terminal: terminal utama, Windows Terminal, dan AI agent
+  // memakai implementasi builder yang sama.
+  const buildCliContextFor = (nodeId: string) =>
+    buildCliContext({
+      node: project.nodes.find((n) => n.id === nodeId),
+      project,
+      sim: simEngineRef.current,
+      onActivity: () => setStatsVersion((v) => v + 1),
+    });
 
   // Windows Terminal (aplikasi Desktop): jalur engine yang SAMA dengan terminal utama.
   const handleWindowsTerminalCommand = (nodeId: string, cmd: string): string => {
@@ -1432,7 +1378,7 @@ export default function App() {
       nodeId,
       cmd,
       mode: 'exec',
-      context: buildCliContext(nodeId),
+      context: buildCliContextFor(nodeId),
     }).output;
     syncNodeToEngine(nodeId);
     syncDhcpPools();
@@ -1501,7 +1447,7 @@ export default function App() {
         nodeId,
         cmd,
         mode: mode || 'exec',
-        context: buildCliContext(nodeId),
+        context: buildCliContextFor(nodeId),
       }).output;
 
       // Pick up config changes made by this command (IP, routes, routing, ACL, NAT, VLAN)
@@ -2002,7 +1948,11 @@ onOpenTerminal={handleOpenTerminal}
         open={isPresetLabOpen}
         onClose={() => setIsPresetLabOpen(false)}
         onLoadLab={(lab) => {
-          setProjectWithHistory(lab.build());
+          const built = lab.build();
+          // Seed IP preset → memori vendor agar CLI melihat konfigurasi awal
+          // dan mirror canvas tetap konsisten (audit R2).
+          seedMemoryIpsFromProject(built, vendorDispatcher);
+          setProjectWithHistory(built);
           setIsPresetLabOpen(false);
         }}
       />
