@@ -21,9 +21,18 @@ import {
   ListChecks,
 } from "lucide-react";
 import { cableMatchesPort, inferCableType, portSide, portSlot, portConnection, portHealth, PORT_HEALTH_LABEL } from "../connection";
+import type { LinkReadiness } from "../engine/net/core/LinkReadiness";
 
 const LockFilled = () => <Lock className="w-4 h-4" />;
 const LockOpen = () => <Unlock className="w-4 h-4" />;
+
+/** Warna badge kesiapan kabel (config kedua ujung cocok ⇒ connected). */
+function readinessColor(status: LinkReadiness["status"]): string {
+  return status === "connected" ? "#22c55e" : status === "degraded" ? "#f59e0b" : "#ef4444";
+}
+function readinessGlyph(status: LinkReadiness["status"]): string {
+  return status === "connected" ? "✓" : status === "degraded" ? "!" : "✕";
+}
 
 export interface Point {
   x: number;
@@ -196,6 +205,10 @@ interface CanvasProps {
   onUpdateEdge?: (edgeId: string, partial: Partial<LabEdge>) => void;
   /** Nama interface yang dikonfigurasi sebagai trunk (untuk warna kabel). */
   trunkPortsByNode?: Record<string, string[]>;
+  /** Kesiapan tiap kabel: config kedua ujung cocok ⇒ connected (badge + panel). */
+  linkReadinessByEdge?: Record<string, LinkReadiness>;
+  /** Minta auto-fix config untuk satu kabel (generate config benar di kedua ujung). */
+  onAutoFixEdge?: (edgeId: string) => void;
   /** true = kanvas terkunci (gesture pan/zoom/drag nonaktif; tombol tetap jalan). */
   locked?: boolean;
   onToggleLock?: () => void;
@@ -267,6 +280,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   onUpdateEdge,
   onNodeTap,
   trunkPortsByNode = {},
+  linkReadinessByEdge = {},
+  onAutoFixEdge,
   locked = false,
   onToggleLock,
   onOpenPorts,
@@ -937,6 +952,32 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </g>
               )}
 
+              {/* Badge kesiapan kabel: config kedua ujung cocok ⇒ connected */}
+              {(() => {
+                const r = linkReadinessByEdge[edge.id];
+                if (!r) return null;
+                const color = readinessColor(r.status);
+                const by = edgeMy - 20;
+                const showLabel = isHoveredEdge || isSelected || r.status !== "connected";
+                const label = r.label.length > 40 ? `${r.label.slice(0, 39)}…` : r.label;
+                return (
+                  <g pointerEvents="none">
+                    <circle cx={edgeMx} cy={by} r="7" fill="#0F1015" stroke={color} strokeWidth="1.4" opacity="0.95" />
+                    <text x={edgeMx} y={by + 3.2} textAnchor="middle" fontSize="8" fill={color} fontWeight="bold">
+                      {readinessGlyph(r.status)}
+                    </text>
+                    {showLabel && (
+                      <>
+                        <rect x={edgeMx - 78} y={by + 10} width={156} height={15} rx={4} fill="#0F1015" stroke={color} strokeWidth="0.7" opacity="0.9" />
+                        <text x={edgeMx} y={by + 20.5} textAnchor="middle" fontSize="8" fill={color}>
+                          {label}
+                        </text>
+                      </>
+                    )}
+                  </g>
+                );
+              })()}
+
               {/* Tombol hapus kabel — muncul saat node di-hover atau kabel dipilih */}
               {(isHoveredEdge || isSelected) && (
                 <g
@@ -1038,10 +1079,13 @@ export const Canvas: React.FC<CanvasProps> = ({
           const mt = 1 - t;
           const mx = mt * mt * mt * x1 + 3 * mt * mt * t * cx1 + 3 * mt * t * t * cx2 + t * t * t * x2;
           const my = mt * mt * mt * y1 + 3 * mt * mt * t * cy1 + 3 * mt * t * t * cy2 + t * t * t * y2;
-          const panelW = 196;
+          const ready = linkReadinessByEdge[edge.id] ?? null;
+          const panelW = 210;
+          const panelH = ready ? 128 + ready.checks.length * 14 + (ready.status !== "connected" ? 26 : 0) : 128;
+          const statusColor = ready ? readinessColor(ready.status) : null;
           return (
             <g pointerEvents="none">
-              <foreignObject x={mx - panelW / 2} y={my - 64} width={panelW} height={128}>
+              <foreignObject x={mx - panelW / 2} y={my - 64} width={panelW} height={panelH}>
                 <div className="pointer-events-auto bg-[#0F1015]/95 backdrop-blur-md border border-red-500/40 rounded-lg shadow-2xl px-2.5 py-2 text-[11px] font-mono">
                   <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10 mb-1.5">
                     <span className="text-[10px] text-slate-400 truncate">{sNode.name} ↔ {tNode.name}</span>
@@ -1057,6 +1101,36 @@ export const Canvas: React.FC<CanvasProps> = ({
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
+                  {ready && (
+                    <div className="mb-1.5 pb-1.5 border-b border-white/10">
+                      <div className="flex items-center gap-1.5">
+                        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: statusColor! }} />
+                        <span className="text-[10px] truncate" style={{ color: statusColor! }}>
+                          {ready.label}
+                        </span>
+                      </div>
+                      {ready.checks.map((c) => (
+                        <div key={c.id} className="flex items-start gap-1.5 mt-0.5">
+                          <span
+                            className="text-[9px] shrink-0 w-3 text-center"
+                            style={{ color: c.status === "ok" ? "#22c55e" : c.status === "fail" ? "#ef4444" : c.status === "warn" ? "#f59e0b" : "#64748b" }}
+                          >
+                            {c.status === "ok" ? "✓" : c.status === "fail" ? "✕" : c.status === "warn" ? "!" : "·"}
+                          </span>
+                          <span className="text-[9px] text-slate-400 leading-tight">{c.summary}</span>
+                        </div>
+                      ))}
+                      {ready.status !== "connected" && onAutoFixEdge && (
+                        <button
+                          onClick={() => onAutoFixEdge?.(edge.id)}
+                          title="Generate config yang benar di kedua ujung kabel ini"
+                          className="mt-1.5 w-full rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider bg-cyan-600/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-600/30 transition-colors"
+                        >
+                          ⚡ Auto-fix config kedua ujung
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5 mb-1.5">
                     <label className="text-slate-400 w-14 shrink-0">Latency</label>
                     <input

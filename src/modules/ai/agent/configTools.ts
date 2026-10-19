@@ -81,7 +81,7 @@ function vendorOf(ctx: ToolExecCtx, deviceId: string): { vendor: string; ok: boo
   return { vendor, ok: true };
 }
 
-function normalizeVendor(vendor: string): ConfigVendor | null {
+export function normalizeVendor(vendor: string): ConfigVendor | null {
   return (GENERATOR_VENDORS as readonly string[]).includes(vendor) ? (vendor as ConfigVendor) : null;
 }
 
@@ -176,7 +176,7 @@ export function toolExecuteCli(ctx: ToolExecCtx, p: Record<string, unknown>): To
 // ── Generator command vendor (syntax VALID per vendor) ────────────
 
 /** IP address (CIDR) per vendor — hanya syntax yang diproses adapter (bukti: adapter + conformance test). */
-function ipCommand(v: ConfigVendor, iface: string, cidr: string, remove: boolean): string[] {
+export function ipCommand(v: ConfigVendor, iface: string, cidr: string, remove: boolean): string[] {
   switch (v) {
     case 'mikrotik':
       return remove
@@ -271,7 +271,7 @@ function routeCommand(v: ConfigVendor, dst: string, gateway: string): string[] {
   }
 }
 
-function vlanCommand(v: ConfigVendor, vlanId: number, name: string, iface: string | undefined): string[] {
+export function vlanCommand(v: ConfigVendor, vlanId: number, name: string, iface: string | undefined): string[] {
   switch (v) {
     case 'mikrotik':
       return iface
@@ -311,7 +311,24 @@ function trunkCommand(v: ConfigVendor, iface: string): string[] {
   }
 }
 
-function ospfCommand(v: ConfigVendor, network: string, area: number): string[] {
+/**
+ * Access VLAN sebuah port switch — hanya vendor yang syntax-nya benar-benar
+ * diproses adapter (cisco-ios b125/b126, huawei). Vendor lain → [] (no-generator).
+ */
+export function accessVlanCommand(v: ConfigVendor, iface: string, vlanId: number): string[] {
+  switch (v) {
+    case 'cisco_ios':
+    case 'cisco_nxos':
+    case 'aruba':
+      return [`interface ${iface}`, 'switchport mode access', `switchport access vlan ${vlanId}`];
+    case 'huawei':
+      return [`interface ${iface}`, 'port link-type access', `port default vlan ${vlanId}`];
+    default:
+      return [];
+  }
+}
+
+export function ospfCommand(v: ConfigVendor, network: string, area: number): string[] {
   switch (v) {
     case 'mikrotik':
       return [
@@ -341,7 +358,7 @@ function ospfCommand(v: ConfigVendor, network: string, area: number): string[] {
   }
 }
 
-function bgpCommand(v: ConfigVendor, asn: number, neighborIp: string, remoteAs: number, network?: string): string[] {
+export function bgpCommand(v: ConfigVendor, asn: number, neighborIp: string, remoteAs: number, network?: string): string[] {
   switch (v) {
     case 'mikrotik':
       return [

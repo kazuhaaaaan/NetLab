@@ -31,6 +31,8 @@ import { runVendorHardeningTests } from './tests/unit/vendorHardening.test';
 import { runCliFacadeTest } from './tests/unit/cliFacade.test';
 import { runCommandTreeTests } from './tests/unit/commandTree.test';
 import { runPortInspectorTests } from './tests/unit/portInspector.test';
+import { runLinkReadinessTests } from './tests/unit/linkReadiness.test';
+import { runCliShortcutTests } from './tests/unit/cliShortcut.test';
 import { runMentorTests } from './tests/unit/mentorCreator.test';
 import { runProductionEngineTests } from './tests/unit/productionEngine.test';
 import { runProtocolFidelityTests } from './tests/unit/protocolFidelity.test';
@@ -2796,6 +2798,20 @@ const pep = runProductionEngineTests();
 passed += pep.passed;
 failed += pep.failed;
 fails.push(...pep.fails);
+
+// ── Link readiness: evaluator "config kedua ujung cocok ⇒ terhubung" + auto-fix ──
+console.log('\n== 27b. Link readiness (config kedua ujung) ==');
+const lrr = runLinkReadinessTests();
+passed += lrr.passed;
+failed += lrr.failed;
+fails.push(...lrr.fails);
+
+// ── CLI shortcuts: penyederhanaan CLI (qip/qroute) ──
+console.log('\n== 27c. CLI shortcuts ==');
+const csr = runCliShortcutTests();
+passed += csr.passed;
+failed += csr.failed;
+fails.push(...csr.fails);
 
 // ── 31. Protocol fidelity (Prompt 4): TCP RST/FIN, ICMPv6, DHCP renew/
 //       release, DNS CNAME/cache, firewall reject, SNMP counters, EIGRP DUAL

@@ -38,6 +38,7 @@ import { FhrpGroup } from '../services/FhrpService';
 import { StpConfig } from '../services/StpService';
 import { WirelessIfaceCfg, WirelessProfileCfg } from '../services/WirelessService';
 import { MangleRule, SimpleQueue } from '../services/QosService';
+import { evaluateLinkReadiness, evaluateAllLinkReadiness, type LinkReadiness } from './LinkReadiness';
 import { AclRule, DnsRecord, NatRule, Vlan } from './types';
 import { VlanInput } from '../layer2/VlanTable';
 import {
@@ -155,6 +156,16 @@ export class NetworkSimulator implements SimulatorCore {
 
   getTopologyWarnings(): { id: string; reason: string }[] {
     return this.topologyRuntime.getTopologyWarnings();
+  }
+
+  /** Kesiapan satu edge: config kedua ujung cocok ⇒ terhubung (lihat LinkReadiness). */
+  getLinkReadiness(edgeId: string): LinkReadiness {
+    return evaluateLinkReadiness(this, edgeId);
+  }
+
+  /** Kesiapan semua edge — dipakai UI badge canvas. */
+  getAllLinkReadiness(): Map<string, LinkReadiness> {
+    return evaluateAllLinkReadiness(this);
   }
 
   getDevice(nodeId: string): NetworkDevice | undefined {

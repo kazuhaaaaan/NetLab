@@ -13,6 +13,7 @@ import type { DeviceState } from './state/DeviceState';
 import type { TopologyState } from './state/TopologyState';
 import { executeCommand } from './state/executor';
 import { resolveAbbreviation, abbreviationError } from './cli/commandTree';
+import { normalizeCliShortcut } from './cli/shortcuts';
 import type { CliMode } from './cli/commandTree';
 
 /** Peta vendor UI → vendor tree (facade). */
@@ -85,8 +86,11 @@ export interface RunCliCommandResult {
  */
 export function runCliCommand(opts: RunCliCommandOptions): RunCliCommandResult {
   const tv = treeVendor(opts.vendor);
-  let dispatched = opts.cmd;
-  if (tv) {
+  // Lapisan shortcut (qip/qroute) → syntax vendor asli sebelum resolusi
+  // abbreviation. Bila bukan shortcut, input apa adanya (perilaku lama).
+  const shortcut = normalizeCliShortcut(opts.vendor, opts.cmd);
+  let dispatched = shortcut ?? opts.cmd;
+  if (tv && !shortcut) {
     const resolution = resolveAbbreviation(tv, opts.mode || 'exec', opts.cmd);
     if (resolution.kind === 'ambiguous') {
       return {

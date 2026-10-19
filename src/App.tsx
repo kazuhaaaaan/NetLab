@@ -37,8 +37,10 @@ import { WinDesktopModal } from './components/windows/WinDesktopModal';
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
-import { runCliCommand, createNetLabBridge } from './engine';
+import { runCliCommand, createNetLabBridge, isCliFailure } from './engine';
 import type { CliMode } from './engine/cli/commandTree';
+import type { LinkReadiness } from './engine/net/core/LinkReadiness';
+import { planLinkAutoFix } from './utils/linkAutoFix';
 import type { NetLabBridge } from './engine/state/bridge';
 import { ConfigExportModal } from './components/ConfigExportModal';
 import { VendorCapabilitiesModal } from './components/VendorCapabilitiesModal';
@@ -357,6 +359,8 @@ export default function App() {
   const [shutdownPortsByNode, setShutdownPortsByNode] = useState<Record<string, string[]>>({});
   // VLAN access per port per node (state engine `portVlans`) → Port Inspector kolom VLAN
   const [accessVlansByNode, setAccessVlansByNode] = useState<Record<string, Record<string, number>>>({});
+  // Kesiapan tiap kabel (config kedua ujung cocok ⇒ connected) → badge & panel canvas
+  const [linkReadinessByEdge, setLinkReadinessByEdge] = useState<Record<string, LinkReadiness>>({});
   // Perangkat yang terlibat dalam animasi ping berjalan (badge kuning di canvas)
   const pingingNodeIds = useMemo(() => {
     const ids = new Set<string>();
@@ -409,6 +413,14 @@ export default function App() {
     syncDhcpPoolsAll(simEngineRef.current, vendorDispatcher);
   }, []);
 
+  /** Hitung ulang kesiapan semua kabel (config kedua ujung cocok ⇒ connected). */
+  const refreshLinkReadiness = useCallback(() => {
+    const map = simEngineRef.current.getAllLinkReadiness();
+    const next: Record<string, LinkReadiness> = {};
+    for (const [edgeId, r] of map) next[edgeId] = r;
+    setLinkReadinessByEdge(next);
+  }, []);
+
   /** Dorong SEMUA state konfigurasi CLI sebuah node ke simulation engine
    *  (IP, rute statis, routing dinamis, BGP, ACL, NAT, VLAN port,
    *  interface shutdown/up, subinterface & trunk) — lihat utils/cliSync.ts. */
@@ -450,7 +462,8 @@ export default function App() {
       }
       return { ...prev, [nodeId]: vlans };
     });
-  }, []);
+    refreshLinkReadiness();
+  }, [refreshLinkReadiness]);
 
   /** Dorong konfigurasi SEMUA node + pool DHCP ke engine — dipakai sebelum analisis AI. */
   const syncAllNodesToEngine = useCallback(() => {
@@ -609,7 +622,8 @@ export default function App() {
     for (const n of project.nodes) {
       simEngineRef.current.setNodePowered(n.id, n.powered !== false);
     }
-  }, [project]);
+    refreshLinkReadiness();
+  }, [project, refreshLinkReadiness]);
 
   // setProject wrapper that pushes to undo history
   const setProjectWithHistory = useCallback((updater: ((prev: LabProject) => LabProject) | LabProject) => {
@@ -1475,6 +1489,50 @@ export default function App() {
     }));
   };
 
+  /**
+   * Auto-fix config satu kabel: generate perintah yang benar di kedua ujung
+   * (IP satu subnet, OSPF area, BGP remote-as, access VLAN) lalu jalankan lewat
+   * jalur CLI yang SAMA dengan terminal manusia (runCliCommand → engine).
+   */
+  const handleAutoFixEdge = useCallback((edgeId: string) => {
+    const plan = planLinkAutoFix(simEngineRef.current, vendorDispatcher, edgeId);
+    if (plan.alreadyConnected) {
+      showToast('Kedua ujung sudah siap — tidak ada yang diperbaiki.');
+      return;
+    }
+    let applied = 0;
+    let failed = 0;
+    for (const fix of plan.fixes) {
+      for (const cmd of fix.commands) {
+        const res = runCliCommand({
+          bridge: appBridgeRef.current,
+          vendor: fix.vendor,
+          nodeId: fix.nodeId,
+          cmd,
+          mode: 'exec',
+          context: buildCliContextFor(fix.nodeId),
+        });
+        if (isCliFailure(res.output)) { failed++; break; }
+        applied++;
+      }
+      syncNodeToEngine(fix.nodeId);
+    }
+    syncDhcpPools();
+    setStatsVersion((v) => v + 1);
+    StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory());
+    refreshLinkReadiness();
+    const unsupportedNote = plan.unsupported.length > 0
+      ? ` (${plan.unsupported.map((u) => u.nodeName).join(', ')}: vendor tanpa generator)`
+      : '';
+    if (applied === 0 && plan.fixes.length === 0) {
+      showToast(`Tidak ada perbaikan otomatis tersedia${unsupportedNote}. ${plan.notes[0] ?? ''}`, 'error');
+    } else if (failed > 0) {
+      showToast(`Auto-fix sebagian gagal (${failed} command ditolak vendor)${unsupportedNote}.`, 'error');
+    } else {
+      showToast(`Auto-fix diterapkan (${applied} command)${unsupportedNote}.`);
+    }
+  }, [showToast, syncNodeToEngine, syncDhcpPools, refreshLinkReadiness]);
+
   const selectedNode = project.nodes.find((n) => n.id === selectedNodeId) || null;
 
   // Bagikan topologi lewat link (base64 di URL)
@@ -1712,6 +1770,8 @@ export default function App() {
             onToggleViewPorts={() => setViewPorts((v) => !v)}
             packetAnimations={packetAnimations}
             trunkPortsByNode={trunkPortsByNode}
+            linkReadinessByEdge={linkReadinessByEdge}
+            onAutoFixEdge={handleAutoFixEdge}
             locked={canvasLocked}
             onToggleLock={() => setCanvasLocked((v) => !v)}
             onOpenPorts={handleOpenPorts}
