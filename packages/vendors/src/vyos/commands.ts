@@ -215,6 +215,20 @@ export function vyosCommand(raw: string, context: VendorContext, mem: NodeMemory
     return { raw: '' };
   }
 
+  // RIPng
+  m = t.match(/^set\s+protocols\s+ripng\s+group\s+(\S+)\s+(?:neighbor|network)\s+(\S+)/i);
+  if (m) {
+    mem.routing.ripng.enabled = true;
+    const target = m[2];
+    if (!mem.routing.ripng.networks.includes(target)) mem.routing.ripng.networks.push(target);
+    return { raw: '' };
+  }
+  m = t.match(/^set\s+protocols\s+ripng\b/i);
+  if (m) {
+    mem.routing.ripng.enabled = true;
+    return { raw: '' };
+  }
+
   // ACL — firewall name
   m = t.match(/^set\s+firewall\s+name\s+(\S+)\s+rule\s+(\d+)\s+action\s+(accept|drop|reject)/i);
   if (m) {

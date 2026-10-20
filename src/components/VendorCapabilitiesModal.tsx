@@ -45,6 +45,7 @@ const CAP_ORDER: CapabilityKey[] = [
   'nat',
   'ospf',
   'rip',
+  'ripng',
   'eigrp',
   'bgp',
   'vrrp',

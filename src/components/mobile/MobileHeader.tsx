@@ -26,6 +26,7 @@ import {
   Play
 } from 'lucide-react';
 import { LabProject } from '../../types';
+import { TEMPLATES } from '../../data/templates';
 
 interface MobileHeaderProps {
   project: LabProject;
@@ -238,8 +239,16 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
                   </p>
                 </div>
                 <MenuRow icon={<Plus className="w-4 h-4" />} label="Topologi Baru" sub="Mulai dari kosong" onClick={() => { setDrawerOpen(false); onNewProject(); }} />
-                <MenuRow icon={<FileCode className="w-4 h-4" />} label="Template Basic" sub="Lab sederhana" onClick={() => { setDrawerOpen(false); onLoadTemplate('basic'); }} />
-                <MenuRow icon={<FileCode className="w-4 h-4" />} label="Template Enterprise" sub="Topologi perusahaan" onClick={() => { setDrawerOpen(false); onLoadTemplate('enterprise'); }} />
+                {TEMPLATES.map((t) => (
+                  <React.Fragment key={t.id}>
+                    <MenuRow
+                      icon={<FileCode className="w-4 h-4" />}
+                      label={t.title}
+                      sub={t.subtitle}
+                      onClick={() => { setDrawerOpen(false); onLoadTemplate(t.id); }}
+                    />
+                  </React.Fragment>
+                ))}
               </div>
 
               <div>

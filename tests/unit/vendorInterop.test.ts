@@ -22,7 +22,7 @@ const VENDOR_IDS = Object.keys(VENDOR_CAPABILITIES);
 
 // Urutan kolom & baris matriks validasi (sama dengan modal UI VendorCapabilitiesModal).
 const CAP_ORDER: CapabilityKey[] = [
-  'ipv4', 'ipv6', 'staticRoute', 'vlan', 'dhcp', 'nat', 'ospf', 'rip', 'eigrp', 'bgp', 'vrrp', 'firewall', 'dns', 'commit',
+  'ipv4', 'ipv6', 'staticRoute', 'vlan', 'dhcp', 'nat', 'ospf', 'rip', 'ripng', 'eigrp', 'bgp', 'vrrp', 'firewall', 'dns', 'commit',
 ];
 const VENDOR_ORDER = ['mikrotik', 'cisco_ios', 'cisco_nxos', 'juniper', 'huawei', 'ubiquiti', 'vyos', 'fortinet', 'aruba', 'openwrt', 'linux', 'windows'];
 
@@ -88,6 +88,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'nat', cmds: ['/ip firewall nat add chain=srcnat out-interface=ether2 action=masquerade'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
     { cap: 'ospf', cmds: ['/routing ospf instance add name=x router-id=1.1.1.1', '/routing ospf network add network=10.0.0.0/24 area=0'], assert: (m) => m.routing?.ospf?.enabled && (m.routing?.ospf?.networks?.length ?? 0) >= 1 },
     { cap: 'rip', cmds: ['/routing rip instance add name=rip1'], assert: (m) => !!m.routing?.rip?.enabled },
+    { cap: 'ripng', cmds: ['/routing ripng instance add name=ripng1', '/routing ripng network add network=2001:db8:1::/64'], assert: (m) => m.routing?.ripng?.enabled && (m.routing?.ripng?.networks?.length ?? 0) >= 1 },
     { cap: 'bgp', cmds: ['/routing bgp instance add as=65001 router-id=1.1.1.1', '/routing bgp peer add remote-as=65002 remote-address=10.0.9.2', '/routing bgp network add network=10.0.1.0/24'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 && (m.bgp?.networks?.length ?? 0) >= 1 },
     { cap: 'dns', cmds: ['/ip dns set servers=8.8.8.8'], assert: (m) => (m.dnsServers || []).length >= 1 },
     { cap: 'ipv6', cmds: ['/ipv6 address add address=2001:db8::1/64 interface=ether1'], assert: (m) => m.configuredIps6?.['ether1'] === '2001:db8::1/64' },
@@ -101,6 +102,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'dhcp', cmds: ['ip dhcp pool LAN', 'network 192.168.9.0 255.255.255.0', 'default-router 192.168.9.1', 'host 192.168.9.50 255.255.255.0', 'hardware-address 0050.7966.6677'], assert: (m) => m.dhcpPools.some((p: any) => p.name === 'LAN' && p.gateway === '192.168.9.1') && m.dhcpPools.some((p: any) => (p.reservations || []).some((r: any) => r.ip === '192.168.9.50' && /005079666677/i.test(String(r.mac).replace(/[^0-9a-f]/gi, '')))) },
     { cap: 'ospf', cmds: ['router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
     { cap: 'rip', cmds: ['router rip', 'network 10.0.0.0'], assert: (m) => !!m.routing?.rip?.enabled },
+    { cap: 'ripng', cmds: ['ipv6 router rip RIPNG', 'interface ether1', 'ipv6 rip RIPNG enable'], assert: (m) => m.routing?.ripng?.enabled && (m.routing?.ripng?.networks?.length ?? 0) >= 1 },
     { cap: 'eigrp', cmds: ['router eigrp 100', 'network 10.0.0.0'], assert: (m) => !!m.routing?.eigrp?.enabled && m.routing?.eigrp?.asn === 100 },
     { cap: 'bgp', cmds: ['router bgp 65001', 'neighbor 10.0.9.2 remote-as 65002'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 },
     { cap: 'vrrp', cmds: ['interface ether1', 'vrrp 1 ip 192.168.9.254'], assert: (m) => m.fhrpGroups?.some((g: any) => g.vrid === 1) },
@@ -127,6 +129,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'nat', cmds: ['set security nat source rule-set SNAT1 from interface ether2', 'set security nat source rule-set SNAT1 rule 10 match source-address 10.0.0.0/16', 'set security nat source rule-set SNAT1 rule 10 then source-nat interface'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') },
     { cap: 'ospf', cmds: ['set protocols ospf area 0 interface ether1'], assert: (m) => m.routing?.ospf?.enabled },
     { cap: 'rip', cmds: ['set protocols rip group G1 neighbor ether1'], assert: (m) => !!m.routing?.rip?.enabled },
+    { cap: 'ripng', cmds: ['set protocols ripng group G6 neighbor ether1'], assert: (m) => m.routing?.ripng?.enabled && (m.routing?.ripng?.networks?.length ?? 0) >= 1 },
     { cap: 'bgp', cmds: ['set routing-options autonomous-system 65001', 'set routing-options router-id 1.1.1.1', 'set protocols bgp group EXT type external', 'set protocols bgp group EXT peer-as 65002', 'set protocols bgp group EXT neighbor 10.0.9.2', 'set protocols bgp group EXT network 10.0.1.0/24'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 && (m.bgp?.networks?.length ?? 0) >= 1 },
     { cap: 'commit', cmds: ['set system host-name jnet', 'commit'], assert: (m) => m.hostname === 'jnet' },
     { cap: 'vlan', cmds: ['set vlans V10 vlan-id 10'], assert: (m) => String(m.vlans?.[0]?.id) === '10' },
@@ -141,6 +144,7 @@ const FEATURES: Record<string, FeatureCmd[]> = {
     { cap: 'dhcp', cmds: ['dhcp enable', 'ip pool LAN1', 'network 192.168.9.0 mask 255.255.255.0', 'gateway-list 192.168.9.1'], assert: (m) => m.dhcpPools.some((p: any) => p.name === 'LAN1') },
     { cap: 'ospf', cmds: ['ospf 1', 'network 10.0.0.0 0.0.0.255 area 0'], assert: (m) => m.routing?.ospf?.enabled },
     { cap: 'rip', cmds: ['rip'], assert: (m) => !!m.routing?.rip?.enabled },
+    { cap: 'ripng', cmds: ['ripng 1', 'interface ether1', 'ripng 1 enable'], assert: (m) => m.routing?.ripng?.enabled && (m.routing?.ripng?.networks?.length ?? 0) >= 1 },
     { cap: 'bgp', cmds: ['bgp 65001', 'peer 10.0.9.2 as-number 65002', 'network 10.0.1.0 mask 255.255.255.0'], assert: (m) => m.bgp?.asn === 65001 && m.bgp?.peers?.length === 1 },
     // nat server 'current-interface' kini diresolv ke IP interface (state nyata)
     { cap: 'nat', cmds: ['interface ether1', 'ip address 203.0.113.1 255.255.255.0', 'nat outbound 3000', 'nat server protocol tcp global current-interface 8080 inside 192.168.1.10 80'], assert: (m) => m.natRules.some((r: any) => r.chain === 'srcnat') && m.natRules.some((r: any) => r.chain === 'dstnat' && r.dstAddress === '203.0.113.1' && r.toPorts === '80') },

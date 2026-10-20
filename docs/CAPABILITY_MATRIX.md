@@ -21,7 +21,7 @@ otomatis hanya membuktikan level ≤4; bukti E2E lintas vendor (V2: pasangan
 mikrotik↔{cisco_ios, cisco_nxos, juniper, huawei, ubiquiti, vyos, fortinet,
 aruba, openwrt, linux} dan cisco_ios↔sisanya; V3: scenario engine penuh)
 menaikkan sel-sel IPv4/Static Route/DHCP/OSPF/BGP vendor inti menjadi 5 —
-semua pasangan V2 lulus di suite (2240 test).
+semua pasangan V2 lulus di suite (2470 test).
 
 ## Matriks
 
@@ -33,6 +33,7 @@ semua pasangan V2 lulus di suite (2240 test).
 | DHCP | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 2 |
 | NAT | 4 | 2 | 2 | 4 | 4 | 4 | 4 | 4 | 0 | 4 | 4 | 0 |
 | OSPF | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 0 | 0 | 0 |
+| RIPng (IPv6) | 4 | 4 | 0 | 4 | 4 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | BGP | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 0 | 0 | 0 |
 | VRRP/FHRP | 2 | 4 | 2 | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 0 |
 | Static Route | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
@@ -42,6 +43,21 @@ semua pasangan V2 lulus di suite (2240 test).
 
 ## Perubahan iterasi audit terakhir
 
+- **RIPng (Phase 5)** — routing distance-vector IPv6 baru di engine
+  (`RoutingProtocolEngine.computeRipngRoutes`): flooding hop-count antar
+  perangkat ripng-enabled pada segmen fisik yang sama, metric 16 = infinity,
+  rute dipasang lewat `addDynamicRoute6` (tanpa tabel tersembunyi). CLI
+  autentik per vendor (IOS `ipv6 router rip`/`ipv6 rip <n> enable`, RouterOS
+  `/routing ripng instance|network add`, Junos/EdgeOS/VyOS
+  `set protocols ripng …`, VRP `ripng <n>`/`ripng <n> enable`). Registry:
+  `ripng` added; cisco_nxos/fortinet/aruba/openwrt/linux/windows = 0.
+  Event log protokol (`getProtocolEvents`) kini tersedia: adjacency
+  up/down OSPF, session up/down BGP, `ospf.timer-mismatch`,
+  `bgp.hold-time-mismatch`, `ripng.route-installed`.
+  - **OSPF timer mismatch** — hello/dead tak kompatibel → adjacency dipin di
+    2-Way + event `ospf.timer-mismatch` (sekali per sesi, reset saat timer sehat).
+  - **BGP hold-time mismatch** — holdTime beda / < 3s → stuck OpenConfirm +
+    event `bgp.hold-time-mismatch`.
 - **konvergensi state IP (audit R2)** — satu realitas, tiga lapisan
   (project port ↔ NodeMemory ↔ engine):
   - **penghapusan IP kini nyata di engine** — `no ip address` /

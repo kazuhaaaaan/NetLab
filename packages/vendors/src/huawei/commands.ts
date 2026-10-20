@@ -335,6 +335,31 @@ cmdResult = huaweiCommand(rawInput, context, mem);
     return cmdResult;
   },
   },
+  {
+    name: 'b900-ripng-enable',
+    order: 900,
+    vendors: 'all',
+    cap: 'ripng',
+    match: ({ rawInput, vendorId }) => (/^ripng(\s+\d+)?$/i.test(rawInput.trim()) && vendorId === 'huawei'),
+    run: ({ mem }) => {
+      mem.routing.ripng.enabled = true;
+      mem.currentProto = 'ripng';
+      mem.currentDhcpPool = '';
+      return { raw: '' };
+    },
+  },
+  {
+    name: 'b901-ripng-interface',
+    order: 901,
+    vendors: 'all',
+    cap: 'ripng',
+    match: ({ rawInput, vendorId, mem }) => (/^ripng\s+\d+\s+enable$/i.test(rawInput.trim()) && !!mem.currentIface && vendorId === 'huawei'),
+    run: ({ mem, context }) => {
+      const iface = resolveIfaceName(context?.ports, mem.currentIface) || mem.currentIface;
+      if (!mem.routing.ripng.networks.includes(iface)) mem.routing.ripng.networks.push(iface);
+      return { raw: '' };
+    },
+  },
 ];
 
 registerEntries('huawei', huaweiEntries);

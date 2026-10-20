@@ -688,6 +688,9 @@ export function generateRunningConfig(context: VendorContext, mem: NodeMemory, v
       lines.push(`interface ${String(p.name)}`);
       lines.push(` ip address ${String(maskedPair(p.ipAddress))}`);
       lines.push(` ${String((mem.shutdownIfaces || []).includes(p.name) ? 'shutdown' : 'no shutdown')}`);
+      if (mem.routing?.ripng?.enabled && (mem.routing.ripng.networks || []).includes(p.name)) {
+        lines.push(' ipv6 rip RIPNG enable');
+      }
     });
     // Port yang di-shutdown tapi belum punya IP tetap muncul di config.
     (mem.shutdownIfaces || []).forEach((name: string) => {
@@ -732,6 +735,9 @@ export function generateRunningConfig(context: VendorContext, mem: NodeMemory, v
       lines.push('router rip');
       lines.push(' version 2');
       (mem.routing.rip.networks || []).forEach((n: string) => lines.push(` network ${String(cidrOf(n))}`));
+    }
+    if (mem.routing?.ripng?.enabled) {
+      lines.push('ipv6 router rip RIPNG');
     }
     if (mem.routing?.eigrp?.enabled) {
       lines.push(`router eigrp ${String(mem.routing.eigrp.asn || 1)}`);

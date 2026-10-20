@@ -288,6 +288,29 @@ export const LAB_SCENARIOS: TestScenario[] = [
     ],
     expectedResult: 'Peer eBGP Established dan prefix dipertukarkan',
   },
+  {
+    id: 'routing-ripng',
+    name: 'RIPng (IPv6)',
+    description: 'RIPng distance-vector IPv6: R1 dan R2 saling belajar prefix LAN via UDP 521 (metric 16 = infinity).',
+    category: 'routing',
+    topology: {
+      nodes: [node('r1', 'R1', 'router', 3, 'q1'), node('r2', 'R2', 'router', 3, 'q2'), node('pc2', 'PC2', 'pc', 1, 'q3')],
+      edges: [edge('e1', 'r1', 'ether2', 'r2', 'ether1'), edge('e2', 'r2', 'ether2', 'pc2', 'ether1')],
+    },
+    setup: (sim) => {
+      sim.applyNodeConfig6('r1', { ether1: '2001:db8:1::1/64', ether2: '2001:db8:12::1/64' }, []);
+      sim.applyNodeConfig6('r2', { ether1: '2001:db8:12::2/64', ether2: '2001:db8:2::1/64' }, []);
+      sim.applyNodeConfig6('pc2', { ether1: '2001:db8:2::10/64' }, [{ dst: '::/0', gateway: '2001:db8:2::1' }]);
+      sim.setRouting('r1', { ripng: { enabled: true, networks: ['ether1', 'ether2'] } });
+      sim.setRouting('r2', { ripng: { enabled: true, networks: ['ether1', 'ether2'] } });
+      sim.computeDynamicRoutes();
+    },
+    tests: [
+      { type: 'assertPing', name: 'R1 → PC2 (LAN belakang R2) via RIPng', from: 'r1', to: '2001:db8:2::10' },
+      { type: 'assertPing', name: 'PC2 → R1 (LAN depan) via RIPng', from: 'pc2', to: '2001:db8:1::1' },
+    ],
+    expectedResult: 'RIPng menyebarkan prefix IPv6 sehingga kedua LAN saling reachable',
+  },
 
   // ── Security ─────────────────────────────────────────────────
   {

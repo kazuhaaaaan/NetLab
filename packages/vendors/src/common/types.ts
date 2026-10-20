@@ -337,6 +337,8 @@ export interface RoutingState {
     [key: string]: unknown;
   };
   rip: { enabled?: boolean; networks?: string[]; [key: string]: unknown };
+  /** RIPng — RIPv6 (UDP 521, hop-count ≤ 15). Networks = CIDR IPv6 / nama iface. */
+  ripng: { enabled?: boolean; networks?: string[]; [key: string]: unknown };
   eigrp: { enabled?: boolean; asn?: number; networks?: string[]; [key: string]: unknown };
 }
 

@@ -61,7 +61,7 @@ import {
   TracerouteResult,
   WebServerInfo,
 } from '../compat';
-import { OspfLsa, BgpRibEntry, EigrpNeighborView, EigrpTopologyEntry } from '../services/RoutingProtocolEngine';
+import { OspfLsa, BgpRibEntry, EigrpNeighborView, EigrpTopologyEntry, ProtocolEvent } from '../services/RoutingProtocolEngine';
 import { FhrpState } from '../services/FhrpService';
 import { SimulationContext, SimRunOptions } from './SimulationContext';
 import { SimulationCore } from './SimulationCore';
@@ -443,6 +443,11 @@ export class NetworkSimulator implements SimulatorCore {
   /** Tetangga EIGRP + tabel topologi DUAL (successor/feasible successor). */
   getEigrpInfo(nodeId: string): { neighbors: EigrpNeighborView[]; topology: EigrpTopologyEntry[] } {
     return this.observation.getEigrpInfo(nodeId);
+  }
+
+  /** Log event protokol (OSPF adjacency, BGP FSM, RIPng route) — deterministik & bounded. */
+  getProtocolEvents(): ProtocolEvent[] {
+    return this.observation.getProtocolEvents();
   }
 
   getTcpConnections(nodeId: string): TcpConnectionInfo[] {

@@ -21,6 +21,7 @@ export type CapabilityKey =
   | 'nat'
   | 'ospf'
   | 'rip'
+  | 'ripng'
   | 'eigrp'
   | 'bgp'
   | 'vrrp'
@@ -59,6 +60,7 @@ export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
   nat: 'NAT',
   ospf: 'OSPF',
   rip: 'RIP',
+  ripng: 'RIPng',
   eigrp: 'EIGRP',
   bgp: 'BGP',
   vrrp: 'VRRP/FHRP',
@@ -93,7 +95,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   mikrotik: {
     vendorId: 'mikrotik',
     caps: {
-      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, ripng: S, eigrp: NS,
       bgp: S, vrrp: P, staticRoute: S, firewall: S, dns: S, commit: NS,
     },
     notes: 'RouterOS v7. Konfigurasi tereksekusi langsung tanpa mode commit. VRRP hanya print/parser — belum teruji konfigurasi.',
@@ -101,7 +103,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   cisco_ios: {
     vendorId: 'cisco_ios',
     caps: {
-      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, rip: S, eigrp: S,
+      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, rip: S, ripng: S, eigrp: S,
       bgp: S, vrrp: S, staticRoute: S, firewall: P, dns: S, commit: S,
     },
     notes:
@@ -110,7 +112,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   cisco_nxos: {
     vendorId: 'cisco_nxos',
     caps: {
-      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, rip: S, eigrp: S,
+      ipv4: S, ipv6: S, vlan: S, dhcp: S, nat: P, ospf: S, rip: S, ripng: NS, eigrp: S,
       bgp: S, vrrp: P, staticRoute: S, firewall: P, dns: S, commit: NS,
     },
     notes:
@@ -119,7 +121,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   juniper: {
     vendorId: 'juniper',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, ripng: S, eigrp: NS,
       bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes:
@@ -128,7 +130,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   huawei: {
     vendorId: 'huawei',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, ripng: S, eigrp: NS,
       bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes: 'VRP v8. save menyimpan snapshot startup-config; reboot memulihkannya. VRRP dan IPv6-level-2 Huawei belum teruji end-to-end.',
@@ -136,7 +138,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   ubiquiti: {
     vendorId: 'ubiquiti',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, ripng: P, eigrp: NS,
       bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes: 'EdgeOS: set diterapkan seketika; commit menyimpan snapshot & rollback 0 mengembalikan ke commit terakhir (teruji).',
@@ -144,7 +146,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   vyos: {
     vendorId: 'vyos',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: S, ripng: P, eigrp: NS,
       bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes: 'VyOS: set diterapkan seketika; commit menyimpan snapshot & rollback 0 mengembalikan ke commit terakhir (teruji).',
@@ -152,7 +154,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   fortinet: {
     vendorId: 'fortinet',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: NS, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: S, rip: NS, ripng: NS, eigrp: NS,
       bgp: S, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: NS,
     },
     notes: 'FortiOS: NAT via policy & VIP teruji. RIP dihapus FortiOS ≥7.0 & HA memakai FGCP (bukan VRRP) — keduanya dikeluarkan dari protocolSet sesuai produk nyata, bukan karena belum diimplementasikan.',
@@ -160,7 +162,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   aruba: {
     vendorId: 'aruba',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: NS, ospf: S, rip: NS, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: NS, ospf: S, rip: NS, ripng: NS, eigrp: NS,
       bgp: S, vrrp: S, staticRoute: S, firewall: P, dns: S, commit: S,
     },
     notes: 'AOS-CX: switch kelas data-center/campus — NAT, RIP & EIGRP memang bukan bagian produk (protocolSet mengecualikannya, bukan kegagalan implementasi). BGP: neighbor + network CIDR teruji (sintaks AOS-CX `network <prefix/cidr>`). VRRP: blok autentik AOS-CX (`ip vrrp <id>` → address-family ipv4 → virtual-ip → enable) di interface view; sintaks IOS-style `vrrp <n> ip` ditolak seperti perangkat nyata. write memory menyimpan snapshot startup-config; reload memulihkannya.',
@@ -168,7 +170,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   openwrt: {
     vendorId: 'openwrt',
     caps: {
-      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: NS, rip: NS, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: S, dhcp: S, nat: S, ospf: NS, rip: NS, ripng: NS, eigrp: NS,
       bgp: NS, vrrp: NS, staticRoute: S, firewall: S, dns: S, commit: S,
     },
     notes:
@@ -177,7 +179,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
   linux: {
     vendorId: 'linux',
     caps: {
-      ipv4: S, ipv6: P, vlan: P, dhcp: S, nat: S, ospf: NS, rip: NS, eigrp: NS,
+      ipv4: S, ipv6: P, vlan: P, dhcp: S, nat: S, ospf: NS, rip: NS, ripng: NS, eigrp: NS,
       bgp: NS, vrrp: NS, staticRoute: S, firewall: P, dns: S, commit: NS,
     },
     notes:
@@ -187,7 +189,7 @@ export const VENDOR_CAPABILITIES: Record<string, VendorCapabilities> = {
     vendorId: 'windows',
     deviceClass: 'client-host',
     caps: {
-      ipv4: S, ipv6: NS, vlan: NS, dhcp: P, nat: NS, ospf: NS, rip: NS, eigrp: NS,
+      ipv4: S, ipv6: NS, vlan: NS, dhcp: P, nat: NS, ospf: NS, rip: NS, ripng: NS, eigrp: NS,
       bgp: NS, vrrp: NS, staticRoute: S, firewall: NS, dns: S, commit: NS,
     },
     notes:
@@ -206,12 +208,16 @@ export function getVendorCapabilities(vendorId: string): VendorCapabilities | nu
  */
 export const VENDOR_PROTOCOL_SETS: Partial<Record<string, CapabilityKey[]>> = {
   // RouterOS tidak memiliki EIGRP (protokol Cisco-proprietary).
-  mikrotik: ['ospf', 'rip', 'bgp', 'vrrp'],
+  mikrotik: ['ospf', 'rip', 'ripng', 'bgp', 'vrrp'],
+  // IOS-XE mendukung RIPng penuh (IPv6 RIP).
+  cisco_ios: ['ospf', 'rip', 'ripng', 'eigrp', 'bgp', 'vrrp'],
+  // NX-OS tidak menyediakan RIP/RIPng (hanya OSPF/EIGRP/BGP).
+  cisco_nxos: ['ospf', 'eigrp', 'bgp', 'vrrp'],
   // Junos/VRP/EdgeOS/VyOS tidak menjalankan EIGRP.
-  juniper: ['ospf', 'rip', 'bgp', 'vrrp'],
-  huawei: ['ospf', 'rip', 'bgp', 'vrrp'],
-  ubiquiti: ['ospf', 'rip', 'bgp', 'vrrp'],
-  vyos: ['ospf', 'rip', 'bgp', 'vrrp'],
+  juniper: ['ospf', 'rip', 'ripng', 'bgp', 'vrrp'],
+  huawei: ['ospf', 'rip', 'ripng', 'bgp', 'vrrp'],
+  ubiquiti: ['ospf', 'rip', 'ripng', 'bgp', 'vrrp'],
+  vyos: ['ospf', 'rip', 'ripng', 'bgp', 'vrrp'],
   // FortiOS modern (≥7.0) menghapus RIP; redundansi HA memakai FGCP, bukan VRRP.
   fortinet: ['ospf', 'bgp'],
   // AOS-CX adalah switch data-center/campus: tanpa NAT & RIP/EIGRP;

@@ -33,7 +33,12 @@ import { LAB_SCENARIOS } from './engine/lab/scenarios';
 import { encodeSharePayload, decodeSharePayload, SHARE_PARAM } from './utils/share';
 import { validateProject } from './utils/projectValidation';
 import { syncNodeToEngine as syncNodeToEngineAll, syncDhcpPools as syncDhcpPoolsAll, mirrorNodeIpsToProject, seedMemoryIpsFromProject } from './utils/cliSync';
-import { WinDesktopModal } from './components/windows/WinDesktopModal';
+import { autoPlaceProject, nextFreePosition } from './utils/autoPlace';
+// WinDesktopModal dimuat lazy (React.lazy) — GUI Windows jarang dibuka, jadi
+// tidak perlu masuk chunk utama bundle.
+const WinDesktopModal = React.lazy(() =>
+  import('./components/windows/WinDesktopModal').then((m) => ({ default: m.WinDesktopModal }))
+);
 import { exportTopologyPng, exportTopologySvg } from './utils/topologyExport';
 import { MentorEngine, renderDiagnosis, renderResponse, type VendorId } from './modules/ai';
 import { askLlm, isDirectLlmEnabled, type LlmHistoryItem } from './modules/ai/llmClient';
@@ -56,7 +61,7 @@ import type { ActionPlan, AiPermissionMode, ExecuteOutcome } from './modules/ai/
 
 const vendorDispatcher = new VendorDispatcher();
 
-import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE } from './data/templates';
+import { TEMPLATE_BASIC, getTemplate } from './data/templates';
 import { getTutorialLab } from './data/tutorialLabs';
 import { CABLE_TYPE_LABEL, inferCableType } from './connection';
 
@@ -724,7 +729,12 @@ export default function App() {
       vendor: effectiveVendor,
       model: chosenModel,
       deviceType,
-      position: { x: Math.abs(project.viewport.x) + 200, y: Math.abs(project.viewport.y) + 200 },
+      // Posisi tampilan: dekat viewport, tapi digeser otomatis ke slot bebas
+      // terdekat bila sudah ada perangkat di titik itu (anti tumpang-tindih).
+      position: nextFreePosition(project.nodes, {
+        x: Math.abs(project.viewport.x) + 200,
+        y: Math.abs(project.viewport.y) + 200,
+      }),
       ports: getPortsForDeviceType(),
     };
 
@@ -735,6 +745,20 @@ export default function App() {
       nodes: [...prev.nodes, newNode]
     }));
     setSelectedNodeId(id);
+  };
+
+  /**
+   * Muat template ke canvas. Guard anti-tumpuk: bila layout template valid
+   * (posisi penulis bagus) → pakai apa adanya; bila ada node berhimpit →
+   * auto-layout grid deterministik (autoPlaceProject). Setiap perangkat
+   * yang dimuat selalu diberi posisi sehingga tampil rapi di canvas.
+   */
+  const loadTemplate = (templateName: string) => {
+    const entry = getTemplate(templateName);
+    if (!entry) return;
+    const placed = autoPlaceProject(entry.data);
+    seedMemoryIpsFromProject(placed, vendorDispatcher);
+    setProjectWithHistory(placed);
   };
 
   const handleDeleteNode = (nodeId: string) => {
@@ -1641,8 +1665,7 @@ export default function App() {
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           onLoadTemplate={(tpl) => {
-            if (tpl === 'basic') setProjectWithHistory(TEMPLATE_BASIC);
-            if (tpl === 'enterprise') setProjectWithHistory(TEMPLATE_ENTERPRISE);
+            loadTemplate(tpl);
           }}
           onOpenDonate={() => setIsDonateOpen(true)}
           onShare={handleShare}
@@ -1684,8 +1707,7 @@ export default function App() {
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           onLoadTemplate={(tpl) => {
-            if (tpl === 'basic') setProjectWithHistory(TEMPLATE_BASIC);
-            if (tpl === 'enterprise') setProjectWithHistory(TEMPLATE_ENTERPRISE);
+            loadTemplate(tpl);
           }}
           onOpenDonate={() => setIsDonateOpen(true)}
           onShare={handleShare}
@@ -1976,21 +1998,23 @@ onOpenTerminal={handleOpenTerminal}
           const winNode = project.nodes.find((n) => n.id === winDesktopNodeId);
           if (!winNode) return null;
           return (
-            <WinDesktopModal
-              nodeId={winNode.id}
-              nodeName={winNode.name}
-              powered={winNode.powered !== false}
-              sim={simEngineRef.current}
-              getMem={() => vendorDispatcher.getNodeMemory(winNode.id)}
-              onChanged={() => {
-                syncNodeToEngineAll(simEngineRef.current, vendorDispatcher, winNode.id);
-                StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory());
-                setStatsVersion((v) => v + 1);
-              }}
-              onTogglePower={() => handleTogglePower(winNode.id)}
-              onClose={() => setWinDesktopNodeId(null)}
-              runCommand={(cmd) => handleWindowsTerminalCommand(winNode.id, cmd)}
-            />
+            <React.Suspense fallback={null}>
+              <WinDesktopModal
+                nodeId={winNode.id}
+                nodeName={winNode.name}
+                powered={winNode.powered !== false}
+                sim={simEngineRef.current}
+                getMem={() => vendorDispatcher.getNodeMemory(winNode.id)}
+                onChanged={() => {
+                  syncNodeToEngineAll(simEngineRef.current, vendorDispatcher, winNode.id);
+                  StorageEngine.saveDeviceConfigs(vendorDispatcher.serializeMemory());
+                  setStatsVersion((v) => v + 1);
+                }}
+                onTogglePower={() => handleTogglePower(winNode.id)}
+                onClose={() => setWinDesktopNodeId(null)}
+                runCommand={(cmd) => handleWindowsTerminalCommand(winNode.id, cmd)}
+              />
+            </React.Suspense>
           );
         })()}
 
@@ -2008,9 +2032,10 @@ onOpenTerminal={handleOpenTerminal}
         open={isPresetLabOpen}
         onClose={() => setIsPresetLabOpen(false)}
         onLoadLab={(lab) => {
-          const built = lab.build();
+          const built = autoPlaceProject(lab.build());
           // Seed IP preset → memori vendor agar CLI melihat konfigurasi awal
-          // dan mirror canvas tetap konsisten (audit R2).
+          // dan mirror canvas tetap konsisten (audit R2). autoPlaceProject
+          // menjamin setiap perangkat punya posisi rapi (anti tumpang-tindih).
           seedMemoryIpsFromProject(built, vendorDispatcher);
           setProjectWithHistory(built);
           setIsPresetLabOpen(false);

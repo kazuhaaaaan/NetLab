@@ -379,6 +379,17 @@ export function runVendorHardeningTests(): Report {
       shell: ['router rip'],
       windows: ['netsh routing ip rip install'],
     },
+    ripng: {
+      cisco: ['ipv6 router rip RIPNG'],
+      mikrotik: ['/routing ripng instance add name=x'],
+      juniper: ['set protocols ripng group x'],
+      huawei: ['ripng 1'],
+      edgeos: ['set protocols ripng'],
+      fortinet: ['config router ripng'],
+      uci: ['ripngd'],
+      shell: ['ripngd'],
+      windows: ['netsh routing ip ripng install'],
+    },
     eigrp: {
       cisco: ['router eigrp 100'],
       mikrotik: ['/routing eigrp instance add name=x'],

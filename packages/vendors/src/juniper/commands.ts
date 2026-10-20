@@ -187,6 +187,23 @@ cmdResult = juniperCommand(rawInput, context, mem);
     return cmdResult;
   },
   },
+  {
+    name: 'b900-ripng',
+    order: 130,
+    vendors: 'all',
+    cap: 'ripng',
+    match: ({ rawInput, vendorId }) => (/^set\s+protocols\s+ripng\b/i.test(rawInput.trim()) && vendorId === 'juniper'),
+    run: ({ rawInput, mem, context }) => {
+      const m = rawInput.trim().match(/(?:interface|neighbor|network)\s+(\S+)/i);
+      mem.routing.ripng.enabled = true;
+      mem.currentDhcpPool = '';
+      if (m) {
+        const target = resolveIfaceName(context?.ports, m[1]) || m[1];
+        if (!mem.routing.ripng.networks.includes(target)) mem.routing.ripng.networks.push(target);
+      }
+      return { raw: '' };
+    },
+  },
 ];
 
 registerEntries('juniper', juniperEntries);

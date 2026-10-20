@@ -85,7 +85,7 @@ const lab2 = (): LabProject => ({
   },
   viewport: { x: 80, y: 120, zoom: 1.0 },
   nodes: [
-    mkNode('lab2-rtr', 'Router-IVR', 'cisco_ios', 'ISR 4321', 'router', 140, 220, {
+    mkNode('lab2-rtr', 'Router-IVR', 'cisco_ios', 'ISR 4331', 'router', 140, 220, {
       ips: { 'Gi0/0/0': '10.1.10.1/24' },
     }),
     mkNode('lab2-sw', 'SW-L2', 'cisco_ios', 'Catalyst 2960-X', 'switch', 480, 220, {
@@ -97,7 +97,7 @@ const lab2 = (): LabProject => ({
     mkNode('lab2-pc20', 'PC-VLAN20', 'linux', 'Ubuntu Server 22.04 LTS', 'pc', 820, 220, {
       ips: { eth1: '10.1.20.10/24' },
     }),
-    mkNode('lab2-pc30', 'PC-VLAN30', 'linux', 'Debian 11 (Bullseye)', 'pc', 820, 370, {
+    mkNode('lab2-pc30', 'PC-VLAN30', 'linux', 'Debian 12 (Bookworm)', 'pc', 820, 370, {
       ips: { eth1: '10.1.30.10/24' },
     }),
   ],
@@ -122,13 +122,13 @@ const lab3 = (): LabProject => ({
   },
   viewport: { x: 60, y: 100, zoom: 0.95 },
   nodes: [
-    mkNode('lab3-isp1', 'ISP-1', 'mikrotik', 'CCR2004-1G-12S+2XS', 'router', 140, 140, {
+    mkNode('lab3-isp1', 'ISP-1', 'mikrotik', 'RB3011UiAS-RM', 'router', 140, 140, {
       ips: { ether1: '10.0.0.1/30' },
     }),
-    mkNode('lab3-isp2', 'ISP-2', 'mikrotik', 'CCR2004-1G-12S+2XS', 'router', 140, 400, {
+    mkNode('lab3-isp2', 'ISP-2', 'mikrotik', 'RB3011UiAS-RM', 'router', 140, 400, {
       ips: { ether1: '10.0.1.1/30' },
     }),
-    mkNode('lab3-main', 'Main-Router', 'mikrotik', 'RB4011iGS+', 'router', 480, 260, {
+    mkNode('lab3-main', 'Main-Router', 'mikrotik', 'RB3011UiAS-RM', 'router', 480, 260, {
       ips: { ether1: '10.0.0.2/30', ether2: '10.0.1.2/30', ether3: '192.168.1.1/24' },
     }),
     mkNode('lab3-sw', 'SW-LAN', 'aruba', 'Aruba 2930F', 'switch', 800, 200, {
@@ -163,13 +163,13 @@ const lab4 = (): LabProject => ({
   },
   viewport: { x: 40, y: 180, zoom: 1.0 },
   nodes: [
-    mkNode('lab4-r1', 'R1', 'cisco_ios', 'ISR 4321', 'router', 140, 140, {
+    mkNode('lab4-r1', 'R1', 'cisco_ios', 'ISR 4331', 'router', 140, 140, {
       ips: { 'Gi0/0/0': '10.0.12.1/30', 'Gi0/0/1': '10.0.13.1/30', 'Gi0/0/2': '192.168.10.1/24' },
     }),
     mkNode('lab4-r2', 'R2', 'cisco_ios', 'ISR 4331', 'router', 660, 140, {
       ips: { 'Gi0/0/0': '10.0.12.2/30', 'Gi0/0/1': '10.0.23.2/30', 'Gi0/0/2': '192.168.20.1/24' },
     }),
-    mkNode('lab4-r3', 'R3', 'cisco_ios', 'ISR 4321', 'router', 660, 480, {
+    mkNode('lab4-r3', 'R3', 'cisco_ios', 'ISR 4331', 'router', 660, 480, {
       ips: { 'Gi0/0/0': '10.0.13.3/30', 'Gi0/0/1': '10.0.23.3/30', 'Gi0/0/2': '192.168.30.1/24' },
     }),
     mkNode('lab4-pc1', 'PC-A', 'linux', 'Debian 12 (Bookworm)', 'pc', 40, 480, {

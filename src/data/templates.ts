@@ -162,3 +162,153 @@ export const TEMPLATE_ENTERPRISE: LabProject = {
     { id: 'e-17', sourceNodeId: 'acc-a3', sourcePortId: 'ether4', targetNodeId: 'cust-pc', targetPortId: 'eth1', cableType: 'copper_straight' }
   ]
 };
+
+/** Template kantor kecil: firewall + switch + server + klien Windows. */
+export const TEMPLATE_SMALL_OFFICE: LabProject = {
+  version: '1.0',
+  metadata: {
+    name: 'Kantor Kecil: Firewall + Switch + Klien',
+    author: 'KazuDev',
+    description:
+      'Topologi kantor kecil: firewall FortiGate sebagai gateway, switch Cisco akses, server Ubuntu, dan klien Windows 11.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  viewport: { x: 80, y: 80, zoom: 1.0 },
+  nodes: [
+    mkNode('so-fw', 'Office-FW', 'fortinet', 'FortiGate 60E', 'firewall', 140, 170, {
+      ips: { port1: '203.0.113.2/30' },
+      up: ['port2']
+    }),
+    mkNode('so-sw', 'Office-SW', 'cisco_ios', 'Catalyst 2960-X', 'switch', 500, 170, {
+      up: ['Gi0/1', 'Gi0/2', 'Gi0/3']
+    }),
+    mkNode('so-srv', 'Server-App', 'linux', 'Ubuntu Server 22.04 LTS', 'server', 860, 80, {
+      ips: { eth1: '192.168.10.10/24' }
+    }),
+    mkNode('so-win', 'Klien-Win11', 'windows', 'Windows 11 Pro', 'windows-client', 860, 270, {
+      ips: { eth0: '192.168.10.20/24' }
+    })
+  ],
+  edges: [
+    { id: 'so-e1', sourceNodeId: 'so-fw', sourcePortId: 'port2', targetNodeId: 'so-sw', targetPortId: 'Gi0/1', cableType: 'copper_straight' },
+    { id: 'so-e2', sourceNodeId: 'so-sw', sourcePortId: 'Gi0/2', targetNodeId: 'so-srv', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'so-e3', sourceNodeId: 'so-sw', sourcePortId: 'Gi0/3', targetNodeId: 'so-win', targetPortId: 'eth0', cableType: 'copper_straight' }
+  ]
+};
+
+/** Template wireless: gateway WiFi + switch + 2 klien. */
+export const TEMPLATE_WIRELESS: LabProject = {
+  version: '1.0',
+  metadata: {
+    name: 'Wireless: Gateway WiFi + Klien',
+    author: 'KazuDev',
+    description:
+      'MikroTik hAP ac2 sebagai gateway WiFi (wlan1/wlan2 aktif), switch Cisco akses, 1 PC Linux dan 1 klien Windows.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  viewport: { x: 80, y: 80, zoom: 1.0 },
+  nodes: [
+    mkNode('wl-ap', 'WiFi-Gateway', 'mikrotik', 'hAP ac2', 'wireless', 160, 170, {
+      ips: { ether2: '192.168.10.1/24' },
+      up: ['ether1', 'wlan1', 'wlan2']
+    }),
+    mkNode('wl-sw', 'Access-SW', 'cisco_ios', 'Catalyst 2960-X', 'switch', 520, 170, {
+      up: ['Gi0/1', 'Gi0/2', 'Gi0/3']
+    }),
+    mkNode('wl-pc', 'PC-Linux', 'linux', 'Debian 12 (Bookworm)', 'pc', 880, 80, {
+      ips: { eth1: '192.168.10.10/24' }
+    }),
+    mkNode('wl-win', 'Laptop-Win11', 'windows', 'Windows 11 Pro', 'windows-client', 880, 270, {
+      ips: { eth0: '192.168.10.20/24' }
+    })
+  ],
+  edges: [
+    { id: 'wl-e1', sourceNodeId: 'wl-ap', sourcePortId: 'ether2', targetNodeId: 'wl-sw', targetPortId: 'Gi0/1', cableType: 'copper_straight' },
+    { id: 'wl-e2', sourceNodeId: 'wl-sw', sourcePortId: 'Gi0/2', targetNodeId: 'wl-pc', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'wl-e3', sourceNodeId: 'wl-sw', sourcePortId: 'Gi0/3', targetNodeId: 'wl-win', targetPortId: 'eth0', cableType: 'copper_straight' }
+  ]
+};
+
+/** Template routing lintas vendor: Cisco + Juniper + Huawei + klien. */
+export const TEMPLATE_ROUTING: LabProject = {
+  version: '1.0',
+  metadata: {
+    name: 'Routing Lintas Vendor (OSPF)',
+    author: 'KazuDev',
+    description:
+      'Tiga router lintas vendor (Cisco IOS, Juniper Junos, Huawei VRP) saling terhubung dengan PC & server — latihan routing statis/OSPF lintas platform.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  viewport: { x: 60, y: 80, zoom: 1.0 },
+  nodes: [
+    mkNode('rt-r1', 'R1-Cisco', 'cisco_ios', 'ISR 4331', 'router', 150, 150, {
+      ips: { 'Gi0/0/0': '10.0.12.1/30', 'Gi0/0/1': '192.168.10.1/24' }
+    }),
+    mkNode('rt-r2', 'R2-Juniper', 'juniper', 'SRX300', 'router', 500, 150, {
+      ips: { 'ge-0/0/1': '10.0.12.2/30', 'ge-0/0/2': '10.0.23.2/30' }
+    }),
+    mkNode('rt-r3', 'R3-Huawei', 'huawei', 'AR3260', 'router', 850, 150, {
+      ips: { 'GigabitEthernet0/0/1': '10.0.23.3/30', 'GigabitEthernet0/0/2': '192.168.30.1/24' }
+    }),
+    mkNode('rt-pc', 'PC-Kantor', 'linux', 'Debian 12 (Bookworm)', 'pc', 150, 370, {
+      ips: { eth1: '192.168.10.10/24' }
+    }),
+    mkNode('rt-srv', 'Server-Finance', 'linux', 'Ubuntu Server 22.04 LTS', 'server', 850, 370, {
+      ips: { eth1: '192.168.30.10/24' }
+    })
+  ],
+  edges: [
+    { id: 'rt-e1', sourceNodeId: 'rt-r1', sourcePortId: 'Gi0/0/0', targetNodeId: 'rt-r2', targetPortId: 'ge-0/0/1', cableType: 'copper_straight' },
+    { id: 'rt-e2', sourceNodeId: 'rt-r2', sourcePortId: 'ge-0/0/2', targetNodeId: 'rt-r3', targetPortId: 'GigabitEthernet0/0/1', cableType: 'copper_straight' },
+    { id: 'rt-e3', sourceNodeId: 'rt-r1', sourcePortId: 'Gi0/0/1', targetNodeId: 'rt-pc', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'rt-e4', sourceNodeId: 'rt-r3', sourcePortId: 'GigabitEthernet0/0/2', targetNodeId: 'rt-srv', targetPortId: 'eth1', cableType: 'copper_straight' }
+  ]
+};
+
+export interface TemplateEntry {
+  id: string;
+  title: string;
+  subtitle: string;
+  data: LabProject;
+}
+
+/** Registry template — dipakai menu Navbar & MobileHeader, load via App.tsx. */
+export const TEMPLATES: TemplateEntry[] = [
+  {
+    id: 'basic',
+    title: 'Mudah: Router + Switch + PC',
+    subtitle: 'MikroTik gateway, switch Cisco, 1 PC',
+    data: TEMPLATE_BASIC
+  },
+  {
+    id: 'office',
+    title: 'Kantor Kecil: Firewall + Switch + Klien',
+    subtitle: 'FortiGate, switch Cisco, server, Windows 11',
+    data: TEMPLATE_SMALL_OFFICE
+  },
+  {
+    id: 'wireless',
+    title: 'Wireless: Gateway WiFi + Klien',
+    subtitle: 'MikroTik hAP ac2, switch, 2 klien',
+    data: TEMPLATE_WIRELESS
+  },
+  {
+    id: 'routing',
+    title: 'Routing Lintas Vendor (OSPF)',
+    subtitle: 'Cisco + Juniper + Huawei + PC & server',
+    data: TEMPLATE_ROUTING
+  },
+  {
+    id: 'enterprise',
+    title: 'ISP / Data Center Lab',
+    subtitle: '16 perangkat: ISP, firewall, core, server',
+    data: TEMPLATE_ENTERPRISE
+  }
+];
+
+export function getTemplate(id: string): TemplateEntry | undefined {
+  return TEMPLATES.find((t) => t.id === id);
+}

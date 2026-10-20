@@ -27,6 +27,7 @@ export function blankNodeMemory(): NodeMemory {
     routing: {
       ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [], areas: {} },
       rip: { enabled: false, networks: [] },
+      ripng: { enabled: false, networks: [] },
       eigrp: { enabled: false, asn: 0, networks: [] },
     },
     shutdownIfaces: [],
@@ -151,6 +152,7 @@ export class MemoryRegistryImpl implements MemoryRegistry {
         target.routing = {
           ospf: { enabled: false, networks: [], interfaceCosts: {}, passiveInterfaces: [], areas: {}, ...((r.ospf as Record<string, unknown> | undefined) || {}) },
           rip: { enabled: false, networks: [], ...((r.rip as Record<string, unknown> | undefined) || {}) },
+          ripng: { enabled: false, networks: [], ...((r.ripng as Record<string, unknown> | undefined) || {}) },
           eigrp: { enabled: false, asn: 0, networks: [], ...((r.eigrp as Record<string, unknown> | undefined) || {}) },
         } as NodeMemory['routing'];
       }

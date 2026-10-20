@@ -25,6 +25,7 @@
 import { NetworkDevice } from '../devices/NetworkDevice';
 import { LinkTable } from '../core/Topology';
 import { inSameSubnet, intToIp, ipToInt, networkOf, parseCidr } from '../core/ip';
+import { inSameIpv6Subnet, ipv6NetworkString, parseIpv6Cidr } from '../core/ipv6';
 
 export type OspfPhase = 'Init' | '2-Way' | 'ExStart' | 'Exchange' | 'Loading' | 'Full';
 
@@ -39,6 +40,8 @@ export interface OspfSession {
   area: number;
   rounds: number;
   state: OspfPhase;
+  /** Sudah mencatat event timer-mismatch (reset saat timer kembali sehat). */
+  timerMismatchLogged?: boolean;
 }
 
 export type BgpFsmState = 'Idle' | 'Connect' | 'Active' | 'OpenSent' | 'OpenConfirm' | 'Established';
@@ -94,6 +97,33 @@ export interface BgpPeerView {
   prefixes: number;
 }
 
+// ── Protokol event (timer & event-driven transitions) ─────────────────
+// Semua event ditentukan oleh CONFIGURASI + TOPOLOGI (bukan wall clock) —
+// deterministik: topology sama + config sama = urutan event identik.
+
+export type ProtocolEventKind =
+  | 'ospf.adjacency-up'
+  | 'ospf.adjacency-down'
+  | 'ospf.timer-mismatch'
+  | 'bgp.session-up'
+  | 'bgp.session-down'
+  | 'bgp.hold-time-mismatch'
+  | 'ripng.route-installed';
+
+export interface ProtocolEvent {
+  /** Nomor urut monotonic (batas event-log: MAX_PROTOCOL_EVENTS). */
+  seq: number;
+  proto: 'ospf' | 'bgp' | 'ripng';
+  type: ProtocolEventKind;
+  nodeId: string;
+  /** Peer (router-id / alamat / ID perangkat) terkait event. */
+  peer?: string;
+  detail?: string;
+}
+
+/** Batas event log (bounded, buang lama secara deterministik). */
+export const MAX_PROTOCOL_EVENTS = 200;
+
 /** Tetangga EIGRP (adjacency berbasis segmen fisik + ASN cocok). */
 export interface EigrpNeighborView {
   neighborId: string;
@@ -144,6 +174,27 @@ function hasOspf(dev: NetworkDevice): boolean {
   return !!dev.routingCfg?.ospf?.enabled;
 }
 
+function hasRipng(dev: NetworkDevice): boolean {
+  return !!dev.routingCfg?.ripng?.enabled;
+}
+
+/**
+ * Kompatibilitas timer OSPF (realisme protokol):
+ * - dead interval WAJIB > hello interval (kalau tidak peer "mati" sebelum
+ *   hello berikutnya), DAN
+ * - hello & dead interval WAJIB SAMA di kedua ujung — OSPF hanya membentuk
+ *   adjacency dengan tetangga yang timer-nya identik (RFC 2328 §10.5).
+ * Kegagalan mempin adjacency di 2-Way (bukan Full) — konsisten dengan
+ * perilaku engine lama untuk timer jelek.
+ */
+function ospfTimersMatch(a: NetworkDevice, b: NetworkDevice): boolean {
+  const ha = a.routingCfg?.ospf?.helloInterval ?? 10000;
+  const da = a.routingCfg?.ospf?.deadInterval ?? 40000;
+  const hb = b.routingCfg?.ospf?.helloInterval ?? 10000;
+  const db = b.routingCfg?.ospf?.deadInterval ?? 40000;
+  return ha === hb && da === db && da > ha;
+}
+
 /** Router-ID: nilai konfigurasi menang; selain itu IP interface pertama. */
 function routerIdOf(dev: NetworkDevice): string {
   return dev.routingCfg?.ospf?.routerId || dev.bgpCfg?.routerId || dev.getIpAddress() || dev.id;
@@ -163,6 +214,42 @@ export class RoutingProtocolEngine {
   private bgpViews = new Map<string, BgpPeerView[]>();
   private ospfLsdb = new Map<string, OspfLsa[]>();
   private bgpRib = new Map<string, BgpRibEntry[]>();
+  /** Log event protokol (bounded — evict paling lama secara deterministik). */
+  private protocolEvents: ProtocolEvent[] = [];
+  private eventSeq = 0;
+  /** Snapshot rute RIPng terpasang (devId → "dst|gateway") — dasar event route-installed. */
+  private ripngInstalled = new Map<string, Set<string>>();
+
+  // ── Event log (timer & event-driven transitions) ─────────────────────
+  /** Salinan urut event protokol terakhir (OSPF/BGP/RIPng). */
+  getProtocolEvents(): ProtocolEvent[] {
+    return [...this.protocolEvents];
+  }
+
+  private pushEvent(ev: Omit<ProtocolEvent, 'seq'>): void {
+    this.protocolEvents.push({ seq: this.eventSeq++, ...ev });
+    if (this.protocolEvents.length > MAX_PROTOCOL_EVENTS) {
+      this.protocolEvents.splice(0, this.protocolEvents.length - MAX_PROTOCOL_EVENTS);
+    }
+  }
+
+  /** Event adjacency OSPF: up saat masuk Full, down saat keluar Full. */
+  private recordOspfTransition(nodeId: string, peer: string, from: OspfPhase, to: OspfPhase): void {
+    if (to === 'Full' && from !== 'Full') {
+      this.pushEvent({ proto: 'ospf', type: 'ospf.adjacency-up', nodeId, peer, detail: `state ${from} → Full` });
+    } else if (from === 'Full' && to !== 'Full') {
+      this.pushEvent({ proto: 'ospf', type: 'ospf.adjacency-down', nodeId, peer, detail: `state Full → ${to}` });
+    }
+  }
+
+  /** Event session BGP: up saat masuk Established, down saat keluar. */
+  private recordBgpTransition(nodeId: string, peer: string, from: BgpFsmState, to: BgpFsmState): void {
+    if (to === 'Established' && from !== 'Established') {
+      this.pushEvent({ proto: 'bgp', type: 'bgp.session-up', nodeId, peer, detail: `FSM ${from} → Established` });
+    } else if (from === 'Established' && to !== 'Established') {
+      this.pushEvent({ proto: 'bgp', type: 'bgp.session-down', nodeId, peer, detail: `FSM ${from} → ${to}` });
+    }
+  }
 
   // ── Akses hasil (dipakai NetworkSimulator.getters / CLI) ──────────
   getOspfNeighbors(nodeId: string): OspfNeighborView[] {
@@ -188,14 +275,20 @@ export class RoutingProtocolEngine {
    *   state machine: Init → 2-Way → ... → Full).
    */
   compute(devices: NetworkDevice[], links: LinkTable, rounds = 0): void {
-    for (const dev of devices) dev.clearDynamicRoutes();
+    for (const dev of devices) {
+      dev.clearDynamicRoutes();
+      dev.clearDynamicRoutes6();
+    }
 
     // Perlindungan power-off: perangkat yang mati tidak menyebarkan rute
     // dan tidak boleh menjadi asal / penerima rute dinamis.
     const alive = devices.filter((d) => d.powered);
     if (alive.length < devices.length) {
       for (const dev of devices) {
-        if (!dev.powered) dev.clearDynamicRoutes();
+        if (!dev.powered) {
+          dev.clearDynamicRoutes();
+          dev.clearDynamicRoutes6();
+        }
       }
     }
     const segments = this.buildSegments(alive, links);
@@ -208,6 +301,7 @@ export class RoutingProtocolEngine {
       this.computeOspfRoutes(alive, links, segments);
       this.computeRipEigrpRoutes(alive, links, segments);
       this.computeEigrpRoutes(alive, links, segments);
+      this.computeRipngRoutes(alive, links, segments);
     };
     if (rounds > 0) {
       for (let i = 0; i < rounds; i++) {
@@ -330,15 +424,27 @@ export class RoutingProtocolEngine {
           changed = true;
         }
         s.rounds++;
-        // Timer sehat: dead interval WAJIB lebih besar dari hello interval
-        // (kalau tidak, peer "mati" sebelum hello berikutnya → adjacency
-        // macet di 2-Way, tidak pernah Full).
-        const timersOk =
-          (me.routingCfg?.ospf?.deadInterval ?? 40000) > (me.routingCfg?.ospf?.helloInterval ?? 10000) &&
-          (peer.routingCfg?.ospf?.deadInterval ?? 40000) > (peer.routingCfg?.ospf?.helloInterval ?? 10000);
+        // Timer sehat: dead > hello DAN hello/dead identik di kedua ujung
+        // (RFC 2328 §10.5). Salah satu gagal → adjacency dipin di 2-Way,
+        // tidak pernah Full.
+        const timersOk = ospfTimersMatch(me, peer);
         const phase = ospfPhaseFor(s.rounds);
-        const next = !timersOk && (phase === 'ExStart' || phase === 'Exchange' || phase === 'Loading' || phase === 'Full') ? '2-Way' : phase;
+        const pinned = !timersOk && (phase === 'ExStart' || phase === 'Exchange' || phase === 'Loading' || phase === 'Full');
+        const next = pinned ? '2-Way' : phase;
+        if (timersOk) {
+          s.timerMismatchLogged = false;
+        } else if (pinned && !s.timerMismatchLogged) {
+          this.pushEvent({
+            proto: 'ospf',
+            type: 'ospf.timer-mismatch',
+            nodeId: me.id,
+            peer: routerIdOf(peer),
+            detail: `hello ${me.routingCfg?.ospf?.helloInterval ?? 10000}/${peer.routingCfg?.ospf?.helloInterval ?? 10000} ms, dead ${me.routingCfg?.ospf?.deadInterval ?? 40000}/${peer.routingCfg?.ospf?.deadInterval ?? 40000} ms`,
+          });
+          s.timerMismatchLogged = true;
+        }
         if (next !== s.state) {
+          this.recordOspfTransition(me.id, routerIdOf(peer), s.state, next);
           s.state = next;
           changed = true;
         }
@@ -398,12 +504,24 @@ export class RoutingProtocolEngine {
               changed = true;
             }
             s.rounds++;
-            const timersOk =
-              (me.dev.routingCfg?.ospf?.deadInterval ?? 40000) > (me.dev.routingCfg?.ospf?.helloInterval ?? 10000) &&
-              (peer.dev.routingCfg?.ospf?.deadInterval ?? 40000) > (peer.dev.routingCfg?.ospf?.helloInterval ?? 10000);
+            const timersOk = ospfTimersMatch(me.dev, peer.dev);
             const phase = ospfPhaseFor(s.rounds);
-            const next = !timersOk && (phase === 'ExStart' || phase === 'Exchange' || phase === 'Loading' || phase === 'Full') ? '2-Way' : phase;
+            const pinned = !timersOk && (phase === 'ExStart' || phase === 'Exchange' || phase === 'Loading' || phase === 'Full');
+            const next = pinned ? '2-Way' : phase;
+            if (timersOk) {
+              s.timerMismatchLogged = false;
+            } else if (pinned && !s.timerMismatchLogged) {
+              this.pushEvent({
+                proto: 'ospf',
+                type: 'ospf.timer-mismatch',
+                nodeId: me.dev.id,
+                peer: routerIdOf(peer.dev),
+                detail: `hello ${me.dev.routingCfg?.ospf?.helloInterval ?? 10000}/${peer.dev.routingCfg?.ospf?.helloInterval ?? 10000} ms`,
+              });
+              s.timerMismatchLogged = true;
+            }
             if (next !== s.state) {
+              this.recordOspfTransition(me.dev.id, routerIdOf(peer.dev), s.state, next);
               s.state = next;
               changed = true;
             }
@@ -699,6 +817,7 @@ export class RoutingProtocolEngine {
           // AS remote tidak cocok → session di Active selamanya (TCP terbuka,
           // open tidak diterima).
           if (s.state !== 'Active') {
+            this.recordBgpTransition(dev.id, p.remoteAddr, s.state, 'Active');
             s.state = 'Active';
             changed = true;
           }
@@ -707,14 +826,38 @@ export class RoutingProtocolEngine {
           // Peer tidak terjangkau lewat tabel routing (no-route / egress
           // down / ARP gagal) → tetap di Connect (retry TCP).
           if (s.state !== 'Connect') {
+            this.recordBgpTransition(dev.id, p.remoteAddr, s.state, 'Connect');
             s.state = 'Connect';
             changed = true;
           }
           s.rounds = 0;
         } else {
           s.rounds++;
-          const next = bgpFsmFor(s.rounds);
+          let next = bgpFsmFor(s.rounds);
+          // Timer hold (RFC 4271 §6.5): holdTime harus kompatibel di kedua
+          // ujung (sama-sama di-set → wajib sama; <3 detik dianggap
+          // tidak valid = session tanpa hold). Bila tidak, FSM berhenti di
+          // OpenConfirm — tidak pernah Established (event-driven, bukan
+          // konvergen diam-diam).
+          const holdA = dev.bgpCfg!.holdTime;
+          const holdB = peerDev!.bgpCfg!.holdTime;
+          const holdMismatch = holdA !== undefined && holdB !== undefined && holdA !== holdB;
+          const holdTooSmall = (holdA !== undefined && holdA > 0 && holdA < 3) || (holdB !== undefined && holdB > 0 && holdB < 3);
+          if (next === 'Established' && (holdMismatch || holdTooSmall)) {
+            if (s.rounds === BGP_ESTABLISHED_ROUND) {
+              this.pushEvent({
+                proto: 'bgp',
+                type: 'bgp.hold-time-mismatch',
+                nodeId: dev.id,
+                peer: p.remoteAddr,
+                detail: `holdTime ${holdA !== undefined ? `${holdA}s` : 'default'} vs ${holdB !== undefined ? `${holdB}s` : 'default'} → stuck OpenConfirm`,
+              });
+            }
+            next = 'OpenConfirm';
+            s.rounds = BGP_ESTABLISHED_ROUND - 1;
+          }
           if (next !== s.state) {
+            this.recordBgpTransition(dev.id, p.remoteAddr, s.state, next);
             s.state = next;
             changed = true;
           }
@@ -1001,6 +1144,140 @@ export class RoutingProtocolEngine {
         if (e.gateway) dev.addDynamicRoute(e.dst, e.gateway);
       }
     }
+  }
+
+  // ── RIPng (RIP next generation — IPv6, UDP 521) ────────────────────
+
+  /** IP IPv6 `dev` pada segmen `key` (mirip ipOnSegment, untuk IPv6). */
+  private ipOnSegment6(dev: NetworkDevice, key: string, segments: Map<string, string>, links: LinkTable): string | null {
+    for (const link of links.linksOf(dev.id)) {
+      if (link.down) continue;
+      const myPort = link.a.nodeId === dev.id ? link.a.port : link.b.port;
+      const segKey = segments.get(`${dev.id}:${myPort}`);
+      if (segKey !== key) continue;
+      const iface = dev.getIfaceByPortId(myPort) || dev.getIfaceByName(myPort) || dev.getVirtualByParentPort(myPort);
+      if (iface?.ipv6 && iface.up) return iface.ipv6.address;
+    }
+    return null;
+  }
+
+  /**
+   * Network entry protokol IPv6 (RIPng) → subnet IPv6 ('2001:db8::/64').
+   * Nama interface juga diterima (mirip normalizeNetworkEntry untuk IPv4).
+   */
+  private normalizeNetworkEntry6(dev: NetworkDevice, entry: string): string | null {
+    const trimmed = entry.trim();
+    const parsed = parseIpv6Cidr(trimmed);
+    if (parsed) return `${parsed.address}/${parsed.prefix}`;
+    const iface = dev.getIfaceByName(trimmed);
+    if (iface?.ipv6) return `${ipv6NetworkString(iface.ipv6.address, iface.ipv6.prefix)}/${iface.ipv6.prefix}`;
+    return null;
+  }
+
+  /**
+   * RIPng — distance-vector IPv6 deterministik:
+   * - hanya floooding antar perangkat ripng-enabled yang berbagi segmen fisik
+   *   (link up, interface hidup, alamat IPv6 ada),
+   * - metric = hop-count, 16 = infinity (rute dengan metric > 15 dibuang),
+   * - rute dipasang lewat sistem routing IPv6 otoritatif (addDynamicRoute6),
+   *   tidak ada tabel tersembunyi.
+   * Event `ripng.route-installed` dipancarkan hanya untuk pasangan
+   * dst|gateway yang BELUM ada pada snapshot compute sebelumnya.
+   */
+  private computeRipngRoutes(devices: NetworkDevice[], links: LinkTable, segments: Map<string, string>): void {
+    const l3 = devices.filter((d) => !d.isSwitch);
+    const ripngDevs = l3.filter(hasRipng);
+    if (ripngDevs.length === 0) {
+      this.ripngInstalled.clear();
+      return;
+    }
+
+    const tables = new Map<string, TableEntry[]>();
+    for (const dev of ripngDevs) {
+      const nets = (dev.routingCfg?.ripng?.networks || [])
+        .map((n) => this.normalizeNetworkEntry6(dev, n))
+        .filter((n): n is string => !!n);
+      if (nets.length === 0) continue;
+      const entries: TableEntry[] = [];
+      for (const iface of dev.getInterfaces()) {
+        if (!iface.ipv6 || !iface.up) continue;
+        const subnet = `${ipv6NetworkString(iface.ipv6.address, iface.ipv6.prefix)}/${iface.ipv6.prefix}`;
+        const participates = nets.some((net) => {
+          const parsed = parseIpv6Cidr(net);
+          if (!parsed) return false;
+          const pa = Math.min(iface.ipv6.prefix, parsed.prefix);
+          return inSameIpv6Subnet(iface.ipv6.address, pa, parsed.address);
+        });
+        if (participates) entries.push({ dst: subnet, gateway: '', metric: 0 });
+      }
+      if (entries.length > 0) tables.set(dev.id, entries);
+    }
+
+    for (let round = 0; round < l3.length; round++) {
+      const candidates: { peerId: string; dst: string; gateway: string; metric: number }[] = [];
+      for (const dev of ripngDevs) {
+        const myEntries = tables.get(dev.id);
+        if (!myEntries) continue;
+        const myKeys = new Set<string>();
+        for (const link of links.linksOf(dev.id)) {
+          const myPort = link.a.nodeId === dev.id ? link.a.port : link.b.port;
+          myKeys.add(segments.get(`${dev.id}:${myPort}`) || `ptp:${link.id}`);
+        }
+        for (const key of myKeys) {
+          const myIp = this.ipOnSegment6(dev, key, segments, links);
+          if (!myIp) continue;
+          for (const other of ripngDevs) {
+            if (other.id === dev.id) continue;
+            const otherIp = this.ipOnSegment6(other, key, segments, links);
+            if (!otherIp) continue;
+            for (const e of myEntries) {
+              candidates.push({ peerId: other.id, dst: e.dst, gateway: myIp, metric: e.metric + 1 });
+            }
+          }
+        }
+      }
+      if (candidates.length === 0) break;
+      let changed = false;
+      for (const c of candidates) {
+        const peer = devices.find((d) => d.id === c.peerId);
+        if (!peer) continue;
+        // Gateway berupa alamat milik peer sendiri → bukan next-hop valid.
+        if (peer.hasIpv6(c.gateway)) continue;
+        // RIPng: metric 16 = infinity — jangan pernah dipasang.
+        if (c.metric > 15) continue;
+        const list = tables.get(c.peerId) || [];
+        const existing = list.find((t) => t.dst === c.dst);
+        if (!existing || c.metric < existing.metric) {
+          if (!existing) list.push({ dst: c.dst, gateway: c.gateway, metric: c.metric });
+          else {
+            existing.gateway = c.gateway;
+            existing.metric = c.metric;
+          }
+          tables.set(c.peerId, list);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    const installed = new Map<string, Set<string>>();
+    for (const [devId, entries] of tables) {
+      const dev = devices.find((d) => d.id === devId);
+      if (!dev) continue;
+      const seen = new Set<string>();
+      for (const e of entries) {
+        if (!e.gateway) continue;
+        dev.addDynamicRoute6(e.dst, e.gateway);
+        const key = `${e.dst}|${e.gateway}`;
+        seen.add(key);
+        const prev = this.ripngInstalled.get(devId);
+        if (!prev || !prev.has(key)) {
+          this.pushEvent({ proto: 'ripng', type: 'ripng.route-installed', nodeId: devId, peer: e.gateway, detail: `${e.dst} metric ${e.metric}` });
+        }
+      }
+      installed.set(devId, seen);
+    }
+    this.ripngInstalled = installed;
   }
 
   // ── EIGRP (educational DUAL subset) ─────────────────────────────

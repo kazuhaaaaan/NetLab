@@ -520,7 +520,7 @@ export class ConfigStore {
   }
 
   setRouting(nodeId: string, cfg: RoutingMemoryShape | undefined): void {
-    const enabled = cfg && (cfg.ospf?.enabled || cfg.rip?.enabled || cfg.eigrp?.enabled);
+    const enabled = cfg && (cfg.ospf?.enabled || cfg.rip?.enabled || cfg.ripng?.enabled || cfg.eigrp?.enabled);
     if (enabled) this.routings.set(nodeId, cfg);
     else this.routings.delete(nodeId);
     const dev = this.ctx.nodes.get(nodeId);
@@ -538,6 +538,7 @@ export class ConfigStore {
             peers: cfg.peers.map((p) => ({ remoteAs: p.remoteAs, remoteAddr: p.remoteAddr, localPref: p.localPref })),
             networks: cfg.networks,
             routerId: cfg.routerId,
+            holdTime: cfg.holdTime,
           }
         : null;
     }

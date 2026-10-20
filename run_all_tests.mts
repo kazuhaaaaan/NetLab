@@ -17,7 +17,10 @@ import {
 } from './src/data/deviceModels';
 import { CLI_HINTS } from './src/data/cliHints';
 import { BEGINNER_GUIDES } from './src/data/beginnerGuide';
-import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE } from './src/data/templates';
+import { TEMPLATE_BASIC, TEMPLATE_ENTERPRISE, TEMPLATES, getTemplate } from './src/data/templates';
+import { PRESET_LABS } from './src/data/presetLabs';
+import { generateConfig, VENDOR_META, VENDOR_DEFAULT_IFACES, type ConfigGeneratorParams, type ConfigVendor } from './src/utils/configGenerator';
+import { autoPlaceProject, nextFreePosition, hasValidLayout, nodesOverlap } from './src/utils/autoPlace';
 import { LabProject } from './src/types';
 import { NetworkSimulator } from './src/engine/net/core/NetworkSimulator';
 import type { LabProjectLike } from './src/engine/net/core/Topology';
@@ -377,6 +380,165 @@ console.log('\n== 5. Integritas data ==');
       })
     );
     check(`${name} node punya model dari katalog`, tpl.nodes.every((n) => getModelsForVendor(n.vendor).some((m) => m.label === n.model)));
+  }
+
+  // Registry template + guard auto-layout untuk semua entry.
+  const seenTplIds = new Set<string>();
+  for (const t of TEMPLATES) {
+    check(`template registry "${t.id}" id unik`, !seenTplIds.has(t.id));
+    seenTplIds.add(t.id);
+    check(`template registry "${t.id}" punya title+subtitle`, !!t.title && !!t.subtitle);
+    const nodeIds = new Set(t.data.nodes.map((n) => n.id));
+    check(
+      `template registry "${t.id}" edge valid`,
+      t.data.edges.every((e) => nodeIds.has(e.sourceNodeId) && nodeIds.has(e.targetNodeId))
+    );
+    check(
+      `template registry "${t.id}" edge→port valid`,
+      t.data.edges.every((e) => {
+        const s = t.data.nodes.find((n) => n.id === e.sourceNodeId);
+        const t2 = t.data.nodes.find((n) => n.id === e.targetNodeId);
+        return !!s?.ports.find((p) => p.id === e.sourcePortId) && !!t2?.ports.find((p) => p.id === e.targetPortId);
+      })
+    );
+    check(
+      `template registry "${t.id}" node punya model katalog`,
+      t.data.nodes.every((n) => getModelsForVendor(n.vendor).some((m) => m.label === n.model))
+    );
+    // Auto-placement: template dimuat ke canvas selalu punya posisi rapi.
+    check(`autoPlace(template "${t.id}") layout valid`, hasValidLayout(autoPlaceProject(t.data).nodes));
+  }
+  check('getTemplate("basic") mengembalikan registry basic', getTemplate('basic')?.id === 'basic');
+  check('getTemplate("office") ada', getTemplate('office')?.id === 'office');
+  check('getTemplate("wireless") ada', getTemplate('wireless')?.id === 'wireless');
+  check('getTemplate("routing") ada', getTemplate('routing')?.id === 'routing');
+  check('getTemplate("tidak-ada") undefined', getTemplate('tidak-ada') === undefined);
+
+  // Preset Labs — diperlakukan sama dengan template (load ke canvas).
+  for (const lab of PRESET_LABS) {
+    const built = lab.build();
+    check(`preset "${lab.id}" punya node`, built.nodes.length > 0);
+    const nodeIds = new Set(built.nodes.map((n) => n.id));
+    check(
+      `preset "${lab.id}" edge valid`,
+      built.edges.every((e) => nodeIds.has(e.sourceNodeId) && nodeIds.has(e.targetNodeId))
+    );
+    check(
+      `preset "${lab.id}" edge→port valid`,
+      built.edges.every((e) => {
+        const s = built.nodes.find((n) => n.id === e.sourceNodeId);
+        const t = built.nodes.find((n) => n.id === e.targetNodeId);
+        return !!s?.ports.find((p) => p.id === e.sourcePortId) && !!t?.ports.find((p) => p.id === e.targetPortId);
+      })
+    );
+    check(
+      `preset "${lab.id}" node punya model katalog`,
+      built.nodes.every((n) => getModelsForVendor(n.vendor).some((m) => m.label === n.model))
+    );
+    // Preset wajib berfungsi di canvas: setelah auto-placement layout rapi.
+    check(`autoPlace(preset "${lab.id}") layout valid`, hasValidLayout(autoPlaceProject(built).nodes));
+  }
+
+  // Auto-placement util: deterministik + anti-tumpuk.
+  {
+    const base: LabProject = {
+      version: '1.0',
+      metadata: { name: 't', author: 't', description: '', createdAt: '', updatedAt: '' },
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { id: 'a', name: 'A', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 200, y: 200 }, ports: [] },
+        { id: 'b', name: 'B', vendor: 'mikrotik', model: 'hEX (RB750Gr3)', deviceType: 'router', position: { x: 200, y: 200 }, ports: [] },
+      ],
+      edges: [],
+    };
+    check('nodesOverlap mendeteksi titik sama', nodesOverlap(base.nodes[0], base.nodes[1]) === true);
+    check('hasValidLayout false saat tumpang-tindih', hasValidLayout(base.nodes) === false);
+    const placed = autoPlaceProject(base);
+    check('autoPlaceProject menghasilkan layout valid', hasValidLayout(placed.nodes) === true);
+    check('autoPlaceProject deterministik (2x sama)', JSON.stringify(autoPlaceProject(base)) === JSON.stringify(placed));
+    // Posisi node pertama yang sudah ada tidak digeser? (di sini layout
+    // invalid → semua diatur ulang; cek tidak ada dua posisi sama).
+    const posKeys = new Set(placed.nodes.map((n) => `${n.position.x}:${n.position.y}`));
+    check('autoPlaceProject posisi unik', posKeys.size === placed.nodes.length);
+    const p1 = nextFreePosition([{ id: 'x', name: 'x', vendor: 'linux', model: 'Debian 12 (Bookworm)', deviceType: 'pc', position: { x: 200, y: 200 }, ports: [] }], { x: 200, y: 200 });
+    check('nextFreePosition menghindari slot terisi', !(p1.x === 200 && p1.y === 200));
+    const p2 = nextFreePosition([], { x: 200, y: 200 });
+    check('nextFreePosition origin bebas = tepat di origin', p2.x === 200 && p2.y === 200);
+    check('nextFreePosition deterministik', JSON.stringify(p1) === JSON.stringify(nextFreePosition([{ id: 'x', name: 'x', vendor: 'linux', model: 'Debian 12 (Bookworm)', deviceType: 'pc', position: { x: 200, y: 200 }, ports: [] }], { x: 200, y: 200 })));
+  }
+
+  // Config Generator — semua vendor menghasilkan script autentik + non-kosong.
+  {
+    const base: ConfigGeneratorParams = {
+      vendor: 'cisco_ios',
+      hostname: 'Router-Utama',
+      wanIface: 'Gi0/0/0',
+      wanIp: '203.0.113.2/30',
+      wanGateway: '203.0.113.1',
+      lanSubnet: '192.168.1.0/24',
+      lanGatewayIp: '192.168.1.1',
+      dhcpPoolRange: '192.168.1.100-192.168.1.200',
+      dnsServers: ['8.8.8.8', '1.1.1.1'],
+      vlans: [],
+      enableNat: true,
+      enableFirewall: true,
+      routing: 'static',
+      lanIface: 'Gi0/0/1',
+    };
+    const vendors = Object.keys(VENDOR_META) as ConfigVendor[];
+    check('config generator: 12 vendor terdaftar', vendors.length === 12);
+    check(
+      'config generator: setiap vendor punya iface default',
+      vendors.every((v) => !!VENDOR_DEFAULT_IFACES[v]?.wan && !!VENDOR_DEFAULT_IFACES[v]?.lan)
+    );
+    for (const v of vendors) {
+      const d = VENDOR_DEFAULT_IFACES[v];
+      const { filename, content } = generateConfig({
+        ...base,
+        vendor: v,
+        wanIface: d.wan,
+        lanIface: d.lan,
+      });
+      check(`config gen[${v}] filename berekstensi`, filename.includes('.'));
+      check(`config gen[${v}] konten non-kosong`, content.length > 40);
+      check(`config gen[${v}] memuat hostname`, content.includes('Router-Utama'));
+      check(`config gen[${v}] memuat IP WAN`, content.includes('203.0.113.2') || content.includes('203.0.113.2/30'));
+      check(`config gen[${v}] memuat IP LAN`, content.includes('192.168.1.1'));
+      check(`config gen[${v}] memuat gateway upstream`, content.includes('203.0.113.1'));
+      // Vendor dengan rentang start/stop eksplisit wajib menyebut ujung pool.
+      // Vendor bergaya Cisco/Huawei menyatakan DHCP via network/subnet saja.
+      const poolVendors: ConfigVendor[] = ['mikrotik', 'juniper', 'fortinet', 'vyos', 'ubiquiti', 'openwrt', 'linux'];
+      if (poolVendors.includes(v)) {
+        check(`config gen[${v}] memuat rentang DHCP`, content.includes('192.168.1.100'));
+      } else {
+        check(`config gen[${v}] memiliki blok DHCP/subnet LAN`, content.includes('192.168.1.0') || content.includes('192.168.1.1'));
+      }
+      check(`config gen[${v}] menyebut DNS 8.8.8.8`, content.includes('8.8.8.8'));
+      check(`config gen[${v}] deterministik`, generateConfig({ ...base, vendor: v, wanIface: d.wan, lanIface: d.lan }).content === content);
+      check(`config gen[${v}] tidak ada placeholder tersisa`, !content.includes('undefined') && !content.includes('[object'));
+    }
+    // OSPF + VLAN + NAT/FW off harus mengubah output (bukan hardcode).
+    for (const v of vendors) {
+      const d = VENDOR_DEFAULT_IFACES[v];
+      const ospfContent = generateConfig({
+        ...base, vendor: v, wanIface: d.wan, lanIface: d.lan, routing: 'ospf',
+        vlans: [{ id: 10, name: 'MARKETING' }, { id: 20, name: 'FINANCE' }],
+      }).content;
+      check(`config gen[${v}] OSPF+VLAN mengubah output`, ospfContent !== generateConfig({ ...base, vendor: v, wanIface: d.wan, lanIface: d.lan }).content);
+      check(`config gen[${v}] menyebut network LAN saat OSPF`, ospfContent.includes('192.168.1'));
+    }
+    // Vendor NX-OS: DHCP server tidak tersedia → jujur (bukan fake pool).
+    check('config gen[cisco_nxos] jujur soal DHCP server', /DHCP server eksternal/i.test(generateConfig({ ...base, vendor: 'cisco_nxos', wanIface: 'Ethernet1/1', lanIface: 'Ethernet1/2' }).content));
+    // Cisco IOS memuat blok autentik.
+    const cisco = generateConfig(base).content;
+    check('config gen[cisco_ios] ada `configure terminal`', cisco.includes('configure terminal'));
+    check('config gen[cisco_ios] ada `router ospf` saat ospf', generateConfig({ ...base, routing: 'ospf' }).content.includes('router ospf 1'));
+    check('config gen[mikrotik] format RouterOS', generateConfig({ ...base, vendor: 'mikrotik', wanIface: 'ether1', lanIface: 'ether2' }).content.includes('/ip address add'));
+    check('config gen[fortinet] blok config/edit/end', /config system interface[\s\S]*edit /.test(generateConfig({ ...base, vendor: 'fortinet', wanIface: 'wan1', lanIface: 'port1' }).content));
+    check('config gen[juniper] gaya `set `', generateConfig({ ...base, vendor: 'juniper', wanIface: 'ge-0/0/0', lanIface: 'ge-0/0/1' }).content.includes('set system host-name'));
+    check('config gen[openwrt] gaya `uci set`', generateConfig({ ...base, vendor: 'openwrt', wanIface: 'eth1', lanIface: 'eth0' }).content.includes('uci set network.lan'));
+    check('config gen[windows] gaya `netsh`', generateConfig({ ...base, vendor: 'windows', wanIface: 'Ethernet0', lanIface: 'Ethernet1' }).content.includes('netsh interface ipv4 set address'));
+    check('config gen[linux] gaya iproute2', generateConfig({ ...base, vendor: 'linux', wanIface: 'eth0', lanIface: 'eth1' }).content.includes('ip addr add'));
   }
 }
 
@@ -3903,6 +4065,87 @@ console.log('\n== 30. Audit remediation regressions ==');
     const lease = sim.grantDhcpLease('pc1', 'ether1');
     check('30f relay lintas subnet: pc1 dapat lease dari pool r2', !!lease && lease.ip.startsWith('10.0.3.1') && lease.prefix === 24, JSON.stringify(lease));
     check('30f lease tercatat', sim.getLeases().some((l) => l.nodeId === 'pc1' && l.ip === lease?.ip));
+  }
+}
+
+// ── 31. RIPng (IPv6 distance-vector) + protocol event log ──────────────────
+console.log('\n== 31. RIPng & protocol event log ==');
+{
+  const p31 = (n: number, seed: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `port${i + 1}`, name: `ether${i + 1}`, status: 'up', macAddress: `00:0c:29:${seed}:${(i + 1).toString().padStart(2, '0')}:01` }));
+  const n31 = (id: string, name: string, seed: string, ports: number) => ({ id, name, vendor: 'mikrotik', model: 'router', deviceType: 'router', ports: p31(ports, seed) });
+  const e31 = (id: string, a: string, ap: string, b: string, bp: string) => ({ id, sourceNodeId: a, sourcePortId: ap, targetNodeId: b, targetPortId: bp, cableType: 'copper_straight' });
+  const ripng2 = (seed1: string, seed2: string) => {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [n31('r1', 'R1', seed1, 2), n31('r2', 'R2', seed2, 2)],
+      edges: [e31('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig6('r1', { ether1: '2001:db8:12::1/64', ether2: '2001:db8:1::1/64' }, []);
+    sim.applyNodeConfig6('r2', { ether1: '2001:db8:12::2/64', ether2: '2001:db8:2::1/64' }, []);
+    return sim;
+  };
+
+  // 31a. Dua router RIPng berbagi segmen: tiap sisi belajar prefix LAN peer.
+  {
+    const sim = ripng2('31a1', '31a2');
+    sim.setRouting('r1', { ripng: { enabled: true, networks: ['ether1', 'ether2'] } });
+    sim.setRouting('r2', { ripng: { enabled: true, networks: ['ether1', 'ether2'] } });
+    sim.computeDynamicRoutes();
+    const r1r = sim.getIpv6Info('r1')?.routes || [];
+    const l1 = r1r.find((r) => r.dst === '2001:db8:2::/64');
+    check('31a r1 belajar 2001:db8:2::/64 via RIPng (gw 2001:db8:12::2)', !!l1 && l1.gateway === '2001:db8:12::2', JSON.stringify(r1r));
+    const r2r = sim.getIpv6Info('r2')?.routes || [];
+    const l2 = r2r.find((r) => r.dst === '2001:db8:1::/64');
+    check('31a r2 belajar 2001:db8:1::/64 via RIPng (gw 2001:db8:12::1)', !!l2 && l2.gateway === '2001:db8:12::1', JSON.stringify(r2r));
+    const ev = sim.getProtocolEvents();
+    check('31a event ripng.route-installed untuk r1', ev.some((e) => e.type === 'ripng.route-installed' && e.nodeId === 'r1'), JSON.stringify(ev.map((e) => `${e.type}@${e.nodeId}`)));
+  }
+
+  // 31b. RIPng dimatikan di satu sisi → rute dicabut (tanpa rute basi).
+  {
+    const sim = ripng2('31b1', '31b2');
+    sim.setRouting('r1', { ripng: { enabled: true, networks: ['ether1', 'ether2'] } });
+    sim.setRouting('r2', { ripng: { enabled: true, networks: ['ether1', 'ether2'] } });
+    sim.computeDynamicRoutes();
+    check('31b sebelum mati r1 punya rute ke LAN r2', (sim.getIpv6Info('r1')?.routes || []).some((r) => r.dst === '2001:db8:2::/64'));
+    sim.setRouting('r2', { ripng: { enabled: false, networks: [] } });
+    sim.computeDynamicRoutes();
+    check('31b RIPng r2 mati → rute r1 dicabut', !(sim.getIpv6Info('r1')?.routes || []).some((r) => r.dst === '2001:db8:2::/64'), JSON.stringify(sim.getIpv6Info('r1')?.routes));
+  }
+
+  // 31c. OSPF timer mismatch → event ospf.timer-mismatch + tetap 2-Way.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [n31('r1', 'R1', '31c1', 2), n31('r2', 'R2', '31c2', 2)],
+      edges: [e31('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30' }, []);
+    sim.setRouting('r1', { ospf: { enabled: true, networks: ['192.168.1.0/30'] } });
+    sim.setRouting('r2', { ospf: { enabled: true, networks: ['192.168.1.0/30'], helloInterval: 10000, deadInterval: 10000 } });
+    sim.computeDynamicRoutes();
+    const ev = sim.getProtocolEvents();
+    check('31c event ospf.timer-mismatch dipancarkan', ev.some((e) => e.type === 'ospf.timer-mismatch'), JSON.stringify(ev.map((e) => e.type)));
+    check('31c timer mismatch tetap 2-Way (tidak Full)', (sim.getOspfNeighbors('r1')[0]?.state || '') === '2-Way', JSON.stringify(sim.getOspfNeighbors('r1')));
+  }
+
+  // 31d. BGP hold-time mismatch → stuck OpenConfirm + event bgp.hold-time-mismatch.
+  {
+    const sim = new NetworkSimulator();
+    sim.syncTopology({
+      nodes: [n31('r1', 'R1', '31d1', 2), n31('r2', 'R2', '31d2', 2)],
+      edges: [e31('e1', 'r1', 'port1', 'r2', 'port1')],
+    });
+    sim.applyNodeConfig('r1', { ether1: '192.168.1.1/30' }, []);
+    sim.applyNodeConfig('r2', { ether1: '192.168.1.2/30' }, []);
+    sim.setBgp('r1', { asn: 65001, peers: [{ remoteAs: 65002, remoteAddr: '192.168.1.2' }], networks: [], holdTime: 90 });
+    sim.setBgp('r2', { asn: 65002, peers: [{ remoteAs: 65001, remoteAddr: '192.168.1.1' }], networks: [], holdTime: 180 });
+    for (let i = 0; i < 8; i++) sim.computeDynamicRoutes({ rounds: 1 });
+    check('31d BGP hold-time mismatch → stuck OpenConfirm', sim.getBgpNeighborStates('r1')[0]?.state === 'OpenConfirm', JSON.stringify(sim.getBgpNeighborStates('r1')));
+    const ev = sim.getProtocolEvents();
+    check('31d event bgp.hold-time-mismatch dipancarkan', ev.some((e) => e.type === 'bgp.hold-time-mismatch'), JSON.stringify(ev.map((e) => e.type)));
   }
 }
 

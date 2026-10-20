@@ -7,7 +7,6 @@
 //   dan port yang belum dikonfigurasi.
 // ============================================================
 
-import JSZip from 'jszip';
 import type { LabProject, LabNode, LabEdge, VendorType } from '../types';
 
 export interface ExportWarning {
@@ -263,6 +262,8 @@ export function downloadText(filename: string, content: string): void {
 
 /** Unduh semua running-config sebagai satu arsip ZIP. */
 export async function downloadZip(entries: NodeExportEntry[]): Promise<void> {
+  // JSZip dimuat dinamis agar tidak masuk chunk utama (hanya butuh saat export ZIP).
+  const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   for (const e of entries) zip.file(e.filename, e.content);
   const blob = await zip.generateAsync({ type: 'blob' });

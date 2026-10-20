@@ -21,7 +21,7 @@ import {
   OspfNeighborInfo,
   TcpConnectionInfo,
 } from '../compat';
-import { BgpRibEntry, EigrpNeighborView, EigrpTopologyEntry, OspfLsa } from '../services/RoutingProtocolEngine';
+import { BgpRibEntry, EigrpNeighborView, EigrpTopologyEntry, OspfLsa, ProtocolEvent } from '../services/RoutingProtocolEngine';
 import { qosStatsOf } from '../services/QosService';
 
 export class Observation {
@@ -228,6 +228,11 @@ export class Observation {
       neighbors: this.ctx.routingProtocols.getEigrpNeighbors(nodeId),
       topology: this.ctx.routingProtocols.getEigrpTopology(nodeId),
     };
+  }
+
+  /** Log event protokol (OSPF/BGP/RIPng) — urutan deterministik, bounded. */
+  getProtocolEvents(): ProtocolEvent[] {
+    return this.ctx.routingProtocols.getProtocolEvents();
   }
 
   getTcpConnections(nodeId: string): TcpConnectionInfo[] {

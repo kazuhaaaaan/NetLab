@@ -901,8 +901,8 @@ export const Canvas: React.FC<CanvasProps> = ({
               <circle cx={x1} cy={y1} r="4" fill={edgeStrokeColor} />
               <circle cx={x2} cy={y2} r="4" fill={edgeStrokeColor} />
 
-              {/* Label interface di ujung kabel (kabel terpilih) */}
-              {isSelected && (
+              {/* Label interface di ujung kabel (kabel terpilih atau mode viewPorts aktif) */}
+              {(isSelected || viewPorts) && (
                 <>
                   <text
                     x={x1}
@@ -958,7 +958,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 if (!r) return null;
                 const color = readinessColor(r.status);
                 const by = edgeMy - 20;
-                const showLabel = isHoveredEdge || isSelected || r.status !== "connected";
+                const showLabel = isHoveredEdge || isSelected || viewPorts || r.status !== "connected";
                 const label = r.label.length > 40 ? `${r.label.slice(0, 39)}…` : r.label;
                 return (
                   <g pointerEvents="none">
@@ -1436,8 +1436,8 @@ export const Canvas: React.FC<CanvasProps> = ({
               {/* Panel Lihat Port — kabel terhubung di port mana saja */}
               {hoverNodeId === node.id || (viewPorts && isSelected) ? (
                 <div
-                  className={`absolute top-0 z-50 w-52 bg-[#0F1015]/95 backdrop-blur-md border border-cyan-500/30 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100 ${
-                    viewPorts ? 'border-slate-500/40' : ''
+                  className={`absolute top-0 z-50 w-52 bg-[#0F1015]/95 backdrop-blur-md rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100 border ${
+                    viewPorts ? 'border-cyan-500/40' : 'border-slate-500/40'
                   }`}
                   style={{
                     left: node.position.x + viewport.x + NODE_W > (containerRef.current?.clientWidth ?? 900) - 200
@@ -1848,21 +1848,35 @@ export const Canvas: React.FC<CanvasProps> = ({
         </div>
       )}
 
-      {/* Mobile Floating Action Bar — tombol kunci kanvas ringkas
+      {/* Mobile Floating Action Bar — tombol mata & kunci kanvas ringkas
           (zoom in/out/reset sudah ada di MobileToolbar bawah) */}
       {isMobile && (
-        <button
-          onClick={onToggleLock}
-          aria-label={locked ? 'Buka kunci kanvas' : 'Kunci kanvas'}
-          title={locked ? 'Kanvas terkunci' : 'Kunci kanvas'}
-          className={`absolute right-3 top-3 z-30 w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900/90 border shadow-xl backdrop-blur-md transition ${
-            locked
-              ? 'border-amber-500/50 text-amber-300'
-              : 'border-slate-700/80 text-slate-200'
-          }`}
-        >
-          {locked ? <LockFilled /> : <LockOpen />}
-        </button>
+        <div className="absolute right-3 top-3 z-30 flex flex-col space-y-1.5">
+          <button
+            onClick={() => onToggleViewPorts?.()}
+            aria-label={viewPorts ? 'Sembunyikan label kabel' : 'Lihat label kabel'}
+            title={viewPorts ? 'Sembunyikan label kabel' : 'Lihat port & kabel terhubung'}
+            className={`w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900/90 border shadow-xl backdrop-blur-md transition ${
+              viewPorts
+                ? 'border-cyan-500/50 text-cyan-300'
+                : 'border-slate-700/80 text-slate-200'
+            }`}
+          >
+            {viewPorts ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={onToggleLock}
+            aria-label={locked ? 'Buka kunci kanvas' : 'Kunci kanvas'}
+            title={locked ? 'Kanvas terkunci' : 'Kunci kanvas'}
+            className={`w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900/90 border shadow-xl backdrop-blur-md transition ${
+              locked
+                ? 'border-amber-500/50 text-amber-300'
+                : 'border-slate-700/80 text-slate-200'
+            }`}
+          >
+            {locked ? <LockFilled /> : <LockOpen />}
+          </button>
+        </div>
       )}
     </div>
   );

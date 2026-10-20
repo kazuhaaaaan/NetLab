@@ -1158,6 +1158,31 @@ export const ciscoiosEntries: ChainEntry[] = [
     return cmdResult;
   },
   },
+  {
+    name: 'b900-ripng-enable',
+    order: 900,
+    vendors: 'all',
+    cap: 'ripng',
+    match: ({ rawInput, vendorId }) => (/^ipv6\s+router\s+rip(?:\s+\S+)?$/i.test(rawInput.trim()) && vendorId === 'cisco_ios'),
+    run: ({ mem }) => {
+      mem.routing.ripng.enabled = true;
+      mem.currentProto = 'ripng';
+      mem.currentDhcpPool = '';
+      return { raw: '' };
+    },
+  },
+  {
+    name: 'b901-ripng-interface',
+    order: 901,
+    vendors: 'all',
+    cap: 'ripng',
+    match: ({ rawInput, vendorId, mem }) => (/^ipv6\s+rip\s+\S+\s+enable$/i.test(rawInput.trim()) && !!mem.currentIface && vendorId === 'cisco_ios'),
+    run: ({ mem, context }) => {
+      const iface = resolveIfaceName(context?.ports, mem.currentIface) || mem.currentIface;
+      if (!mem.routing.ripng.networks.includes(iface)) mem.routing.ripng.networks.push(iface);
+      return { raw: '' };
+    },
+  },
 ];
 
 registerEntries('cisco_ios', ciscoiosEntries);

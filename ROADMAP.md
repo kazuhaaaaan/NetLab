@@ -42,10 +42,26 @@
 - [x] Live animated packet trace playback on topology canvas (warna kabel per
       jenis, paket hijau sukses / merah gagal, badge status node)
 
-## Phase 5: Penyempurnaan (Rencana Berikutnya)
-- [ ] Realisme protokol: BGP/OSPF timer & event-driven state transitions,
-      EIGRP, RIPng
-- [ ] Pustaka skenario lab resmi (10+ preset siap pakai dengan grading)
-- [ ] Performance: virtualisasi canvas & code-splitting chunk (`>500 kB`)
-- [ ] Lint/typecheck CI + coverage test engine publik
-- [ ] Dokumentasi API publik per package (typedoc)
+## Phase 5: Penyempurnaan — SELESAI (v2.2.0)
+- [x] Realisme protokol: BGP/OSPF timer & event-driven state transitions,
+      EIGRP, RIPng (event log `getProtocolEvents`, timer/hello/dead OSPF &
+      hold-time BGP, RIPng distance-vector IPv6)
+- [x] Pustaka skenario lab resmi (20 skenario `/test` dengan assertion/grading
+      + 4 preset topologi siap pakai)
+- [x] Performance: virtualisasi canvas & code-splitting chunk (`>500 kB` →
+      semua chunk < 500 kB: manualChunks + lazy `WinDesktopModal` + dynamic
+      import `jszip`)
+- [x] Lint/typecheck CI + coverage test engine publik (gate c8:
+      lines/statements 75, functions 72, branches 68)
+- [x] Dokumentasi API publik per package (typedoc → `docs/api/`)
+
+## Phase 6: Template & Tooling — SELESAI (v2.3.0)
+- [x] Template topologi tambahan + registry `TEMPLATES` (Basic, Kantor Kecil,
+      Wireless, Routing lintas vendor, Enterprise) terpakai di Navbar & mobile
+- [x] Config Generator untuk **semua 12 vendor** (MikroTik, Cisco IOS/NX-OS,
+      Juniper, Huawei, Ubiquiti, VyOS, FortiOS, Aruba, OpenWrt, Linux, Windows)
+      dengan interface default per vendor + hint pemuatan
+- [x] Auto-placement perangkat di canvas (`autoPlace.ts`, deterministik,
+      anti tumpang-tindih) untuk template, preset, dan tambah-device
+- [x] Perbaikan preset labs (model katalog + port konsisten)
+- [x] Tes: 2688 passed, 0 failed; conformance semua vendor lulus floor

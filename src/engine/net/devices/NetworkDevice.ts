@@ -109,7 +109,7 @@ export class NetworkDevice {
   natRules: NatRule[] = [];
   webServer: WebServerState | null = null;
   routingCfg: Record<string, { enabled?: boolean; networks?: string[]; asn?: number; peers?: unknown[]; interfaceCosts?: Record<string, number>; passiveInterfaces?: string[]; routerId?: string; areas?: Record<string, number>; helloInterval?: number; deadInterval?: number }> = {};
-  bgpCfg: { asn: number; peers: { remoteAs: number; remoteAddr: string; localPref?: number }[]; networks: string[]; routerId?: string } | null = null;
+  bgpCfg: { asn: number; peers: { remoteAs: number; remoteAddr: string; localPref?: number }[]; networks: string[]; routerId?: string; holdTime?: number } | null = null;
   /** Agent SNMP (community, hidup/mati) — diisi via CLI + engine. */
   snmpAgent: SnmpAgentConfig | null = null;
   /** Basis uptime (ticks) untuk sysUpTime.0. */
@@ -398,6 +398,15 @@ export class NetworkDevice {
 
   clearDynamicRoutes(): void {
     this.routing.removeByKind('dynamic');
+  }
+
+  /** Pasang rute dinamis IPv6 (RIPng/OSPFv3-like) pada tabel IPv6. */
+  addDynamicRoute6(dst: string, gateway: string): void {
+    this.ipv6Routing.addRoute({ dst, gateway, iface: null, kind: 'dynamic' });
+  }
+
+  clearDynamicRoutes6(): void {
+    this.ipv6Routing.removeByKind('dynamic');
   }
 
   addVirtualIface(name: string, parentPortName: string, vlanId: number, mac: string): void {

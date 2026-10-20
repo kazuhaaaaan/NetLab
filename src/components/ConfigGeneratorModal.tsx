@@ -1,6 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { X, Copy, Check, Download, RefreshCw, Sparkles, Radio, FileCode2 } from 'lucide-react';
-import { generateConfig, type ConfigGeneratorParams } from '../utils/configGenerator';
+import { X, Copy, Check, Download, RefreshCw, Sparkles } from 'lucide-react';
+import {
+  generateConfig,
+  VENDOR_DEFAULT_IFACES,
+  VENDOR_META,
+  type ConfigGeneratorParams,
+  type ConfigVendor,
+} from '../utils/configGenerator';
 import {
   validateHostname,
   validateIpv4,
@@ -126,9 +132,9 @@ const HighlightedCode: React.FC<{ code: string }> = ({ code }) => {
 };
 
 export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open, onClose }) => {
-  const [vendor, setVendor] = useState<ConfigGeneratorParams['vendor']>('mikrotik');
+  const [vendor, setVendor] = useState<ConfigVendor>('mikrotik');
   const [hostname, setHostname] = useState('Router-Utama');
-  const [wanIface, setWanIface] = useState('ether1');
+  const [wanIface, setWanIface] = useState(VENDOR_DEFAULT_IFACES.mikrotik.wan);
   const [wanIp, setWanIp] = useState('203.0.113.2/30');
   const [wanGateway, setWanGateway] = useState('203.0.113.1');
   const [lanSubnet, setLanSubnet] = useState('192.168.1.0/24');
@@ -141,11 +147,18 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
   const [enableNat, setEnableNat] = useState(true);
   const [enableFirewall, setEnableFirewall] = useState(true);
   const [routing, setRouting] = useState<'static' | 'ospf'>('static');
-  const [lanIface, setLanIface] = useState('ether2');
+  const [lanIface, setLanIface] = useState(VENDOR_DEFAULT_IFACES.mikrotik.lan);
 
   const [errors, setErrors] = useState<FieldErrors>(emptyErrors());
   const [copied, setCopied] = useState(false);
   const [viewRaw, setViewRaw] = useState(false);
+
+  /** Ganti vendor + set interface default vendor tsb. */
+  const selectVendor = (v: ConfigVendor) => {
+    setVendor(v);
+    setWanIface(VENDOR_DEFAULT_IFACES[v].wan);
+    setLanIface(VENDOR_DEFAULT_IFACES[v].lan);
+  };
 
   // Validasi real-time setiap field berubah
   const updateField = (key: keyof FieldErrors, value: string, validator: (v: string) => string | null) => {
@@ -202,7 +215,7 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
 
   const downloadScript = () => {
     const blob = new Blob([generated.content], {
-      type: vendor === 'mikrotik' ? 'text/plain' : 'text/plain',
+      type: 'text/plain',
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -246,7 +259,8 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
             <div>
               <h2 className="text-sm font-bold text-slate-100">Automatic Router Config Generator</h2>
               <p className="text-[10px] text-slate-500 font-mono">
-                MikroTik RouterOS (.rsc) · Cisco IOS (.txt) — murni client-side
+                12 vendor (MikroTik · Cisco IOS/NX-OS · Juniper · Huawei · EdgeOS · VyOS · FortiOS ·
+                Aruba · OpenWrt · Linux · Windows) — murni client-side
               </p>
             </div>
           </div>
@@ -266,28 +280,25 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
               <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">
                 Vendor / Platform
               </label>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  onClick={() => setVendor('mikrotik')}
-                  className={`flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-semibold transition ${
-                    vendor === 'mikrotik'
-                      ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
-                      : 'bg-[#1A1D24] border-[#2B2D31] text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Radio className="w-3.5 h-3.5" /> MikroTik RouterOS
-                </button>
-                <button
-                  onClick={() => setVendor('cisco')}
-                  className={`flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-semibold transition ${
-                    vendor === 'cisco'
-                      ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
-                      : 'bg-[#1A1D24] border-[#2B2D31] text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <FileCode2 className="w-3.5 h-3.5" /> Cisco IOS
-                </button>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(Object.keys(VENDOR_META) as ConfigVendor[]).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => selectVendor(v)}
+                    className={`px-2 py-1.5 rounded-lg border text-[10.5px] font-semibold transition truncate ${
+                      vendor === v
+                        ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
+                        : 'bg-[#1A1D24] border-[#2B2D31] text-slate-400 hover:text-slate-200'
+                    }`}
+                    title={VENDOR_META[v].label}
+                  >
+                    {VENDOR_META[v].label}
+                  </button>
+                ))}
               </div>
+              <p className="mt-1 text-[10px] text-slate-500">
+                Output: <span className="text-slate-400">{VENDOR_META[vendor].hint}</span>
+              </p>
             </div>
 
             <FieldInput
@@ -531,7 +542,7 @@ export const ConfigGeneratorModal: React.FC<ConfigGeneratorModalProps> = ({ open
             </div>
 
             <div className="px-4 py-2 border-t border-[#2B2D31] text-[9.5px] font-mono text-slate-600 shrink-0 select-text">
-              Tip: pada MikroTik muat via <span className="text-emerald-400">/import file-name={generated.filename}</span> · pada Cisco tempel di mode <span className="text-emerald-400">configure terminal</span>
+              Tip: pada {VENDOR_META[vendor].label} {VENDOR_META[vendor].hint}
             </div>
           </div>
         </div>

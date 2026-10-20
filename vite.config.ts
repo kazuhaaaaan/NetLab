@@ -12,6 +12,33 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      // Pecah bundle agar tidak ada chunk > 500 kB (gzip ≈ 400 kB).
+      // Grup app code satu arah: ai-modules → net-engine/net-vendors → vendor-*.
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (id.includes('node_modules')) {
+              if (id.includes('lucide-react')) return 'vendor-icons';
+              if (id.includes('jszip')) return 'vendor-jszip';
+              if (id.includes('motion')) return 'vendor-motion';
+              if (
+                id.includes('/node_modules/react-dom/') ||
+                id.includes('/node_modules/react/') ||
+                id.includes('/node_modules/scheduler/')
+              ) {
+                return 'vendor-react';
+              }
+              return 'vendor-misc';
+            }
+            if (id.includes('/packages/vendors/') || id.includes('/packages/cli/')) return 'net-vendors';
+            if (id.includes('/src/engine/')) return 'net-engine';
+            if (id.includes('/src/modules/ai/')) return 'ai-modules';
+            return undefined;
+          },
+        },
+      },
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify: file watching is disabled to prevent flickering during agent edits.

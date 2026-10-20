@@ -882,6 +882,26 @@ export const mikrotikEntries: ChainEntry[] = [
     return cmdResult;
   },
   },
+  {
+    name: 'b900-ripng',
+    order: 900,
+    vendors: 'all',
+    cap: 'ripng',
+    match: ({ rawInput, vendorId }) => (/^\/routing\s+ripng\s+(instance|network)\s+add\s+/i.test(rawInput.trim()) && vendorId === 'mikrotik'),
+    run: ({ rawInput, mem }) => {
+      const raw = rawInput.trim();
+      const kind = raw.match(/^\/routing\s+ripng\s+(instance|network)\s+add/i)?.[1]?.toLowerCase();
+      mem.currentDhcpPool = '';
+      if (kind === 'instance') {
+        mem.routing.ripng.enabled = true;
+        return { raw: '' };
+      }
+      const net = raw.match(/network=(\S+)/i)?.[1];
+      if (!net) return { raw: '% Usage: /routing ripng network add network=<prefix>' };
+      if (!mem.routing.ripng.networks.includes(net)) mem.routing.ripng.networks.push(net);
+      return { raw: '' };
+    },
+  },
 ];
 
 registerEntries('mikrotik', mikrotikEntries);

@@ -29,6 +29,7 @@ import {
   Play
 } from 'lucide-react';
 import { LabProject } from '../types';
+import { TEMPLATES } from '../data/templates';
 
 interface NavbarProps {
   project: LabProject;
@@ -356,29 +357,22 @@ export const Navbar: React.FC<NavbarProps> = ({
             <>
               <div className="fixed inset-0 z-[55]" onClick={toggleTemplateMenu} />
               <div
-                className="fixed z-[60] w-56 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl p-1 font-sans animate-in fade-in zoom-in-95 duration-150"
+                className="fixed z-[60] w-64 max-h-[70vh] overflow-y-auto bg-slate-900 border border-slate-700 rounded-lg shadow-2xl p-1 font-sans animate-in fade-in zoom-in-95 duration-150"
                 style={{ left: tplMenuPos.left, top: tplMenuPos.top }}
               >
-                <button
-                  onClick={() => {
-                    onLoadTemplate('basic');
-                    toggleTemplateMenu();
-                  }}
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
-                >
-                  <div className="font-semibold text-slate-100">Mudah: Router + Switch + PC</div>
-                  <div className="text-[10px] text-slate-400">MikroTik gateway, switch Cisco, 1 PC</div>
-                </button>
-                <button
-                  onClick={() => {
-                    onLoadTemplate('enterprise');
-                    toggleTemplateMenu();
-                  }}
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
-                >
-                  <div className="font-semibold text-slate-100">ISP / Data Center Lab</div>
-                  <div className="text-[10px] text-slate-400">16 perangkat: ISP, firewall, core, server</div>
-                </button>
+                {TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => {
+                      onLoadTemplate(t.id);
+                      toggleTemplateMenu();
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs hover:bg-slate-800 rounded text-slate-200"
+                  >
+                    <div className="font-semibold text-slate-100">{t.title}</div>
+                    <div className="text-[10px] text-slate-400">{t.subtitle}</div>
+                  </button>
+                ))}
               </div>
             </>
           )}

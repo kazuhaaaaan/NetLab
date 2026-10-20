@@ -128,6 +128,8 @@ export interface RoutingMemoryShape {
     deadInterval?: number;
   };
   rip?: { enabled?: boolean; networks?: string[] };
+  /** RIPng (RIP next generation untuk IPv6) — hop-count ≤ 15, UDP 521. */
+  ripng?: { enabled?: boolean; networks?: string[] };
   eigrp?: { enabled?: boolean; asn?: number; networks?: string[] };
 }
 
@@ -144,6 +146,12 @@ export interface BgpConfig {
   networks: string[];
   /** Router-ID BGP untuk tie-break best-path (default: IP interface pertama). */
   routerId?: string;
+  /**
+   * Hold time BGP dalam detik (RFC 4271 §6.5; default 180). Bila di-set di
+   * kedua ujung dan nilainya berbeda — atau <3 detik — session tetap di
+   * OpenConfirm (event bgp.hold-time-mismatch), tidak pernah Established.
+   */
+  holdTime?: number;
 }
 
 export interface WebServerInfo {

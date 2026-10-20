@@ -251,6 +251,12 @@ export function handleDeletion(rawInput: string, normalized: NormalizedCommand, 
         if (mem.natRules.length === before) return err('% No matching NAT translation');
         return { raw: '' };
       }
+      // no ipv6 router rip [name] → matikan RIPng + cabut network statement
+      if (/^no\s+ipv6\s+router\s+rip(?:\s+\S+)?\s*$/i.test(input)) {
+        mem.routing.ripng = { enabled: false, networks: [] };
+        if (mem.currentProto === 'ripng') mem.currentProto = '';
+        return { raw: '' };
+      }
       // no router ospf <pid> | no router bgp <asn> | no router rip | no router eigrp <as>
       const routerMatch = input.match(/^no\s+router\s+(ospf|bgp|rip|eigrp)(?:\s+\d+)?\s*$/i);
       if (routerMatch) {
