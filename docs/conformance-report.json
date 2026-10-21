@@ -5,17 +5,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 96,
+      "protocols": 96.8,
       "validation": 100,
       "testing": 100,
-      "total": 99.2,
+      "total": 99.4,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 13,
         "matrixPass": 13,
         "matrixFail": 0,
-        "featureBreadth": 82.9,
+        "featureBreadth": 84,
         "cliProbes": {
           "passed": 10,
           "total": 10
@@ -23,6 +23,7 @@
         "protocolSet": [
           "ospf",
           "rip",
+          "ripng",
           "bgp",
           "vrrp"
         ],
@@ -46,7 +47,7 @@
         "matrixTotal": 7,
         "matrixPass": 7,
         "matrixFail": 0,
-        "featureBreadth": 94.3,
+        "featureBreadth": 94.7,
         "cliProbes": {
           "passed": 13,
           "total": 13
@@ -54,6 +55,7 @@
         "protocolSet": [
           "ospf",
           "rip",
+          "ripng",
           "eigrp",
           "bgp",
           "vrrp"
@@ -68,24 +70,23 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 96.8,
+      "protocols": 96,
       "validation": 100,
       "testing": 100,
-      "total": 99.4,
+      "total": 99.2,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 7,
         "matrixPass": 7,
         "matrixFail": 0,
-        "featureBreadth": 84.3,
+        "featureBreadth": 78.7,
         "cliProbes": {
           "passed": 6,
           "total": 6
         },
         "protocolSet": [
           "ospf",
-          "rip",
           "eigrp",
           "bgp",
           "vrrp"
@@ -100,17 +101,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 90,
+      "protocols": 92,
       "validation": 100,
       "testing": 100,
-      "total": 98,
+      "total": 98.4,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 82.9,
+        "featureBreadth": 84,
         "cliProbes": {
           "passed": 8,
           "total": 8
@@ -118,6 +119,7 @@
         "protocolSet": [
           "ospf",
           "rip",
+          "ripng",
           "bgp",
           "vrrp"
         ],
@@ -131,17 +133,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 90,
+      "protocols": 92,
       "validation": 100,
       "testing": 100,
-      "total": 98,
+      "total": 98.4,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 82.9,
+        "featureBreadth": 84,
         "cliProbes": {
           "passed": 8,
           "total": 8
@@ -149,6 +151,7 @@
         "protocolSet": [
           "ospf",
           "rip",
+          "ripng",
           "bgp",
           "vrrp"
         ],
@@ -162,17 +165,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 90,
+      "protocols": 88.8,
       "validation": 100,
       "testing": 100,
-      "total": 98,
+      "total": 97.8,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 82.9,
+        "featureBreadth": 81.3,
         "cliProbes": {
           "passed": 7,
           "total": 7
@@ -180,6 +183,7 @@
         "protocolSet": [
           "ospf",
           "rip",
+          "ripng",
           "bgp",
           "vrrp"
         ],
@@ -193,17 +197,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 90,
+      "protocols": 88.8,
       "validation": 100,
       "testing": 100,
-      "total": 98,
+      "total": 97.8,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 82.9,
+        "featureBreadth": 81.3,
         "cliProbes": {
           "passed": 7,
           "total": 7
@@ -211,6 +215,7 @@
         "protocolSet": [
           "ospf",
           "rip",
+          "ripng",
           "bgp",
           "vrrp"
         ],
@@ -234,7 +239,7 @@
         "matrixTotal": 9,
         "matrixPass": 9,
         "matrixFail": 0,
-        "featureBreadth": 68.6,
+        "featureBreadth": 64,
         "cliProbes": {
           "passed": 5,
           "total": 5
@@ -263,7 +268,7 @@
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 72.9,
+        "featureBreadth": 68,
         "cliProbes": {
           "passed": 7,
           "total": 7
@@ -293,7 +298,7 @@
         "matrixTotal": 8,
         "matrixPass": 8,
         "matrixFail": 0,
-        "featureBreadth": 61.4,
+        "featureBreadth": 57.3,
         "cliProbes": {
           "passed": 7,
           "total": 7
@@ -319,7 +324,7 @@
         "matrixTotal": 7,
         "matrixPass": 7,
         "matrixFail": 0,
-        "featureBreadth": 48.6,
+        "featureBreadth": 45.3,
         "cliProbes": {
           "passed": 8,
           "total": 8
@@ -345,7 +350,7 @@
         "matrixTotal": 4,
         "matrixPass": 4,
         "matrixFail": 0,
-        "featureBreadth": 25.7,
+        "featureBreadth": 24,
         "cliProbes": {
           "passed": 5,
           "total": 5
@@ -366,12 +371,12 @@
   "globals": {
     "engineChecks": 74,
     "enginePassed": 74,
-    "interopChecks": 527,
-    "interopPassed": 527,
+    "interopChecks": 541,
+    "interopPassed": 541,
     "matrixPass": 105,
     "matrixFail": 0,
     "matrixSkip": 0
   },
-  "generatedAt": "2026-08-25T03:25:59.643Z",
-  "commit": "218188a"
+  "generatedAt": "2026-10-21T20:20:33.318Z",
+  "commit": "1ae58d6"
 }
