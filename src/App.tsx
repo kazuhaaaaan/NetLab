@@ -2032,13 +2032,20 @@ onOpenTerminal={handleOpenTerminal}
         open={isPresetLabOpen}
         onClose={() => setIsPresetLabOpen(false)}
         onLoadLab={(lab) => {
-          const built = autoPlaceProject(lab.build());
-          // Seed IP preset → memori vendor agar CLI melihat konfigurasi awal
-          // dan mirror canvas tetap konsisten (audit R2). autoPlaceProject
-          // menjamin setiap perangkat punya posisi rapi (anti tumpang-tindih).
-          seedMemoryIpsFromProject(built, vendorDispatcher);
-          setProjectWithHistory(built);
-          setIsPresetLabOpen(false);
+          console.log('[PRESET] load clicked', lab.id);
+          try {
+            const builtRaw = lab.build();
+            console.log('[PRESET] built', builtRaw?.nodes?.length);
+            const built = autoPlaceProject(builtRaw);
+            console.log('[PRESET] placed');
+            seedMemoryIpsFromProject(built, vendorDispatcher);
+            console.log('[PRESET] seeded');
+            setProjectWithHistory(built);
+            setIsPresetLabOpen(false);
+            console.log('[PRESET] done');
+          } catch (e:any) {
+            console.error('[PRESET] ERR', e);
+          }
         }}
       />
 
