@@ -1660,7 +1660,7 @@ export default function App() {
           onOpenAiChat={() => setIsAiChatOpen(true)}
           onOpenConfigGen={() => setIsConfigGenOpen(true)}
           onOpenConfigLib={() => setIsConfigLibOpen(true)}
-          onOpenPresetLabs={() => setIsPresetLabOpen(true)}
+          onOpenPresetLabs={() => { console.log('[PRESET] open navbar'); setIsPresetLabOpen(true); }}
           onOpenNetSim={() => setIsNetSimOpen(true)}
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -1702,7 +1702,7 @@ export default function App() {
           onOpenAiChat={() => setIsAiChatOpen(true)}
           onOpenConfigGen={() => setIsConfigGenOpen(true)}
           onOpenConfigLib={() => setIsConfigLibOpen(true)}
-          onOpenPresetLabs={() => setIsPresetLabOpen(true)}
+          onOpenPresetLabs={() => { console.log('[PRESET] open mobileheader'); setIsPresetLabOpen(true); }}
           onOpenNetSim={() => setIsNetSimOpen(true)}
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
