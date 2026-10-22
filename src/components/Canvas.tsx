@@ -1301,7 +1301,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 opacity: node.powered === false ? 0.45 : 1,
                 filter: node.powered === false ? 'grayscale(0.7)' : undefined,
               }}
-              className={`absolute flex flex-col items-center justify-center p-2 rounded-lg group transition-all ${
+              className={`absolute flex flex-col items-center justify-center p-2 rounded-lg group transition-all relative ${
                 node.powered === false ? '' : activeTool === 'cable' ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
               } ${
                 cableWizard?.sourceNodeId === node.id
@@ -1378,59 +1378,63 @@ export const Canvas: React.FC<CanvasProps> = ({
               {/* Tombol aksi node — SEMBUNYI hanya saat node ini sedang jadi sumber/tujuan
                   wizard kabel, agar tidak menutupi titik port. */}
               {!(isWizardSource || isWizardTarget) && (
-                <>
+                <div className="absolute inset-0 pointer-events-none">
               {/* Open CLI button — selalu terlihat agar tidak "hilang".
                   Windows OS → ikon desktop (buka GUI), selainnya → terminal. */}
               <button
-                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
+                className="absolute -left-7 top-1/2 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
+                  e.preventDefault();
                   onOpenTerminal(node.id);
                 }}
                 title={node.vendor === 'windows' ? 'Buka Desktop Windows (GUI)' : 'Open CLI'}
               >
-                {node.vendor === 'windows' ? <Monitor className="w-3 h-3" /> : <TerminalSquare className="w-3 h-3" />}
+                {node.vendor === 'windows' ? <Monitor className="w-2.5 h-2.5" /> : <TerminalSquare className="w-2.5 h-2.5" />}
               </button>
 
               {/* Connect Cable button — mulai wizard kabel (klik perangkat juga bisa di mode cable) */}
               <button 
-                className="absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
+                className="absolute -right-7 top-1/2 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
+                  e.preventDefault();
                   setCableWizard({ sourceNodeId: node.id, sourcePortId: null, cableType: null, targetNodeId: null });
                 }}
                 title="Sambungkan Kabel"
               >
-                <Plus className="w-3 h-3" />
+                <Plus className="w-2.5 h-2.5" />
               </button>
 
               {/* Ports button — buka Port Inspector (desktop: drawer, mobile: sheet penuh) */}
               <button
-                className="absolute -right-8 top-[calc(50%-18px)] -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
+                className="absolute -right-7 top-[calc(50%-16px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
+                  e.preventDefault();
                   onOpenPorts?.(node.id);
                 }}
                 title={`Port Connections — ${node.name}`}
                 aria-label={`Lihat port ${node.name}`}
               >
-                <ListChecks className="w-3 h-3" />
+                <ListChecks className="w-2.5 h-2.5" />
               </button>
 
               {/* Hapus semua kabel node ini — hanya muncul jika node punya kabel */}
               {nodeCableCount > 0 && (
                 <button
-                  className="absolute -right-8 top-[calc(50%+18px)] -translate-y-1/2 p-1.5 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-[60] opacity-90 hover:opacity-100"
+                  className="absolute -right-7 top-[calc(50%+16px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                   onClick={(e) => {
                     e.stopPropagation();
+                    e.preventDefault();
                     onDeleteNodeCables?.(node.id);
                   }}
                   title={`Hapus semua kabel node ini (${nodeCableCount})`}
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-2.5 h-2.5" />
                 </button>
               )}
-                </>
+                </div>
               )}
               
               {/* Panel Lihat Port — kabel terhubung di port mana saja */}
