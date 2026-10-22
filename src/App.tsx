@@ -2042,6 +2042,20 @@ onOpenTerminal={handleOpenTerminal}
             console.log('[PRESET] seeded');
             setProjectWithHistory(built);
             setIsPresetLabOpen(false);
+            // Sinkronkan ke simulation engine biar perangkat kebaca setelah dimuat
+            window.setTimeout(() => {
+              try {
+                for (const n of built.nodes) {
+                  syncNodeToEngine(n.id);
+                }
+                syncDhcpPools();
+                simEngineRef.current?.syncTopology(built);
+                refreshLinkReadiness();
+                console.log('[PRESET] synced to engine');
+              } catch (e) {
+                console.error('[PRESET] sync err', e);
+              }
+            }, 0);
             console.log('[PRESET] done');
           } catch (e:any) {
             console.error('[PRESET] ERR', e);
