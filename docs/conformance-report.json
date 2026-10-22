@@ -101,17 +101,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 92,
+      "protocols": 96.8,
       "validation": 100,
       "testing": 100,
-      "total": 98.4,
+      "total": 99.4,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 84,
+        "featureBreadth": 88,
         "cliProbes": {
           "passed": 8,
           "total": 8
@@ -133,17 +133,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 92,
+      "protocols": 96.8,
       "validation": 100,
       "testing": 100,
-      "total": 98.4,
+      "total": 99.4,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 84,
+        "featureBreadth": 88,
         "cliProbes": {
           "passed": 8,
           "total": 8
@@ -165,17 +165,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 88.8,
+      "protocols": 93.6,
       "validation": 100,
       "testing": 100,
-      "total": 97.8,
+      "total": 98.7,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 81.3,
+        "featureBreadth": 85.3,
         "cliProbes": {
           "passed": 7,
           "total": 7
@@ -197,17 +197,17 @@
       "cli": 100,
       "config": 100,
       "engine": 100,
-      "protocols": 88.8,
+      "protocols": 93.6,
       "validation": 100,
       "testing": 100,
-      "total": 97.8,
+      "total": 98.7,
       "pass": true,
       "deviceClass": "router",
       "detail": {
         "matrixTotal": 10,
         "matrixPass": 10,
         "matrixFail": 0,
-        "featureBreadth": 81.3,
+        "featureBreadth": 85.3,
         "cliProbes": {
           "passed": 7,
           "total": 7
@@ -239,7 +239,7 @@
         "matrixTotal": 9,
         "matrixPass": 9,
         "matrixFail": 0,
-        "featureBreadth": 64,
+        "featureBreadth": 68,
         "cliProbes": {
           "passed": 5,
           "total": 5
@@ -350,7 +350,7 @@
         "matrixTotal": 4,
         "matrixPass": 4,
         "matrixFail": 0,
-        "featureBreadth": 24,
+        "featureBreadth": 32,
         "cliProbes": {
           "passed": 5,
           "total": 5
@@ -371,12 +371,12 @@
   "globals": {
     "engineChecks": 74,
     "enginePassed": 74,
-    "interopChecks": 541,
-    "interopPassed": 541,
+    "interopChecks": 471,
+    "interopPassed": 471,
     "matrixPass": 105,
     "matrixFail": 0,
     "matrixSkip": 0
   },
-  "generatedAt": "2026-10-21T20:20:33.318Z",
-  "commit": "1ae58d6"
+  "generatedAt": "2026-10-22T22:53:22.391Z",
+  "commit": "8e3ba85"
 }
