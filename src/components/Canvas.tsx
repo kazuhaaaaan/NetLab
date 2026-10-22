@@ -110,16 +110,9 @@ function getPortAnchor(node: LabNode, portId: string): { x: number; y: number } 
   };
 }
 
-/** Cable endpoint on a node: clamped inside the device body so cables
- *  visually plug INTO the device instead of floating at the port dot
- *  (ports on the lower slots stick out below the node otherwise). */
+/** Cable endpoint on a node: attach exactly to the port position. */
 function getEdgeAnchor(node: LabNode, portId: string): { x: number; y: number } {
-  const a = getPortAnchor(node, portId);
-  const inset = 6;
-  return {
-    x: Math.min(Math.max(a.x, node.position.x + inset), node.position.x + NODE_W - inset),
-    y: Math.min(Math.max(a.y, node.position.y + inset), node.position.y + NODE_H - inset),
-  };
+  return getPortAnchor(node, portId);
 }
 
 import { GestureType, GestureDetail, InteractionEngine } from "../engine/InteractionEngine";
@@ -1350,15 +1343,15 @@ export const Canvas: React.FC<CanvasProps> = ({
                 const portConn = getPortConnection(node.id, port.id);
                 const isWizardPort = isWizardSource && cableWizard?.sourcePortId === port.id;
                 return (
-                  <div
-                    key={port.id}
-                    data-node-id={node.id}
-                    data-port-id={port.id}
-                    title={`${port.name} (${port.status})${portConn ? ` → ${portConn}` : ' — kosong'}`}
-                    className={`absolute w-4 h-4 flex items-center justify-center z-40 cursor-crosshair touch-none ${
-                      side === "left" ? "-left-2" : "-right-2"
-                    } ${nodeInCableFlow ? "opacity-100" : "opacity-0"} transition-opacity`}
-                    style={{ top: `${PORT_TOP + slot * PORT_GAP - 8}px` }}
+                <div
+                  key={port.id}
+                  data-node-id={node.id}
+                  data-port-id={port.id}
+                  title={`${port.name} (${port.status})${portConn ? ` → ${portConn}` : ' — kosong'}`}
+                  className={`absolute w-4 h-4 flex items-center justify-center z-40 cursor-crosshair touch-none ${
+                    side === "left" ? "-left-2" : "-right-2"
+                  } ${nodeInCableFlow ? "opacity-100" : "opacity-0"} transition-opacity pointer-events-auto`}
+                  style={{ top: `${PORT_TOP + slot * PORT_GAP - 8}px` }}
                   >
                     <span
                       className={`w-2.5 h-2.5 rounded-full border transition-all ${
