@@ -42,7 +42,7 @@ import { runCliFidelityDetailed } from '../tests/unit/cliFidelity.test';
 
 const WEIGHTS = { cli: 0.2, config: 0.2, engine: 0.2, protocols: 0.2, validation: 0.1, testing: 0.1 };
 const FLOORS = { cli: 85, config: 85, engine: 90, protocols: 85, validation: 80, testing: 90 };
-const STATUS_WEIGHT: Record<string, number> = { supported: 100, partial: 60, 'parser-only': 25, 'not-supported': 0 };
+const STATUS_WEIGHT: Record<string, number> = { supported: 100, partial: 60, 'parser-only': 25, 'not-supported': 0, 'not-applicable': 0 };
 const PROTOCOL_CAPS = ['ospf', 'rip', 'eigrp', 'bgp', 'vrrp'] as const;
 
 /** Probe input-tidak-valid per vendor: harus DITOLAK tanpa mengubah state. */

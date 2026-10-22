@@ -34,6 +34,11 @@ const STATUS_META: Record<CapabilityStatus, { label: string; cls: string; dot: s
     cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
     dot: 'bg-rose-400',
   },
+  'not-applicable': {
+    label: 'N/A',
+    cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
+    dot: 'bg-slate-400',
+  },
 };
 
 const CAP_ORDER: CapabilityKey[] = [
@@ -137,7 +142,7 @@ export const VendorCapabilitiesModal: React.FC<VendorCapabilitiesModalProps> = (
                           <span
                             title={meta.label}
                             className={`inline-flex w-2.5 h-2.5 rounded-full ${meta.dot} ${
-                              st === 'not-supported' ? 'opacity-60' : ''
+                              st === 'not-supported' || st === 'not-applicable' ? 'opacity-60' : ''
                             }`}
                           />
                         </td>

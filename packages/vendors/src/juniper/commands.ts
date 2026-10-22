@@ -188,6 +188,58 @@ cmdResult = juniperCommand(rawInput, context, mem);
   },
   },
   {
+    name: 'b171-vrrp',
+    order: 171,
+    vendors: 'all',
+    cap: 'vrrp',
+    match: ({ rawInput, vendorId, mem }) => (vendorId === 'juniper' && /vrrp-group/i.test(rawInput) && !!mem.currentIface),
+    run: ({ rawInput, vendorId, mem }) => {
+      let cmdResult: CommandResult | undefined;
+      const mGrp = rawInput.match(/vrrp-group\s+(\d+)/i);
+      const mVip = rawInput.match(/virtual-address\s+(\S+)/i);
+      const mPri = rawInput.match(/priority\s+(\d+)/i);
+      if (mGrp && mem.currentIface) {
+        const vrid = parseInt(mGrp[1], 10);
+        let g = mem.fhrpGroups.find((x) => x.vrid === vrid && x.interface === mem.currentIface);
+        if (!g) {
+          g = { virtualAddress: '0.0.0.0/24', interface: mem.currentIface, vrid, priority: 100 };
+          mem.fhrpGroups.push(g);
+        }
+        if (mVip) g.virtualAddress = mVip[1].includes('/') ? mVip[1] : `${mVip[1]}/24`;
+        if (mPri) g.priority = parseInt(mPri[1], 10);
+        cmdResult = { raw: '' };
+      }
+      return cmdResult;
+    },
+  },
+  {
+    name: 'b172-vrrp-set',
+    order: 172,
+    vendors: 'all',
+    cap: 'vrrp',
+    match: ({ rawInput, vendorId }) => (vendorId === 'juniper' && /^set\s+interfaces\s+.*vrrp-group/i.test(rawInput)),
+    run: ({ rawInput, vendorId, mem }) => {
+      let cmdResult: CommandResult | undefined;
+      const mIface = rawInput.match(/^set\s+interfaces\s+(\S+)/i);
+      const iface = mIface ? mIface[1] : mem.currentIface;
+      const mGrp = rawInput.match(/vrrp-group\s+(\d+)/i);
+      const mVip = rawInput.match(/virtual-address\s+(\S+)/i);
+      const mPri = rawInput.match(/priority\s+(\d+)/i);
+      if (mGrp && iface) {
+        const vrid = parseInt(mGrp[1], 10);
+        let g = mem.fhrpGroups.find((x) => x.vrid === vrid && x.interface === iface);
+        if (!g) {
+          g = { virtualAddress: '0.0.0.0/24', interface: iface, vrid, priority: 100 };
+          mem.fhrpGroups.push(g);
+        }
+        if (mVip) g.virtualAddress = mVip[1].includes('/') ? mVip[1] : `${mVip[1]}/24`;
+        if (mPri) g.priority = parseInt(mPri[1], 10);
+        cmdResult = { raw: '' };
+      }
+      return cmdResult;
+    },
+  },
+  {
     name: 'b900-ripng',
     order: 130,
     vendors: 'all',

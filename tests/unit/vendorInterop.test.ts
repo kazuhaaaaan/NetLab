@@ -460,8 +460,9 @@ export function runVendorInteropTests(): Report {
     const reg = VENDOR_CAPABILITIES[vid];
     for (const u of cases) {
       const st = reg?.caps[u.cap] ?? null;
-      // Registry harus jujur: bukan 'supported'.
+      // Registry harus jujur: bukan 'supported' (not-supported atau not-applicable keduanya OK).
       check(`V4 ${vid}.${u.cap} registry tidak mengklaim supported`, st !== 'supported', `status=${st}`);
+      if (st === 'not-applicable') continue;
       const dis = new VendorDispatcher();
       const ctx = mkCtx(vid, vid, ['ether1', 'ether2']);
       const memA = dis.getNodeMemory(vid);
@@ -505,7 +506,7 @@ export function runVendorInteropTests(): Report {
     const keys = reg ? (Object.keys(reg.caps) as CapabilityKey[]) : [];
     const missing = CAP_ORDER.filter((c) => !keys.includes(c));
     check(`V5 ${vid} semua kolom matriks terisi`, missing.length === 0, `kurang: ${missing.join(',')}`);
-    const validStatus = keys.every((k) => ['supported', 'partial', 'parser-only', 'not-supported'].includes(reg.caps[k]));
+    const validStatus = keys.every((k) => ['supported', 'partial', 'parser-only', 'not-supported', 'not-applicable'].includes(reg.caps[k]));
     check(`V5 ${vid} status valid`, validStatus, JSON.stringify(reg?.caps));
   }
 

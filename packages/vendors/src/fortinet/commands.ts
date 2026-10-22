@@ -103,6 +103,32 @@ cmdResult = fortinetCommand(rawInput, context, mem);
     return cmdResult;
   },
   },
+  {
+    name: 'b54-vrrp',
+    order: 54,
+    vendors: 'all',
+    cap: 'vrrp',
+    match: ({ rawInput, vendorId, mem }) => (vendorId === 'fortinet' && /vrrp/i.test(rawInput) && !!mem.currentIface),
+    run: ({ rawInput, vendorId, mem }) => {
+      let cmdResult: CommandResult | undefined;
+      const mVip = rawInput.match(/virtual-ip\s+(\S+)/i) || rawInput.match(/virdip\s+(\S+)/i);
+      const mVr = rawInput.match(/vrid\s+(\d+)/i) || rawInput.match(/vrrp-id\s+(\d+)/i);
+      const mPri = rawInput.match(/priority\s+(\d+)/i);
+      if (mem.currentIface) {
+        let g = mem.fhrpGroups.find((x) => x.interface === mem.currentIface);
+        if (!g) {
+          g = { virtualAddress: '0.0.0.0/24', interface: mem.currentIface, vrid: mVr ? parseInt(mVr[1], 10) : 1, priority: 100 };
+          mem.fhrpGroups.push(g);
+        }
+        if (mVr) g.vrid = parseInt(mVr[1], 10);
+        if (mVip) g.virtualAddress = mVip[1].includes('/') ? mVip[1] : `${mVip[1]}/24`;
+        if (mPri) g.priority = parseInt(mPri[1], 10);
+        cmdResult = { raw: '' };
+      }
+      return cmdResult;
+    },
+  },
+
 ];
 
 registerEntries('fortinet', fortinetEntries);

@@ -192,8 +192,69 @@ cmdResult = huaweiCommand(rawInput, context, mem);
   },
   },
   {
-    name: 'b104',
+    name: 'b103-vrrp',
+    order: 103,
+    vendors: 'all',
+    cap: 'vrrp',
+    match: ({ rawInput, vendorId, mem }) => (vendorId === 'huawei' && /^vrrp\s+vrid\s+(\d+)/i.test(rawInput.trim()) && !!mem.currentIface),
+    run: ({ rawInput, vendorId, mem }) => {
+      let cmdResult: CommandResult | undefined;
+      const m = rawInput.trim().match(/^vrrp\s+vrid\s+(\d+)/i);
+      if (m && mem.currentIface) {
+        const vrid = parseInt(m[1], 10);
+        if (!mem.fhrpGroups.find((x) => x.vrid === vrid && x.interface === mem.currentIface)) {
+          mem.fhrpGroups.push({ virtualAddress: '0.0.0.0/24', interface: mem.currentIface, vrid, priority: 100 });
+        }
+        cmdResult = { raw: '' };
+      }
+      return cmdResult;
+    },
+  },
+  {
+    name: 'b104-vrrp-virtual',
     order: 104,
+    vendors: 'all',
+    cap: 'vrrp',
+    match: ({ rawInput, vendorId, mem }) => (vendorId === 'huawei' && /^virtual-ip\s+(\S+)/i.test(rawInput.trim()) && !!mem.currentIface),
+    run: ({ rawInput, vendorId, mem }) => {
+      let cmdResult: CommandResult | undefined;
+      const m = rawInput.trim().match(/^virtual-ip\s+(\S+)/i);
+      if (m && mem.currentIface) {
+        let g = mem.fhrpGroups.find((x) => x.interface === mem.currentIface);
+        if (!g) {
+          g = { virtualAddress: '0.0.0.0/24', interface: mem.currentIface, vrid: 1, priority: 100 };
+          mem.fhrpGroups.push(g);
+        }
+        g.virtualAddress = m[1].includes('/') ? m[1] : `${m[1]}/24`;
+        cmdResult = { raw: '' };
+      }
+      return cmdResult;
+    },
+  },
+  {
+    name: 'b105-vrrp-priority',
+    order: 105,
+    vendors: 'all',
+    cap: 'vrrp',
+    match: ({ rawInput, vendorId, mem }) => (vendorId === 'huawei' && /^priority\s+(\d+)/i.test(rawInput.trim()) && !!mem.currentIface),
+    run: ({ rawInput, vendorId, mem }) => {
+      let cmdResult: CommandResult | undefined;
+      const m = rawInput.trim().match(/^priority\s+(\d+)/i);
+      if (m && mem.currentIface) {
+        let g = mem.fhrpGroups.find((x) => x.interface === mem.currentIface);
+        if (!g) {
+          g = { virtualAddress: '0.0.0.0/24', interface: mem.currentIface, vrid: 1, priority: 100 };
+          mem.fhrpGroups.push(g);
+        }
+        g.priority = parseInt(m[1], 10);
+        cmdResult = { raw: '' };
+      }
+      return cmdResult;
+    },
+  },
+  {
+    name: 'b110',
+    order: 110,
     vendors: 'all',
     match: ({ rawInput, vendorId, mem, context, normalized, payload }) => (/^(ospf|rip)\b/i.test(rawInput.trim()) && vendorId === 'huawei'),
     run: ({ rawInput, vendorId, mem, context, normalized, nodeId, payload, registry }) => {

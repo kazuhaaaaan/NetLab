@@ -54,8 +54,46 @@ export const windowsEntries: ChainEntry[] = [
         raw: `The filename, directory name, or volume label syntax is incorrect. (interface "${name}" not found)`,
       });
 
+      // ── netsh interface ipv6 set address ──────────────────────────────
+      let m = input.match(/^netsh\s+interface\s+ipv6\s+set\s+address\s+name="?([^"]+?)"?\s+(\S+)(?:\s+(\d+))?(?:\s+(\S+))?$/i);
+      if (m) {
+        const iface = m[1].trim();
+        const addr = m[2];
+        const prefix = m[3] || '64';
+        if (!ifaceExists(iface)) cmdResult = unknownIface(iface);
+        else         if (addr.includes(':')) {
+          (mem as any).configuredIps6 = (mem as any).configuredIps6 || {};
+          (mem as any).configuredIps6[iface] = `${addr}/${prefix}`;
+          cmdResult = { raw: '' };
+        } else {
+          cmdResult = { raw: `The parameter is incorrect: ${addr}` };
+        }
+      }
+      if (!cmdResult) {
+        m = input.match(/^netsh\s+interface\s+ipv6\s+add\s+route\s+(\S+)\s+"?([^"]+?)"?\s+(\S+)(?:\s+(\d+))?$/i);
+        if (m) {
+          const prefix = m[1];
+          const gw = m[3];
+          if (!(mem as any).routes6) (mem as any).routes6 = [];
+          if (!(mem as any).routes6.some((r: any) => r.dst === prefix && r.gateway === gw)) {
+            (mem as any).routes6.push({ dst: prefix, gateway: gw });
+          }
+          cmdResult = { raw: '' };
+        }
+      }
+      if (!cmdResult) {
+        m = input.match(/^netsh\s+interface\s+ipv6\s+set\s+dnsservers\s+name="?([^"]+?)"?\s+static\s+(\S+)/i);
+        if (m) {
+          const dns = m[2];
+          if (!(mem as any).dnsServers6) (mem as any).dnsServers6 = [];
+          if (!(mem as any).dnsServers6.includes(dns)) (mem as any).dnsServers6.push(dns);
+          if (!mem.dnsServers.includes(dns)) mem.dnsServers.push(dns);
+          cmdResult = { raw: '' };
+        }
+      }
+
       // ── netsh interface ipv4 set address ──────────────────────────────
-      let m = input.match(/^netsh\s+interface\s+ipv4\s+set\s+address\s+name="?([^"]+?)"?\s+static\s+(\S+)\s+(\S+)(?:\s+(\S+))?(?:\s+\d+)?$/i);
+      if (!cmdResult) m = input.match(/^netsh\s+interface\s+ipv4\s+set\s+address\s+name="?([^"]+?)"?\s+static\s+(\S+)\s+(\S+)(?:\s+(\S+))?(?:\s+\d+)?$/i);
       if (m) {
         const iface = m[1].trim();
         const ip = m[2];
