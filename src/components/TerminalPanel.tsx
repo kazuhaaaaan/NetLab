@@ -385,8 +385,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   return (
     <div
-      className={`fixed bottom-0 left-0 right-0 z-30 bg-slate-950 border-t border-slate-800 flex flex-col font-mono shadow-2xl transition-all duration-300 ${
-        isMaximized ? 'h-full' : 'h-80 md:h-96'
+      className={`fixed bottom-0 left-0 right-0 z-[60] bg-slate-950 border-t border-slate-800 flex flex-col font-mono shadow-2xl transition-all duration-300 ${
+        isMaximized ? 'h-[85vh]' : 'h-[35vh]'
       }`}
     >
       {/* Header / Tabs */}
