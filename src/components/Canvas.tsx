@@ -89,8 +89,8 @@ export type ActiveTool = "select" | "pan" | "cable" | "delete";
 // Fixed node geometry - used for port anchors & cable rendering
 export const NODE_W = 96;
 export const NODE_H = 88;
-const PORT_TOP = 20;
-const PORT_GAP = 18;
+const PORT_TOP = 48;
+const PORT_GAP = 16;
 
 /** World-space anchor of a node's port (left/right edge). Falls back to center. */
 function getPortAnchor(node: LabNode, portId: string): { x: number; y: number } {
@@ -1375,7 +1375,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               {/* Open CLI button — selalu terlihat agar tidak "hilang".
                   Windows OS → ikon desktop (buka GUI), selainnya → terminal. */}
               <button
-                className="absolute -left-7 top-6 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                className="absolute -left-7 top-12 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1388,7 +1388,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Connect Cable button — mulai wizard kabel (klik perangkat juga bisa di mode cable) */}
               <button 
-                className="absolute -right-7 top-6 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                className="absolute -right-7 top-12 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1401,7 +1401,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Ports button — buka Port Inspector (desktop: drawer, mobile: sheet penuh) */}
               <button
-                className="absolute -right-7 top-[calc(24px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                className="absolute -right-7 top-[calc(30px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1416,7 +1416,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               {/* Hapus semua kabel node ini — hanya muncul jika node punya kabel */}
               {nodeCableCount > 0 && (
                 <button
-                  className="absolute -right-7 top-[calc(42px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                  className="absolute -right-7 top-[calc(48px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                   onClick={(e) => {
                     e.stopPropagation();
                     e.preventDefault();
