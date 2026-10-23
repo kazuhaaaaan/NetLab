@@ -89,7 +89,7 @@ export type ActiveTool = "select" | "pan" | "cable" | "delete";
 // Fixed node geometry - used for port anchors & cable rendering
 export const NODE_W = 96;
 export const NODE_H = 88;
-const PORT_TOP = 48;
+const PORT_TOP = 40;
 const PORT_GAP = 16;
 
 /** World-space anchor of a node's port (left/right edge). Falls back to center. */
