@@ -1294,7 +1294,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 opacity: node.powered === false ? 0.45 : 1,
                 filter: node.powered === false ? 'grayscale(0.7)' : undefined,
               }}
-              className={`absolute flex flex-col items-center justify-center p-2 rounded-lg group transition-all relative ${
+              className={`absolute flex flex-col items-center justify-start pt-2.5 rounded-lg group transition-all relative ${
                 node.powered === false ? '' : activeTool === 'cable' ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
               } ${
                 cableWizard?.sourceNodeId === node.id
@@ -1312,7 +1312,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                   : ""
               }`}
             >
-              <div className="pointer-events-none flex items-center justify-center w-12 h-12 bg-[#1A1D24] border border-[#2B2D31] rounded-lg shadow-sm mb-2 group-hover:border-[#4B4D51] transition-colors relative">
+              <div className="pointer-events-none flex items-center justify-center w-12 h-12 bg-[#1A1D24] border border-[#2B2D31] rounded-lg shadow-sm mb-1.5 group-hover:border-[#4B4D51] transition-colors relative">
                 {getNodeIcon(node.deviceType)}
                 {/* Status indicator: hijau normal · kuning sedang diuji · merah mati/gagal */}
                 <span
@@ -1375,7 +1375,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               {/* Open CLI button — selalu terlihat agar tidak "hilang".
                   Windows OS → ikon desktop (buka GUI), selainnya → terminal. */}
               <button
-                className="absolute -left-7 top-1/2 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                className="absolute -left-7 top-6 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-emerald-400 hover:text-white hover:border-emerald-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1388,7 +1388,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Connect Cable button — mulai wizard kabel (klik perangkat juga bisa di mode cable) */}
               <button 
-                className="absolute -right-7 top-1/2 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                className="absolute -right-7 top-6 -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-sky-400 hover:text-white hover:border-blue-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1401,7 +1401,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Ports button — buka Port Inspector (desktop: drawer, mobile: sheet penuh) */}
               <button
-                className="absolute -right-7 top-[calc(50%-16px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                className="absolute -right-7 top-[calc(24px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1416,7 +1416,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               {/* Hapus semua kabel node ini — hanya muncul jika node punya kabel */}
               {nodeCableCount > 0 && (
                 <button
-                  className="absolute -right-7 top-[calc(50%+16px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                  className="absolute -right-7 top-[calc(42px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-rose-800 rounded-md text-rose-400 hover:text-white hover:border-rose-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
                   onClick={(e) => {
                     e.stopPropagation();
                     e.preventDefault();
