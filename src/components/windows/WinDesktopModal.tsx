@@ -9,6 +9,7 @@ import { WinWebsiteEditor } from './WinWebsiteEditor';
 import { WinFileExplorer } from './WinFileExplorer';
 import { WinNotepad } from './WinNotepad';
 import { WinTerminal } from './WinTerminal';
+import { WinSpeedtest } from './WinSpeedtest';
 import type { WinWindowDef } from './types';
 import { cascadePos, closeWin, fitWindow, focusWin, minimizeWin, openWin, topWin, toggleWin } from '../../modules/windows/windowManager';
 
@@ -125,6 +126,7 @@ export const WinDesktopModal: React.FC<WinDesktopModalProps> = ({
       { id: 'terminal', label: 'Terminal', icon: TerminalSquare, color: 'text-purple-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'terminal', title: 'Terminal', icon: TerminalSquare, width: 640, height: 420, content: <WinTerminal {...p} /> }) },
       { id: 'editor', label: 'Website Editor', icon: Code2, color: 'text-emerald-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'editor', title: 'Website Editor', icon: Code2, width: 640, height: 460, content: <WinWebsiteEditor {...p} /> }) },
       { id: 'network', label: 'Network Settings', icon: Settings, color: 'text-amber-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'network', title: 'Network Settings', icon: Settings, width: 620, height: 400, content: <WinNetworkSettings {...p} /> }) },
+      { id: 'speedtest', label: 'NetSpeedTest', icon: Gauge, color: 'text-cyan-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'speedtest', title: 'NetSpeedTest', icon: Gauge, width: 460, height: 420, content: <WinSpeedtest {...p} /> }) },
       { id: 'docs', label: 'My Documents', icon: Folder, color: 'text-cyan-300', window: (p: WinHostPropsLike): WinWindowDef => ({ id: 'docs', title: 'My Documents', icon: Folder, width: 620, height: 400, content: <WinFileExplorer {...p} /> }) },
       {
         id: 'notepad',
