@@ -379,6 +379,64 @@ const lab9 = (): LabProject => ({
 });
 
 
+
+// ── Lab 11: Windows Client + Dual-ISP Load Balancing + NetSpeedTest GUI ──
+const lab11 = (): LabProject => ({
+  version: '1.0',
+  metadata: {
+    name: 'Lab 11: Windows Dual-ISP LB + NetSpeedTest GUI',
+    author: 'NetLab Advanced',
+    description: 'Windows 11 client sebagai main client, Dual-WAN MikroTik Edge (Load Balancing), 2 ISP, Switch LAN, Linux iPerf Server di sisi ISP buat simulasi throughput & tes GUI via NetSpeedTest.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  viewport: { x: 40, y: 80, zoom: 0.9 },
+  nodes: [
+    mkNode('wlb-isp1', 'ISP-1', 'mikrotik', 'RB3011UiAS-RM', 'router', 80, 140, {
+      ips: { ether1: '100.64.1.1/30', ether2: '10.10.12.1/30' },
+      up: ['ether1', 'ether2'],
+    }),
+    mkNode('wlb-isp2', 'ISP-2', 'mikrotik', 'RB3011UiAS-RM', 'router', 80,420, {
+      ips: { ether1: '100.64.2.1/30', ether2: '10.10.23.1/30' },
+      up: ['ether1', 'ether2'],
+    }),
+    mkNode('wlb-edge', 'EDGE-RTR (LB)', 'mikrotik', 'CCR1009-7G-1C-1S+', 'router', 420,280, {
+      ips: { ether1: '10.10.12.2/30', ether2: '10.10.23.2/30', ether3: '192.168.10.1/24' },
+      up: ['ether1, ether2, ether3'],
+    }),
+    mkNode('wlb-srv', 'IPERF-SERVER', 'linux', 'Debian 12 (Bookworm)', 'server', 80,280, {
+      ips: { eth1: '10.10.99.100/24' },
+      up: ['eth1'],
+    }),
+    mkNode('wlb-sw', 'CORE-SW', 'cisco_ios', 'Catalyst 2960-X', 'switch', 720,280, {
+      up: ['Gi0/1', 'Gi0/2', 'Gi0/3', 'Gi0/4', 'Gi0/5'],
+    }),
+    mkNode('wlb-win', 'WIN-LB-CLIENT', 'windows', 'Windows 11 Pro', 'pc', 980,160, {
+      ips: { Ethernet: '192.168.10.50/24' },
+      up: ['Ethernet'],
+    }),
+    mkNode('wlb-pc1', 'LINUX-CLIENT-1', 'linux', 'Debian 12 (Bookworm)', 'pc', 980,280, {
+      ips: { eth1: '192.168.10.11/24' },
+      up: ['eth1'],
+    }),
+    mkNode('wlb-pc2', 'LINUX-CLIENT-2', 'linux', 'Ubuntu Server 22.04 LTS', 'pc', 980,400, {
+      ips: { eth1: '192.168.10.12/24' },
+      up: ['eth1'],
+    }),
+  ],
+  edges: [
+    { id: 'wlb-e1', sourceNodeId: 'wlb-isp1', sourcePortId: 'ether2', targetNodeId: 'wlb-edge', targetPortId: 'ether1', cableType: 'copper_straight' },
+    { id: 'wlb-e2', sourceNodeId: 'wlb-isp2', sourcePortId: 'ether2', targetNodeId: 'wlb-edge', targetPortId: 'ether2', cableType: 'copper_straight' },
+    { id: 'wlb-e3', sourceNodeId: 'wlb-edge', sourcePortId: 'ether3', targetNodeId: 'wlb-sw', targetPortId: 'Gi0/1', cableType: 'copper_straight' },
+    { id: 'wlb-e7', sourceNodeId: 'wlb-isp1', sourcePortId: 'ether1', targetNodeId: 'wlb-srv', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'wlb-e8', sourceNodeId: 'wlb-isp2', sourcePortId: 'ether1', targetNodeId: 'wlb-srv', targetPortId: 'eth1', cableType: 'copper_cross' },
+    { id: 'wlb-e4', sourceNodeId: 'wlb-sw', sourcePortId: 'Gi0/2', targetNodeId: 'wlb-win', targetPortId: 'Ethernet', cableType: 'copper_straight' },
+    { id: 'wlb-e5', sourceNodeId: 'wlb-sw', sourcePortId: 'Gi0/3', targetNodeId: 'wlb-pc1', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'wlb-e6', sourceNodeId: 'wlb-sw', sourcePortId: 'Gi0/4', targetNodeId: 'wlb-pc2', targetPortId: 'eth1', cableType: 'copper_straight' },
+  ],
+});
+
+
 export const PRESET_LABS: PresetLab[] = [
   {
     id: 'lab-basic-gateway',
@@ -466,6 +524,16 @@ export const PRESET_LABS: PresetLab[] = [
     features: ['Inter-VLAN Routing', '802.1Q Trunk', 'DHCP Pool per VLAN', 'Router-on-a-Stick'],
     topologySummary: 'GW-ROAS(trunk) ── SW ── VLAN10/20/30',
     build: lab9,
+  },  {
+    id: 'lab-windows-lb-iperf-gui',
+    title: 'Lab 11: Windows Dual-ISP LB + NetSpeedTest GUI',
+    short: '2 ISP · Windows 11 · iPerf Server · 3 Clients',
+    description: 'Windows 11 client buka NetSpeedTest GUI buat tes bandwidth ke server, barengan client Linux & dual-WAN load balancing.',
+    category: 'gateway',
+    difficulty: 'Lanjut',
+    features: ['Dual-ISP', 'Load Balancing', 'Windows GUI', 'NetSpeedTest', 'iPerf/Bandwidth Test'],
+    topologySummary: 'ISP1/ISP2 ── EDGE-LB ── SW ── WIN-LB-CLIENT + LINUX CLIENTS | IPERF-SERVER',
+    build: lab11,
   },
 ];
 
