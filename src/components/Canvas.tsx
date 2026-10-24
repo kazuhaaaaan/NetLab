@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   ZoomIn,
   ZoomOut,
@@ -1294,7 +1294,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 opacity: node.powered === false ? 0.45 : 1,
                 filter: node.powered === false ? 'grayscale(0.7)' : undefined,
               }}
-              className={`absolute flex flex-col items-center justify-start pt-2.5 rounded-lg group transition-all relative ${
+              className={`absolute flex flex-col items-center justify-start pt-2.5 rounded-lg group transition-colors ${
                 node.powered === false ? '' : activeTool === 'cable' ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
               } ${
                 cableWizard?.sourceNodeId === node.id
