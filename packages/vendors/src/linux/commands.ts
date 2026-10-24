@@ -8,6 +8,75 @@ import type { NodeMemory, VendorContext } from '../common/types';
 
 export const linuxEntries: ChainEntry[] = [
   {
+    name: 'iperf3_sim',
+    order: 3,
+    vendors: 'all',
+    match: ({ vendorId, rawInput }) => vendorId === 'linux' && /^\s*iperf3?\b/i.test(rawInput.trim()),
+    run: ({ rawInput }) => {
+      const s = rawInput.trim();
+      const lower = s.toLowerCase();
+      const isServer = /\s-s\b/.test(lower);
+      const isReverse = /\s-r\b/.test(lower);
+      const tMatch = lower.match(/-t\s+(\d+)/);
+      const pMatch = lower.match(/-p\s+(\d+)/);
+      const cMatch = s.match(/-c\s+([0-9.]+)/i);
+      const duration = tMatch ? parseInt(tMatch[1]) : 10;
+      const parallel = Math.max(1, Math.min(pMatch ? parseInt(pMatch[1]) : 1, 8));
+      const host = cMatch ? cMatch[1] : '10.10.99.100';
+
+      if (isServer) {
+        return {
+          raw: [
+            '-----------------------------------------------------------',
+            'Server listening on 5201',
+            '-----------------------------------------------------------',
+            `Accepted connection from 192.168.10.11, port ${40000 + Math.floor(Math.random()*1000)}`,
+            '[  5] local 10.10.99.100 port 5201 connected to 192.168.10.11 port 45678',
+          ].join('\n') + '\n',
+        };
+      }
+
+      const base = 650;
+      const spread = 180;
+      const lines = [];
+      lines.push(`Connecting to host ${host}, port 5201`);
+      lines.push(`[  5] local 192.168.10.11 port ${45000 + Math.floor(Math.random()*500)} connected to ${host} port 5201`);
+      lines.push(`[ ID] Interval           Transfer     Bitrate         Retr  Cwnd`);
+      for (let i = 0; i < Math.min(duration, 10); i++) {
+        const start = i;
+        const end = i + 1;
+        const mb = (base + Math.floor(Math.random()*spread)) * (0.9 + Math.random()*0.2);
+        const gbit = (mb / 1000).toFixed(2);
+        const mbit = mb.toFixed(1);
+        if (parallel === 1) {
+          lines.push(`[  5]   ${start.toFixed(2)}-${end.toFixed(2)}   sec  ${gbit} GBytes  ${mbit} Mbits/sec  ${Math.floor(Math.random()*6)}             ${Math.floor(200 + Math.random()*150)} KBytes`);
+        } else {
+          for (let s2 = 0; s2 < parallel; s2++) {
+            const id = 5 + s2;
+            const m2 = (mb * (0.8 + Math.random()*0.4)) / parallel;
+            const g2 = (m2 / 1000).toFixed(2);
+            const b2 = m2.toFixed(1);
+            lines.push(`[ ${id.toString().padStart(2)}]   ${start.toFixed(2)}-${end.toFixed(2)}   sec  ${g2} GBytes  ${b2} Mbits/sec    0   ${Math.floor(150 + Math.random()*100)} KBytes`);
+          }
+        }
+      }
+      const totalG = ((base + spread/2) * duration / 1000 * 0.95).toFixed(2);
+      const totalM = ((base + spread/2) * 0.95).toFixed(0);
+      lines.push(`- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -`);
+      if (parallel > 1) {
+        lines.push(`[SUM]   0.00-${duration.toFixed(2)}  sec  ${totalG} GBytes  ${totalM} Mbits/sec             sender`);
+        lines.push(`[SUM]   0.00-${duration.toFixed(2)}  sec  ${totalG} GBytes  ${totalM} Mbits/sec             receiver`);
+      } else {
+        lines.push(`[  5]   0.00-${duration.toFixed(2)}  sec  ${totalG} GBytes  ${totalM} Mbits/sec             sender`);
+        lines.push(`[  5]   0.00-${duration.toFixed(2)}  sec  ${totalG} GBytes  ${totalM} Mbits/sec             receiver`);
+      }
+      if (isReverse) lines.push(`Reverse mode, remote host ${host} is sending`);
+      lines.push(`iperf Done.`);
+      return { raw: lines.join('\n') + '\n' };
+    },
+  },
+
+  {
     name: 'b10',
     order: 10,
     vendors: 'all',

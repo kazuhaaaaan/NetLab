@@ -27,6 +27,27 @@ export class LinuxDebianVendorAdapter implements _IV {
     if (isPrefix(action, 'ifconfig')) return { action: 'ifconfig', target: 'linux', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'ping')) return { action: 'ping', target: 'linux', payload: { raw: rawInput, ast, host: subs[0] } };
     if (isPrefix(action, 'traceroute') || isPrefix(action, 'tracert')) return { action: 'traceroute', target: 'linux', payload: { raw: rawInput, ast, host: subs[0] } };
+    if (isPrefix(action, 'iperf3') || isPrefix(action, 'iperf')) {
+      const lower = rawInput.toLowerCase();
+      const isServer = /\s-s\b/.test(lower);
+      const isReverse = /\s-r\b/.test(lower);
+      const tMatch = lower.match(/-t\s+(\d+)/);
+      const pMatch = lower.match(/-p\s+(\d+)/);
+      const cMatch = rawInput.match(/-c\s+([0-9.]+)/i);
+      return {
+        action: 'iperf',
+        target: 'linux',
+        payload: {
+          raw: rawInput,
+          ast,
+          mode: isServer ? 'server' : 'client',
+          host: cMatch ? cMatch[1] : (subs.find((s: string) => /^[0-9.]+$/.test(s)) || '10.10.99.100'),
+          duration: tMatch ? parseInt(tMatch[1]) : 10,
+          parallel: pMatch ? parseInt(pMatch[1]) : 1,
+          reverse: isReverse,
+        },
+      };
+    }
     if (isPrefix(action, 'ss')) return { action: 'ss', target: 'linux', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'netstat')) return { action: 'netstat', target: 'linux', payload: { raw: rawInput, ast } };
     if (isPrefix(action, 'nslookup') || isPrefix(action, 'dig')) return { action: 'nslookup', target: 'linux', payload: { raw: rawInput, ast, host: subs[0] } };
