@@ -145,6 +145,27 @@ protocol cores) used by the engine and tests.
 
 ---
 
+
+## 🧪 Preset Labs & Bandwidth Testing
+
+NetLab menyediakan Preset Labs siap pakai di menu Preset Labs. Template utama buat test bandwidth/load balancing:
+
+| Lab | Topologi | Kegunaan |
+| --- | --- | --- |
+| Lab 6 | Dual-ISP + MikroTik Edge + iPerf Server | Dual-WAN load balancing + tes dengan iperf3 |
+| Lab 7 | ECMP Multi-Router | Equal-Cost Multi-Path |
+| Lab 8 | Primary/Backup WAN | WAN Failover/Redundancy |
+| Lab 9 | Router-on-a-Stick + Inter-VLAN + DHCP | Inter-VLAN Routing + DHCP per VLAN |
+| Lab 10 | Windows 11 + Router/Switch | NetSpeedTest GUI di desktop Windows (mirip Ookla) |
+| Lab 11 | Windows 11 + Dual-ISP LB + iPerf Server | Windows GUI + dual-WAN load balancing + iPerf |
+
+**Tes bandwidth:**
+- CLI: jalankan `iperf3 -s` di IPERF-SERVER, lalu `iperf3 -c <IP> -t 30 -P 4` di client.
+- GUI: buka Windows client → Desktop → NetSpeedTest → GO.
+
+> iperf3/iperf sudah disimulasikan di engine Linux agar command yang sama bisa langsung dipakai.
+
+
 ## 🛠️ Quick Start
 
 ```bash

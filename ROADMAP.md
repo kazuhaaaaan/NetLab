@@ -65,3 +65,9 @@
       anti tumpang-tindih) untuk template, preset, dan tambah-device
 - [x] Perbaikan preset labs (model katalog + port konsisten)
 - [x] Tes: 2688 passed, 0 failed; conformance semua vendor lulus floor
+
+## Phase 7: Preset Labs, Bandwidth Testing & Windows GUI (v2.3.1) — SELESAI
+- [x] Perluasan pustaka Preset Labs (Lab 6–11)
+- [x] Simulasi iperf3/iperf di Linux node (adapter + commands)
+- [x] Aplikasi NetSpeedTest GUI di Windows (WinSpeedtest + integrasi desktop)
+- [x] Template siap demo load balancing + bandwidth (CLI & GUI)

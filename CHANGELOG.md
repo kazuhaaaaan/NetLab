@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.3.1 (Preset Labs · Bandwidth Testing · Windows GUI) — 2026-10-24
+- **Preset Labs diperluas (Lab 6–11)**:
+  - `Lab 6`: Dual-ISP Load Balancing + iPerf (MikroTik Edge + iPerf Server)
+  - `Lab 7`: ECMP Load Balancing (Equal-Cost Multi-Path)
+  - `Lab 8`: WAN Failover (Primary/Backup) dengan route tracking
+  - `Lab 9`: Inter-VLAN + DHCP + Internet Gateway (Router-on-a-Stick)
+  - `Lab 10`: Windows Client + NetSpeedTest (GUI)
+  - `Lab 11`: Windows Dual-ISP LB + NetSpeedTest GUI (gabungan dual-WAN + Windows client)
+- **Simulasi `iperf3`/`iperf` di Linux node**: parsing & handler baru di `packages/vendors/src/linux` (adapter + commands). Mendukung `iperf3 -s`, `iperf3 -c <IP> -t <detik> -P <streams>`, `-R`. Output mirip iperf asli (interval, bitrate, Retr/Cwnd, `SUM`) buat tes bandwidth langsung di terminal simulator.
+- **Aplikasi NetSpeedTest GUI di Windows**: komponen `WinSpeedtest.tsx` + integrasi ke `WinDesktopModal` (ikon NetSpeedTest di desktop Windows). Menampilkan fase Ping/Jitter → Download → Upload mirip Speedtest by Ookla, hasil dalam Mbps/ms.
+- **Template siap test load balancing**: Lab 6 & Lab 11 dibuat khusus buat validasi pembagian trafik 2 WAN (PCC/ECMP style) + bisa dites dari CLI (`iperf`) maupun GUI Windows (`NetSpeedTest`).
+
 ## v2.3.0 (template · config generator · auto-placement)
 - **Template topologi baru + registry**: 3 template baru (Kantor Kecil:
   FortiGate+switch+server+Windows 11; Wireless: MikroTik hAP ac2+2 klien;
