@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, FileText, Folder, Globe, Power, Settings, TerminalSquare, X } from 'lucide-react';
+import { Code2, FileText, Folder, Gauge, Globe, Power, Settings, TerminalSquare, X } from 'lucide-react';
 import type { NetworkSimulator } from '../../engine/net/core/NetworkSimulator';
 import type { NodeMemory } from '../../../packages/vendors/src/common/types';
 import { WinWindowFrame } from './WinWindow';
