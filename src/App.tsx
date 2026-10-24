@@ -2031,10 +2031,10 @@ onOpenTerminal={handleOpenTerminal}
       <PresetLabModal
         open={isPresetLabOpen}
         onClose={() => setIsPresetLabOpen(false)}
-        onLoadLab={(lab) => {
-          console.log('[PRESET] load clicked', lab.id);
+        onLoadLab={(lab: any) => {
+          console.log('[PRESET] load clicked', lab?.id ?? lab?.metadata?.name);
           try {
-            const builtRaw = lab.build();
+            const builtRaw: LabProject = typeof lab?.build === 'function' ? lab.build() : lab;
             console.log('[PRESET] built', builtRaw?.nodes?.length);
             const built = autoPlaceProject(builtRaw);
             console.log('[PRESET] placed');
@@ -2042,6 +2042,7 @@ onOpenTerminal={handleOpenTerminal}
             console.log('[PRESET] seeded');
             setProjectWithHistory(built);
             setIsPresetLabOpen(false);
+            showToast('Preset lab berhasil dimuat');
             // Sinkronkan ke simulation engine biar perangkat kebaca setelah dimuat
             window.setTimeout(() => {
               try {
