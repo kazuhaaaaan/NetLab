@@ -188,6 +188,197 @@ const lab4 = (): LabProject => ({
   ],
 });
 
+
+// ── Lab 6: Dual-ISP Load Balancing (PCC) + iPerf Bandwidth Test ──
+const lab6 = (): LabProject => ({
+  version: '1.0',
+  metadata: {
+    name: 'Lab 6: Dual-ISP Load Balancing + iPerf',
+    author: 'NetLab Advanced',
+    description: 'Dual-WAN (ISP1 & ISP2) + MikroTik Edge Router. Ada iPerf Server di sisi "WAN/Dummy ISP" buat simulasi internet & tes throughput pake iperf3 antar PC ke server.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  viewport: { x: 40, y: 80, zoom: 0.9 },
+  nodes: [
+    mkNode('lb-isp1', 'ISP-1', 'mikrotik', 'RB3011UiAS-RM', 'router', 80, 140, {
+      ips: { ether1: '100.64.1.1/30', ether2: '10.10.12.1/30' },
+      up: ['ether1', 'ether2'],
+    }),
+    mkNode('lb-isp2', 'ISP-2', 'mikrotik', 'RB3011UiAS-RM', 'router', 80, 420, {
+      ips: { ether1: '100.64.2.1/30', ether2: '10.10.23.1/30' },
+      up: ['ether1', 'ether2'],
+    }),
+    mkNode('lb-edge', 'EDGE-RTR (LB)', 'mikrotik', 'CCR1009-7G-1C-1S+', 'router', 420, 280, {
+      ips: { ether1: '10.10.12.2/30', ether2: '10.10.23.2/30', ether3: '192.168.10.1/24' },
+      up: ['ether1', 'ether2', 'ether3'],
+    }),
+    mkNode('lb-srv', 'IPERF-SERVER', 'linux', 'Debian 12 (Bookworm)', 'server', 80, 280, {
+      ips: { eth1: '10.10.99.100/24' },
+      up: ['eth1'],
+    }),
+    mkNode('lb-sw', 'CORE-SW', 'cisco_ios', 'Catalyst 2960-X', 'switch', 720, 280, {
+      up: ['Gi0/1', 'Gi0/2', 'Gi0/3', 'Gi0/4'],
+    }),
+    mkNode('lb-pc1', 'CLIENT-1', 'linux', 'Debian 12 (Bookworm)', 'pc', 980, 160, {
+      ips: { eth1: '192.168.10.11/24' },
+      up: ['eth1'],
+    }),
+    mkNode('lb-pc2', 'CLIENT-2', 'linux', 'Ubuntu Server 22.04 LTS', 'pc', 980, 280, {
+      ips: { eth1: '192.168.10.12/24' },
+      up: ['eth1'],
+    }),
+    mkNode('lb-pc3', 'CLIENT-3', 'linux', 'Alpine Linux', 'pc', 980, 400, {
+      ips: { eth1: '192.168.10.13/24' },
+      up: ['eth1'],
+    }),
+  ],
+  edges: [
+    { id: 'lb-e1', sourceNodeId: 'lb-isp1', sourcePortId: 'ether2', targetNodeId: 'lb-edge', targetPortId: 'ether1', cableType: 'copper_straight' },
+    { id: 'lb-e2', sourceNodeId: 'lb-isp2', sourcePortId: 'ether2', targetNodeId: 'lb-edge', targetPortId: 'ether2', cableType: 'copper_straight' },
+    { id: 'lb-e3', sourceNodeId: 'lb-edge', sourcePortId: 'ether3', targetNodeId: 'lb-sw', targetPortId: 'Gi0/1', cableType: 'copper_straight' },
+    { id: 'lb-e4', sourceNodeId: 'lb-sw', sourcePortId: 'Gi0/2', targetNodeId: 'lb-pc1', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'lb-e5', sourceNodeId: 'lb-sw', sourcePortId: 'Gi0/3', targetNodeId: 'lb-pc2', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'lb-e6', sourceNodeId: 'lb-sw', sourcePortId: 'Gi0/4', targetNodeId: 'lb-pc3', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'lb-e7', sourceNodeId: 'lb-isp1', sourcePortId: 'ether1', targetNodeId: 'lb-srv', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'lb-e8', sourceNodeId: 'lb-isp2', sourcePortId: 'ether1', targetNodeId: 'lb-srv', targetPortId: 'eth1', cableType: 'copper_cross' },
+  ],
+});
+
+// ── Lab 7: ECMP Load Balancing (Equal-Cost Multi-Path) ─────────
+const lab7 = (): LabProject => ({
+  version: '1.0',
+  metadata: {
+    name: 'Lab 7: ECMP Load Balancing',
+    author: 'NetLab Advanced',
+    description: '2 jalur equal-cost dari EDGE ke "Internet". Cocok buat liat per-flow load balancing via ECMP. Bisa test pake ping/iperf buat bandingin hasilnya.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  viewport: { x: 60, y: 100, zoom: 0.95 },
+  nodes: [
+    mkNode('ecmp-net', 'INTERNET-NET', 'linux', 'Debian 12 (Bookworm)', 'server', 100, 260, {
+      ips: { eth1: '8.8.8.8/32' },
+      up: ['eth1'],
+    }),
+    mkNode('ecmp-r1', 'ISP-R1', 'cisco_ios', 'ISR 4331', 'router', 360, 160, {
+      ips: { 'Gi0/0/0': '172.16.1.1/30', 'Gi0/0/1': '203.0.113.1/30' },
+      up: ['Gi0/0/0', 'Gi0/0/1'],
+    }),
+    mkNode('ecmp-r2', 'ISP-R2', 'cisco_ios', 'ISR 4331', 'router', 360, 360, {
+      ips: { 'Gi0/0/0': '172.16.2.1/30', 'Gi0/0/1': '203.0.113.5/30' },
+      up: ['Gi0/0/0', 'Gi0/0/1'],
+    }),
+    mkNode('ecmp-edge', 'EDGE-ECMP', 'cisco_ios', 'ISR 4431', 'router', 660, 260, {
+      ips: { 'Gi0/0/0': '172.16.1.2/30', 'Gi0/0/1': '172.16.2.2/30', 'Gi0/0/2': '192.168.50.1/24' },
+      up: ['Gi0/0/0', 'Gi0/0/1', 'Gi0/0/2'],
+    }),
+    mkNode('ecmp-sw', 'LAN-SW', 'cisco_ios', 'Catalyst 2960-X', 'switch', 920, 260, {
+      up: ['Gi0/1', 'Gi0/2'],
+    }),
+    mkNode('ecmp-pc1', 'PC-TEST-1', 'linux', 'Ubuntu Server 22.04 LTS', 'pc', 1160, 180, {
+      ips: { eth1: '192.168.50.10/24' },
+      up: ['eth1'],
+    }),
+    mkNode('ecmp-pc2', 'PC-TEST-2', 'linux', 'Debian 12 (Bookworm)', 'pc', 1160, 340, {
+      ips: { eth1: '192.168.50.20/24' },
+      up: ['eth1'],
+    }),
+  ],
+  edges: [
+    { id: 'ecmp-e1', sourceNodeId: 'ecmp-net', sourcePortId: 'eth1', targetNodeId: 'ecmp-r1', targetPortId: 'Gi0/0/0', cableType: 'copper_straight' },
+    { id: 'ecmp-e2', sourceNodeId: 'ecmp-net', sourcePortId: 'eth1', targetNodeId: 'ecmp-r2', targetPortId: 'Gi0/0/0', cableType: 'copper_straight' },
+    { id: 'ecmp-e3', sourceNodeId: 'ecmp-r1', sourcePortId: 'Gi0/0/1', targetNodeId: 'ecmp-edge', targetPortId: 'Gi0/0/0', cableType: 'copper_straight' },
+    { id: 'ecmp-e4', sourceNodeId: 'ecmp-r2', sourcePortId: 'Gi0/0/1', targetNodeId: 'ecmp-edge', targetPortId: 'Gi0/0/1', cableType: 'copper_straight' },
+    { id: 'ecmp-e5', sourceNodeId: 'ecmp-edge', sourcePortId: 'Gi0/0/2', targetNodeId: 'ecmp-sw', targetPortId: 'Gi0/1', cableType: 'copper_straight' },
+    { id: 'ecmp-e6', sourceNodeId: 'ecmp-sw', sourcePortId: 'Gi0/2', targetNodeId: 'ecmp-pc1', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'ecmp-e7', sourceNodeId: 'ecmp-sw', sourcePortId: 'Gi0/2', targetNodeId: 'ecmp-pc2', targetPortId: 'eth1', cableType: 'copper_straight' },
+  ],
+});
+
+// ── Lab 8: WAN Failover (Primary/Backup) ────────────────────────
+const lab8 = (): LabProject => ({
+  version: '1.0',
+  metadata: {
+    name: 'Lab 8: WAN Failover (Primary/Backup)',
+    author: 'NetLab Advanced',
+    description: 'Hanya 1 jalur aktif (Primary), kalo down auto pindah ke Backup. Cocok buat simulasi ISP down & tracking route. Bisa diuji koneksi LAN ke Internet.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  viewport: { x: 80, y: 120, zoom: 0.95 },
+  nodes: [
+    mkNode('fo-isp1', 'ISP-PRIMARY', 'mikrotik', 'RB3011UiAS-RM', 'router', 160, 120, {
+      ips: { ether1: '203.0.113.1/30' },
+      up: ['ether1'],
+    }),
+    mkNode('fo-isp2', 'ISP-BACKUP', 'mikrotik', 'RB3011UiAS-RM', 'router', 160, 380, {
+      ips: { ether1: '198.51.100.1/30' },
+      up: ['ether1'],
+    }),
+    mkNode('fo-edge', 'EDGE-FAILOVER', 'mikrotik', 'RB4011iGS+', 'router', 480, 250, {
+      ips: { ether1: '203.0.113.2/30', ether2: '198.51.100.2/30', ether3: '192.168.20.1/24' },
+      up: ['ether1', 'ether2', 'ether3'],
+    }),
+    mkNode('fo-sw', 'ACCESS-SW', 'cisco_ios', 'Catalyst 2960-S', 'switch', 760, 200, {
+      up: ['Fa0/1', 'Fa0/2', 'Fa0/3'],
+    }),
+    mkNode('fo-pc1', 'USER-1', 'linux', 'Debian 12 (Bookworm)', 'pc', 980, 140, {
+      ips: { eth1: '192.168.20.10/24' },
+      up: ['eth1'],
+    }),
+    mkNode('fo-pc2', 'USER-2', 'linux', 'Ubuntu Server 22.04 LTS', 'pc', 980, 280, {
+      ips: { eth1: '192.168.20.20/24' },
+      up: ['eth1'],
+    }),
+  ],
+  edges: [
+    { id: 'fo-e1', sourceNodeId: 'fo-isp1', sourcePortId: 'ether2', targetNodeId: 'fo-edge', targetPortId: 'ether1', cableType: 'copper_straight' },
+    { id: 'fo-e2', sourceNodeId: 'fo-isp2', sourcePortId: 'ether2', targetNodeId: 'fo-edge', targetPortId: 'ether2', cableType: 'copper_straight' },
+    { id: 'fo-e3', sourceNodeId: 'fo-edge', sourcePortId: 'ether3', targetNodeId: 'fo-sw', targetPortId: 'Fa0/1', cableType: 'copper_straight' },
+    { id: 'fo-e4', sourceNodeId: 'fo-sw', sourcePortId: 'Fa0/2', targetNodeId: 'fo-pc1', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'fo-e5', sourceNodeId: 'fo-sw', sourcePortId: 'Fa0/3', targetNodeId: 'fo-pc2', targetPortId: 'eth1', cableType: 'copper_straight' },
+  ],
+});
+
+// ── Lab 9: Inter-VLAN + DHCP + Internet Gateway ────────────────
+const lab9 = (): LabProject => ({
+  version: '1.0',
+  metadata: {
+    name: 'Lab 9: Inter-VLAN + DHCP + Gateway',
+    author: 'NetLab Advanced',
+    description: 'Router-on-a-stick + VLAN 10 (STAFF), VLAN 20 (GUEST), VLAN 30 (IT). Router jadi DHCP server per-VLAN + gateway ke internet. Sangat umum buat latihan.',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  viewport: { x: 40, y: 100, zoom: 0.95 },
+  nodes: [
+    mkNode('iv-gw', 'GW-ROAS', 'cisco_ios', 'ISR 4331', 'router', 160, 280, {
+      ips: { 'Gi0/0/0.10': '10.10.10.1/24', 'Gi0/0/0.20': '10.10.20.1/24', 'Gi0/0/0.30': '10.10.30.1/24' },
+      up: ['Gi0/0/0'],
+    }),
+    mkNode('iv-sw', 'SW-CORE-L2', 'cisco_ios', 'Catalyst 3560', 'switch', 520, 280, {
+      up: ['Gi0/1', 'Gi0/2', 'Gi0/3', 'Gi0/4'],
+    }),
+    mkNode('iv-pc1', 'STAFF-PC', 'linux', 'Debian 12 (Bookworm)', 'pc', 820, 140, {
+      up: ['eth1'],
+    }),
+    mkNode('iv-pc2', 'GUEST-PC', 'linux', 'Ubuntu Server 22.04 LTS', 'pc', 820, 280, {
+      up: ['eth1'],
+    }),
+    mkNode('iv-pc3', 'IT-PC', 'linux', 'Alpine Linux', 'pc', 820, 420, {
+      up: ['eth1'],
+    }),
+  ],
+  edges: [
+    { id: 'iv-e1', sourceNodeId: 'iv-gw', sourcePortId: 'Gi0/0/0', targetNodeId: 'iv-sw', targetPortId: 'Gi0/1', cableType: 'copper_straight' },
+    { id: 'iv-e2', sourceNodeId: 'iv-sw', sourcePortId: 'Gi0/2', targetNodeId: 'iv-pc1', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'iv-e3', sourceNodeId: 'iv-sw', sourcePortId: 'Gi0/3', targetNodeId: 'iv-pc2', targetPortId: 'eth1', cableType: 'copper_straight' },
+    { id: 'iv-e4', sourceNodeId: 'iv-sw', sourcePortId: 'Gi0/4', targetNodeId: 'iv-pc3', targetPortId: 'eth1', cableType: 'copper_straight' },
+  ],
+});
+
+
 export const PRESET_LABS: PresetLab[] = [
   {
     id: 'lab-basic-gateway',
@@ -232,6 +423,49 @@ export const PRESET_LABS: PresetLab[] = [
     features: ['OSPF Area 0', 'Adjacency', 'Route Learning', 'Dynamic Routing'],
     topologySummary: 'R1 ─ R2 ─ R3 ─ (kembali ke) R1 — ring OSPF',
     build: lab4,
+  },  {
+    id: 'lab-lb-iperf',
+    title: 'Lab 6: Dual-ISP Load Balancing + iPerf',
+    short: '2 ISP · 1 Edge · 3 Clients · iPerf Server',
+    description: 'Dual-WAN PCC style + iPerf Server buat test bandwidth/load share. Sangat pas buat validasi load balancing beneran.',
+    category: 'gateway',
+    difficulty: 'Lanjut',
+    features: ['Dual-ISP', 'Load Balancing', 'PCC/Policy Routing', 'NAT', 'iPerf/Bandwidth Test'],
+    topologySummary: 'ISP1/ISP2 ── EDGE-LB ── SW ── CLIENT-1/2/3 | iPerf-SERVER via ISP',
+    build: lab6,
+  },
+  {
+    id: 'lab-ecmp',
+    title: 'Lab 7: ECMP Load Balancing',
+    short: '2 Equal Paths · Multi-Router',
+    description: 'Equal-Cost Multi-Path ke internet. Bandingin behavior vs PCC. Bisa cek per-flow vs per-packet.',
+    category: 'routing',
+    difficulty: 'Lanjut',
+    features: ['ECMP', 'OSPF/Static Equal Cost', 'Hash-based Load Share', 'Bandwidth Test'],
+    topologySummary: 'LAN ── EDGE ──(2x equal)── ISP-R1/R2 ── INTERNET-NET',
+    build: lab7,
+  },
+  {
+    id: 'lab-wan-failover',
+    title: 'Lab 8: WAN Failover (Primary/Backup)',
+    short: 'Primary/Backup WAN · Auto-Switch',
+    description: 'Hanya jalur utama yang dipake, otomatis failover ke backup kalo primary down. Cocok simulasi ISP outage.',
+    category: 'gateway',
+    difficulty: 'Sedang',
+    features: ['WAN Failover', 'Route Tracking', 'Default Route Backup', 'Redundancy'],
+    topologySummary: 'LAN ── EDGE-FAILOVER ── ISP-PRIMARY | ISP-BACKUP (standby)',
+    build: lab8,
+  },
+  {
+    id: 'lab-vlan-dhcp-gw',
+    title: 'Lab 9: Inter-VLAN + DHCP + Gateway',
+    short: 'Router-on-a-Stick · 3 VLAN',
+    description: 'VLAN terpisah + DHCP per-VLAN + routing antar VLAN + siap outbound. Praktis & umum dipake.',
+    category: 'switching',
+    difficulty: 'Sedang',
+    features: ['Inter-VLAN Routing', '802.1Q Trunk', 'DHCP Pool per VLAN', 'Router-on-a-Stick'],
+    topologySummary: 'GW-ROAS(trunk) ── SW ── VLAN10/20/30',
+    build: lab9,
   },
 ];
 
