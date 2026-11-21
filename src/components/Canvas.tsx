@@ -3,12 +3,7 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Router,
-  Server,
-  Laptop,
   Monitor,
-  ShieldAlert,
-  HardDrive,
   Plus,
   X,
   Wifi,
@@ -21,6 +16,7 @@ import {
   ListChecks,
 } from "lucide-react";
 import { cableMatchesPort, inferCableType, portSide, portSlot, portConnection, portHealth, PORT_HEALTH_LABEL } from "../connection";
+import { DeviceIcon } from "./DeviceIcon";
 import type { LinkReadiness } from "../engine/net/core/LinkReadiness";
 
 const LockFilled = () => <Lock className="w-4 h-4" />;
@@ -661,23 +657,22 @@ export const Canvas: React.FC<CanvasProps> = ({
     return "none";
   };
 
-  const getNodeIcon = (deviceType: string) => {    switch (deviceType) {
-      case "switch":
-        return <HardDrive className="w-4 h-4 text-blue-400" />;
-      case "firewall":
-        return <ShieldAlert className="w-4 h-4 text-rose-400" />;
-      case "pc":
-        return <Laptop className="w-4 h-4 text-emerald-400" />;
-      case "windows-client":
-        return <Monitor className="w-4 h-4 text-sky-400" />;
-      case "server":
-        return <Server className="w-4 h-4 text-purple-400" />;
-      case "wireless":
-        return <Wifi className="w-4 h-4 text-cyan-400" />;
-      case "router":
-      default:
-        return <Router className="w-4 h-4 text-sky-400" />;
-    }
+  const getNodeIcon = (deviceType: string) => {
+    const colors: Record<string, string> = {
+      switch: "text-blue-400",
+      firewall: "text-rose-400",
+      pc: "text-emerald-400",
+      "windows-client": "text-sky-400",
+      server: "text-purple-400",
+      wireless: "text-cyan-400",
+      router: "text-sky-400",
+    };
+    return (
+      <DeviceIcon
+        type={deviceType}
+        className={`w-8 h-8 ${colors[deviceType] || "text-sky-400"}`}
+      />
+    );
   };
 
   return (

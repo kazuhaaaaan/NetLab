@@ -2,17 +2,36 @@ import React, { useState } from 'react';
 import {
   Layers,
   Sliders,
-  Cable,
   Trash2,
   Terminal,
   Search,
+  ChevronDown,
   ChevronRight,
   Power,
-  PowerOff
+  PowerOff,
+  Plus
 } from 'lucide-react';
 import { LabNode, VendorType } from '../types';
 import { VENDOR_MAP } from '../data/vendors';
-import { getDefaultModel, getModelsForVendor } from '../data/deviceModels';
+import { getModelsForVendor, ModelDeviceType } from '../data/deviceModels';
+import { DeviceIcon } from './DeviceIcon';
+
+type DeviceTypeId = ModelDeviceType;
+
+const DEVICE_META: Record<DeviceTypeId, { label: string; description: string; color: string }> = {
+  router: { label: 'Router', description: 'Routing LAN/WAN antar jaringan', color: 'text-sky-400 bg-sky-500/10 border-sky-500/30' },
+  switch: { label: 'Switch', description: 'Menghubungkan perangkat dalam LAN', color: 'text-blue-400 bg-blue-500/10 border-blue-500/30' },
+  firewall: { label: 'Firewall', description: 'Filter traffic dan kebijakan akses', color: 'text-rose-400 bg-rose-500/10 border-rose-500/30' },
+  wireless: { label: 'Wireless AP', description: 'Akses jaringan melalui WiFi', color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30' },
+  server: { label: 'Server', description: 'Layanan jaringan berbasis Linux', color: 'text-orange-400 bg-orange-500/10 border-orange-500/30' },
+  pc: { label: 'PC / Client', description: 'Host klien untuk latihan TCP/IP', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
+  'windows-client': { label: 'Windows Client', description: 'Desktop Windows dengan GUI', color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/30' },
+};
+
+const DEVICE_GROUPS: { label: string; types: DeviceTypeId[] }[] = [
+  { label: 'Networking', types: ['router', 'switch', 'firewall', 'wireless'] },
+  { label: 'Compute & End Devices', types: ['server', 'pc', 'windows-client'] },
+];
 
 interface SidebarProps {
   selectedNode: LabNode | null;
@@ -38,25 +57,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleOpen
 }) => {
   const [activeTab, setActiveTab] = useState<'palette' | 'inspector'>('palette');
-  const [vendorSearch, setVendorSearch] = useState('');
-  const [preferredModel, setPreferredModel] = useState<Record<string, string>>({});
+  const [deviceSearch, setDeviceSearch] = useState('');
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [selection, setSelection] = useState<
+    Partial<Record<DeviceTypeId, { vendor: VendorType; model: string }>>
+  >({});
 
-  /** Model yang cocok untuk tipe device; server selalu pakai vendor linux. */
-  const pickModel = (vendorId: VendorType, deviceType: 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless' | 'windows-client'): string => {
-    const effVendor: VendorType =
-      deviceType === 'server' ? 'linux' : deviceType === 'windows-client' ? 'windows' : vendorId;
-    const pre = preferredModel[effVendor];
-    if (pre && getModelsForVendor(effVendor).some((m) => m.label === pre && m.types.includes(deviceType))) {
-      return pre;
-    }
-    return getDefaultModel(effVendor, deviceType);
+  const effectiveVendor = (vendorId: VendorType, deviceType: DeviceTypeId): VendorType =>
+    deviceType === 'server' ? 'linux' : deviceType === 'windows-client' ? 'windows' : vendorId;
+
+  const vendorsForType = (deviceType: DeviceTypeId) => {
+    if (deviceType === 'server') return [VENDOR_MAP.linux];
+    if (deviceType === 'windows-client') return [VENDOR_MAP.windows];
+    return Object.values(VENDOR_MAP).filter((v) =>
+      getModelsForVendor(v.id).some((m) => m.types.includes(deviceType))
+    );
   };
 
-  const vendorsList = Object.values(VENDOR_MAP).filter(
-    (v) =>
-      v.name.toLowerCase().includes(vendorSearch.toLowerCase()) ||
-      v.osName.toLowerCase().includes(vendorSearch.toLowerCase())
-  );
+  const modelsForType = (vendorId: VendorType, deviceType: DeviceTypeId) =>
+    getModelsForVendor(effectiveVendor(vendorId, deviceType)).filter((m) => m.types.includes(deviceType));
+
+  const resolveSelection = (deviceType: DeviceTypeId) => {
+    const vendors = vendorsForType(deviceType);
+    const stored = selection[deviceType];
+    const vendor =
+      stored && vendors.some((v) => v.id === stored.vendor) ? stored.vendor : vendors[0]?.id;
+    if (!vendor) return null;
+    const models = modelsForType(vendor, deviceType);
+    const model =
+      stored?.model && models.some((m) => m.label === stored.model) ? stored.model : models[0]?.label;
+    if (!model) return null;
+    return { vendor, model };
+  };
+
+  const query = deviceSearch.trim().toLowerCase();
+  const visibleGroups = DEVICE_GROUPS.map((group) => ({
+    ...group,
+    types: group.types.filter((deviceType) => {
+      if (!query) return true;
+      const meta = DEVICE_META[deviceType];
+      if (meta.label.toLowerCase().includes(query) || meta.description.toLowerCase().includes(query)) return true;
+      return vendorsForType(deviceType).some(
+        (v) => v.name.toLowerCase().includes(query) || v.osName.toLowerCase().includes(query)
+      );
+    }),
+  })).filter((group) => group.types.length > 0);
 
   return (
     <aside
@@ -107,101 +152,108 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         {/* PALETTE TAB */}
         {activeTab === 'palette' && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="relative">
               <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search vendor / OS..."
-                value={vendorSearch}
-                onChange={(e) => setVendorSearch(e.target.value)}
+                placeholder="Cari perangkat / vendor..."
+                value={deviceSearch}
+                onChange={(e) => setDeviceSearch(e.target.value)}
                 className="w-full bg-[#1A1D24] border border-[#2B2D31] rounded-md pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-slate-500 transition-colors"
               />
             </div>
 
             <div className="text-[11px] font-semibold text-slate-400 tracking-wider uppercase">
-              Enterprise Vendors ({vendorsList.length})
+              Device Library
             </div>
 
-            <div className="space-y-2.5">
-              {vendorsList.map((vendor) => (
-                <div
-                  key={vendor.id}
-                  className="bg-[#1A1D24] border border-[#2B2D31] rounded-md p-2.5 hover:border-[#4B4D51] transition space-y-2"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-bold text-slate-100">{vendor.name}</span>
-                      <span className="text-[10px] text-slate-400 block font-mono">{vendor.osName}</span>
-                    </div>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${vendor.badgeColor}`}>
-                      {vendor.id}
+            {visibleGroups.length === 0 && (
+              <div className="rounded-md border border-dashed border-[#2B2D31] py-8 text-center text-[11px] text-slate-500">
+                Tidak ada perangkat yang cocok.
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {visibleGroups.map((group) => (
+                <section key={group.label} className="rounded-lg border border-[#2B2D31] bg-[#12141A] overflow-hidden">
+                  <button
+                    onClick={() => setCollapsed((c) => ({ ...c, [group.label]: !c[group.label] }))}
+                    className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-white/[0.02] transition"
+                  >
+                    <span className="flex items-center gap-2">
+                      {collapsed[group.label] ? (
+                        <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                      )}
+                      <span className="text-[11px] font-semibold text-slate-200 uppercase tracking-wide">{group.label}</span>
                     </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 line-clamp-2">{vendor.description}</p>
+                    <span className="text-[10px] font-mono text-slate-500">{group.types.length}</span>
+                  </button>
 
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-slate-500 font-medium block">
-                      Model Perangkat (dipakai saat tombol add diklik)
-                    </label>
-                    <select
-                      value={preferredModel[vendor.id] ?? ''}
-                      onChange={(e) => setPreferredModel((p) => ({ ...p, [vendor.id]: e.target.value }))}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-blue-500"
-                    >
-                      <option value="">Default (otomatis per tipe)</option>
-                      {getModelsForVendor(vendor.id).map((m) => (
-                        <option key={m.id} value={m.label}>
-                          {m.label} — {m.specs.ports}
-                        </option>
-                      ))}
-                    </select>
-                    {preferredModel[vendor.id] &&
-                      (() => {
-                        const m = getModelsForVendor(vendor.id).find((x) => x.label === preferredModel[vendor.id]);
-                        if (!m) return null;
+                  {!collapsed[group.label] && (
+                    <div className="space-y-2 px-2 pb-2">
+                      {group.types.map((deviceType) => {
+                        const resolved = resolveSelection(deviceType);
+                        if (!resolved) return null;
+                        const meta = DEVICE_META[deviceType];
+                        const vendors = vendorsForType(deviceType);
+                        const models = modelsForType(resolved.vendor, deviceType);
                         return (
-                          <p className="text-[10px] text-slate-500 leading-snug">
-                            <span className="text-slate-400 font-medium">{m.types.join(', ')}</span> • {m.specs.cpu} •{' '}
-                            {m.specs.ports} • {m.description}
-                          </p>
+                          <div key={deviceType} className="rounded-md border border-[#2B2D31] bg-[#1A1D24] p-2.5 space-y-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`w-9 h-9 shrink-0 rounded-lg border flex items-center justify-center ${meta.color}`}>
+                                <DeviceIcon type={deviceType} className="w-5 h-5" />
+                              </span>
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-slate-100">{meta.label}</p>
+                                <p className="text-[10px] text-slate-500 truncate">{meta.description}</p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <select
+                                value={resolved.vendor}
+                                onChange={(e) =>
+                                  setSelection((s) => ({
+                                    ...s,
+                                    [deviceType]: { vendor: e.target.value as VendorType, model: '' },
+                                  }))
+                                }
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-blue-500"
+                              >
+                                {vendors.map((v) => (
+                                  <option key={v.id} value={v.id}>{v.name}</option>
+                                ))}
+                              </select>
+                              <select
+                                value={resolved.model}
+                                onChange={(e) =>
+                                  setSelection((s) => ({
+                                    ...s,
+                                    [deviceType]: { vendor: resolved.vendor, model: e.target.value },
+                                  }))
+                                }
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-blue-500"
+                              >
+                                {models.map((m) => (
+                                  <option key={m.id} value={m.label}>{m.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <button
+                              onClick={() => onAddNode(resolved.vendor, deviceType, resolved.model)}
+                              className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/40 text-[11px] font-semibold text-blue-200 transition"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Tambah {meta.label}
+                            </button>
+                          </div>
                         );
-                      })()}
-                  </div>
-
-                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-1.5 pt-1">
-                    <button
-                      onClick={() => onAddNode(vendor.id, 'router', pickModel(vendor.id, 'router'))}
-                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-[11px] font-medium text-slate-200 transition"
-                    >
-                      + Router
-                    </button>
-                    <button
-                      onClick={() => onAddNode(vendor.id, 'switch', pickModel(vendor.id, 'switch'))}
-                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-[11px] font-medium text-slate-200 transition"
-                    >
-                      + Switch
-                    </button>
-                    <button
-                      onClick={() => onAddNode(vendor.id, 'server', pickModel('linux', 'server'))}
-                      className="px-2 py-1 bg-slate-900 hover:bg-indigo-900/50 border border-indigo-800/50 rounded text-[11px] font-medium text-indigo-200 transition"
-                    >
-                      + Server
-                    </button>
-                    <button
-                      onClick={() => onAddNode(vendor.id, 'wireless', pickModel(vendor.id, 'wireless'))}
-                      className="px-2 py-1 bg-slate-900 hover:bg-cyan-900/50 border border-cyan-800/50 rounded text-[11px] font-medium text-cyan-200 transition"
-                    >
-                      + Wireless
-                    </button>
-                    <button
-                      onClick={() => onAddNode(vendor.id, 'pc', pickModel(vendor.id, 'pc'))}
-                      className="px-2 py-1 bg-slate-900 hover:bg-emerald-900/50 border border-emerald-800/50 rounded text-[11px] font-medium text-emerald-200 transition"
-                    >
-                      + PC
-                    </button>
-                  </div>
-                </div>
+                      })}
+                    </div>
+                  )}
+                </section>
               ))}
             </div>
           </div>

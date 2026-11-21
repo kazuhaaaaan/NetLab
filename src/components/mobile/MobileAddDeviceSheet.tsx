@@ -1,32 +1,26 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Router,
-  Network,
-  ShieldAlert,
-  Laptop,
-  Server,
-  Wifi,
-  Monitor,
   ChevronLeft,
   Check,
   Boxes,
   Plus
 } from 'lucide-react';
 import { MobileSheet } from './MobileSheet';
+import { DeviceIcon } from '../DeviceIcon';
 import { VENDOR_MAP } from '../../data/vendors';
 import { getModelsForVendor, getDefaultModel } from '../../data/deviceModels';
 import { VendorType } from '../../types';
 
 type DeviceType = 'router' | 'switch' | 'firewall' | 'pc' | 'server' | 'wireless' | 'windows-client';
 
-const DEVICE_TYPES: { id: DeviceType; label: string; icon: React.ElementType; color: string }[] = [
-  { id: 'router', label: 'Router', icon: Router, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30' },
-  { id: 'switch', label: 'Switch', icon: Network, color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30' },
-  { id: 'firewall', label: 'Firewall', icon: ShieldAlert, color: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
-  { id: 'pc', label: 'PC / Client', icon: Laptop, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
-  { id: 'server', label: 'Server', icon: Server, color: 'text-orange-400 bg-orange-500/10 border-orange-500/30' },
-  { id: 'wireless', label: 'Wireless AP', icon: Wifi, color: 'text-violet-400 bg-violet-500/10 border-violet-500/30' },
-  { id: 'windows-client', label: 'Windows Client', icon: Monitor, color: 'text-sky-400 bg-sky-500/10 border-sky-500/30' },
+const DEVICE_TYPES: { id: DeviceType; label: string; icon: DeviceType; color: string }[] = [
+  { id: 'router', label: 'Router', icon: 'router', color: 'text-blue-400 bg-blue-500/10 border-blue-500/30' },
+  { id: 'switch', label: 'Switch', icon: 'switch', color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30' },
+  { id: 'firewall', label: 'Firewall', icon: 'firewall', color: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
+  { id: 'pc', label: 'PC / Client', icon: 'pc', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
+  { id: 'server', label: 'Server', icon: 'server', color: 'text-orange-400 bg-orange-500/10 border-orange-500/30' },
+  { id: 'wireless', label: 'Wireless AP', icon: 'wireless', color: 'text-violet-400 bg-violet-500/10 border-violet-500/30' },
+  { id: 'windows-client', label: 'Windows Client', icon: 'windows-client', color: 'text-sky-400 bg-sky-500/10 border-sky-500/30' },
 ];
 
 interface MobileAddDeviceSheetProps {
@@ -62,7 +56,8 @@ export const MobileAddDeviceSheet: React.FC<MobileAddDeviceSheetProps> = ({ open
     if (deviceType === 'windows-client') {
       return all.filter((v) => v.id === 'windows');
     }
-    return all;
+    if (!deviceType) return all;
+    return all.filter((v) => getModelsForVendor(v.id).some((m) => m.types.includes(deviceType)));
   }, [deviceType]);
 
   const models = useMemo(() => {
@@ -111,7 +106,7 @@ export const MobileAddDeviceSheet: React.FC<MobileAddDeviceSheetProps> = ({ open
               }}
               className={`flex flex-col items-center gap-2 p-4 rounded-2xl border bg-slate-900/60 hover:bg-slate-800 transition min-h-[92px] ${t.color}`}
             >
-              <t.icon className="w-7 h-7" />
+              <DeviceIcon type={t.icon} className="w-8 h-8" />
               <span className="text-xs font-semibold text-slate-100">{t.label}</span>
             </button>
           ))}
