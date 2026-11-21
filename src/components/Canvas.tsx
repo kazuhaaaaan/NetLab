@@ -9,8 +9,6 @@ import {
   Wifi,
   Trash2,
   TerminalSquare,
-  Eye,
-  EyeOff,
   Lock,
   Unlock,
   ListChecks,
@@ -180,8 +178,6 @@ interface CanvasProps {
   onDeleteEdge?: (edgeId: string) => void;
   /** Hapus semua kabel yang terhubung ke sebuah node (dipakai tombol hapus kabel di overlay node). */
   onDeleteNodeCables?: (nodeId: string) => void;
-  viewPorts?: boolean;
-  onToggleViewPorts?: () => void;
   /** Animasi paket ping yang melintasi kabel (dari hasil simulasi). */
   packetAnimations?: PacketAnimation[];
   /** Id perangkat yang terpilih sekaligus (multi-select). */
@@ -260,8 +256,6 @@ export const Canvas: React.FC<CanvasProps> = ({
   onSelectEdge,
   onDeleteEdge,
   onDeleteNodeCables,
-  viewPorts = false,
-  onToggleViewPorts,
   packetAnimations = [],
   selectedNodeIds = [],
   onSelectNodes,
@@ -288,8 +282,70 @@ export const Canvas: React.FC<CanvasProps> = ({
   useEffect(() => {
     viewportRef.current = viewport;
   }, [viewport]);
+
+  /** Mirror prop terbaru untuk gesture/RAF — hindari closure basi antar pointermove. */
+  const nodesRef = useRef(nodes);
+  const selectedNodeIdsRef = useRef(selectedNodeIds);
+  const selectedNodeIdRef = useRef(selectedNodeId);
+  const onNodePositionChangeRef = useRef(onNodePositionChange);
+  const onSelectNodeRef = useRef(onSelectNode);
+  /** Posisi hasil drag yang belum ter-commit; dipakai supaya delta berantai tidak mundur. */
+  const dragPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const dragFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+    selectedNodeIdsRef.current = selectedNodeIds;
+    selectedNodeIdRef.current = selectedNodeId;
+    onNodePositionChangeRef.current = onNodePositionChange;
+    onSelectNodeRef.current = onSelectNode;
+
+    // Hapus bayangan posisi yang sudah benar-benar ter-commit ke state.
+    for (const node of nodes) {
+      const pending = dragPositionsRef.current[node.id];
+      if (pending && Math.abs(pending.x - node.position.x) < 0.01 && Math.abs(pending.y - node.position.y) < 0.01) {
+        delete dragPositionsRef.current[node.id];
+      }
+    }
+  }, [nodes, selectedNodeIds, selectedNodeId, onNodePositionChange, onSelectNode]);
+
+  useEffect(() => () => {
+    if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+  }, []);
+
+  /** Satu commit React per frame (bukan per pointermove) — drag terasa lebih halus. */
+  const queueNodeDrag = (nodeIds: string[], dx: number, dy: number) => {
+    if (nodeIds.length === 0) return;
+    nodeIds.forEach((id) => {
+      const base =
+        dragPositionsRef.current[id] ?? nodesRef.current.find((n) => n.id === id)?.position;
+      if (base) dragPositionsRef.current[id] = { x: base.x + dx, y: base.y + dy };
+    });
+    if (dragFrameRef.current !== null) return;
+    dragFrameRef.current = requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      Object.entries({ ...dragPositionsRef.current }).forEach(([id, pos]) => {
+        onNodePositionChangeRef.current(id, pos);
+      });
+    });
+  };
+
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  const [openPortsNodeId, setOpenPortsNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openPortsNodeId) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      const popupNodeId = target?.closest('[data-port-popup]')?.getAttribute('data-port-popup');
+      const nodeId = target?.closest('[data-node-id]')?.getAttribute('data-node-id');
+      if (popupNodeId === openPortsNodeId || nodeId === openPortsNodeId) return;
+      setOpenPortsNodeId(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    return () => document.removeEventListener('pointerdown', closeOnOutside);
+  }, [openPortsNodeId]);
   const [selectionRect, setSelectionRect] = useState<{
     x1: number;
     y1: number;
@@ -474,31 +530,31 @@ export const Canvas: React.FC<CanvasProps> = ({
       const dx = gesture.dragDelta.x / viewportRef.current.zoom;
       const dy = gesture.dragDelta.y / viewportRef.current.zoom;
 
-      const targetNode = nodes.find((n) => n.id === gesture.nodeId);
-      const selectedNodes = nodes.filter(
-        (n) => selectedNodeIds.includes(n.id) || n.selected || n.id === selectedNodeId,
+      const currentNodes = nodesRef.current;
+      const currentSelectedIds = selectedNodeIdsRef.current;
+      const currentSelectedId = selectedNodeIdRef.current;
+      const targetNode = currentNodes.find((n) => n.id === gesture.nodeId);
+      const selectedNodes = currentNodes.filter(
+        (n) => currentSelectedIds.includes(n.id) || n.selected || n.id === currentSelectedId,
       );
       const isTargetSelected =
         targetNode &&
-        (selectedNodeIds.includes(targetNode.id) ||
+        (currentSelectedIds.includes(targetNode.id) ||
           targetNode.selected ||
-          targetNode.id === selectedNodeId);
+          targetNode.id === currentSelectedId);
 
+      setOpenPortsNodeId(null);
       if (isTargetSelected && selectedNodes.length > 1) {
-        selectedNodes.forEach((node) => {
-          onNodePositionChange(node.id, {
-            x: node.position.x + dx,
-            y: node.position.y + dy,
-          });
-        });
+        queueNodeDrag(
+          selectedNodes.map((node) => node.id),
+          dx,
+          dy,
+        );
       } else if (targetNode) {
-        if (selectedNodeId !== targetNode.id && !targetNode.selected) {
-          onSelectNode(targetNode.id);
+        if (currentSelectedId !== targetNode.id && !targetNode.selected) {
+          onSelectNodeRef.current(targetNode.id);
         }
-        onNodePositionChange(targetNode.id, {
-          x: targetNode.position.x + dx,
-          y: targetNode.position.y + dy,
-        });
+        queueNodeDrag([targetNode.id], dx, dy);
       }
     } else if (gesture.type === "TAP") {
       if (gesture.deleteEdgeId) {
@@ -889,8 +945,8 @@ export const Canvas: React.FC<CanvasProps> = ({
               <circle cx={x1} cy={y1} r="4" fill={edgeStrokeColor} />
               <circle cx={x2} cy={y2} r="4" fill={edgeStrokeColor} />
 
-              {/* Label interface di ujung kabel (kabel terpilih atau mode viewPorts aktif) */}
-              {(isSelected || viewPorts) && (
+              {/* Label interface di ujung kabel hanya saat kabel dipilih */}
+              {isSelected && (
                 <>
                   <text
                     x={x1}
@@ -946,7 +1002,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 if (!r) return null;
                 const color = readinessColor(r.status);
                 const by = edgeMy - 20;
-                const showLabel = isHoveredEdge || isSelected || viewPorts || r.status !== "connected";
+                const showLabel = isHoveredEdge || isSelected || r.status !== "connected";
                 const label = r.label.length > 40 ? `${r.label.slice(0, 39)}…` : r.label;
                 return (
                   <g pointerEvents="none">
@@ -1282,14 +1338,17 @@ export const Canvas: React.FC<CanvasProps> = ({
               onMouseEnter={() => setHoverNodeId(node.id)}
               onMouseLeave={() => setHoverNodeId((h) => (h === node.id ? null : h))}
               style={{
-                left: `${node.position.x}px`,
-                top: `${node.position.y}px`,
+                left: 0,
+                top: 0,
                 width: `${NODE_W}px`,
                 height: `${NODE_H}px`,
+                transform: `translate3d(${node.position.x}px, ${node.position.y}px, 0)`,
+                willChange: 'transform',
+                touchAction: 'none',
                 opacity: node.powered === false ? 0.45 : 1,
                 filter: node.powered === false ? 'grayscale(0.7)' : undefined,
               }}
-              className={`absolute flex flex-col items-center justify-start pt-2.5 rounded-lg group transition-colors ${
+              className={`absolute flex flex-col items-center justify-start pt-2.5 rounded-lg group select-none transition-colors ${
                 node.powered === false ? '' : activeTool === 'cable' ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
               } ${
                 cableWizard?.sourceNodeId === node.id
@@ -1394,16 +1453,23 @@ export const Canvas: React.FC<CanvasProps> = ({
                 <Plus className="w-2.5 h-2.5" />
               </button>
 
-              {/* Ports button — buka Port Inspector (desktop: drawer, mobile: sheet penuh) */}
+              {/* Ports button — satu-satunya pintu melihat port; klik toggle popover lokal */}
               <button
-                className="absolute -right-7 top-[calc(30px)] -translate-y-1/2 p-1 bg-[#1A1D24] border border-[#2B2D31] rounded-md text-cyan-400 hover:text-white hover:border-cyan-500 transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto"
+                data-port-trigger={node.id}
+                className={`absolute -right-7 top-[calc(30px)] -translate-y-1/2 p-1 bg-[#1A1D24] border rounded-md transition-opacity z-[60] opacity-90 hover:opacity-100 pointer-events-auto ${
+                  openPortsNodeId === node.id
+                    ? 'border-cyan-500 text-cyan-200'
+                    : 'border-[#2B2D31] text-cyan-400 hover:text-white hover:border-cyan-500'
+                }`}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
-                  onOpenPorts?.(node.id);
+                  setOpenPortsNodeId((cur) => (cur === node.id ? null : node.id));
                 }}
-                title={`Port Connections — ${node.name}`}
+                title={`Lihat port ${node.name}`}
                 aria-label={`Lihat port ${node.name}`}
+                aria-expanded={openPortsNodeId === node.id}
               >
                 <ListChecks className="w-2.5 h-2.5" />
               </button>
@@ -1425,28 +1491,55 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div>
               )}
               
-              {/* Panel Lihat Port — kabel terhubung di port mana saja */}
-              {hoverNodeId === node.id || (viewPorts && isSelected) ? (
+              {/* Panel Lihat Port — hanya dibuka oleh tombol Ports di perangkat ini */}
+              {openPortsNodeId === node.id ? (
                 <div
-                  className={`absolute top-0 z-50 w-52 bg-[#0F1015]/95 backdrop-blur-md rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100 border ${
-                    viewPorts ? 'border-cyan-500/40' : 'border-slate-500/40'
-                  }`}
+                  data-port-popup={node.id}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute top-0 z-50 w-56 bg-[#0F1015]/95 backdrop-blur-md rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100 border border-cyan-500/40"
                   style={{
-                    left: node.position.x + viewport.x + NODE_W > (containerRef.current?.clientWidth ?? 900) - 200
+                    left: node.position.x + viewport.x + NODE_W > (containerRef.current?.clientWidth ?? 900) - 240
                       ? 'auto'
                       : 'calc(100% + 12px)',
                     right:
-                      node.position.x + viewport.x + NODE_W > (containerRef.current?.clientWidth ?? 900) - 200
+                      node.position.x + viewport.x + NODE_W > (containerRef.current?.clientWidth ?? 900) - 240
                         ? 'calc(100% + 12px)'
                         : 'auto',
                   }}
                 >
-                  <div className="px-2.5 py-1.5 border-b border-[#2B2D31] flex items-center justify-between bg-[#1A1D24]/80">
-                    <span className="text-[10px] font-semibold text-slate-200">
+                  <div className="px-2.5 py-1.5 border-b border-[#2B2D31] flex items-center justify-between gap-1 bg-[#1A1D24]/80">
+                    <span className="text-[10px] font-semibold text-slate-200 min-w-0 truncate">
                       Port & Kabel — {node.name}
                     </span>
-                    <span className="text-[9px] font-mono text-slate-500">
-                      {node.ports.length} port
+                    <span className="flex items-center gap-1 shrink-0">
+                      {onOpenPorts && (
+                        <button
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenPortsNodeId(null);
+                            onOpenPorts(node.id);
+                          }}
+                          className="p-0.5 rounded text-cyan-400 hover:text-white hover:bg-cyan-500/20 transition"
+                          title="Buka inspector lengkap"
+                          aria-label="Buka inspector lengkap"
+                        >
+                          <ListChecks className="w-3 h-3" />
+                        </button>
+                      )}
+                      <button
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenPortsNodeId(null);
+                        }}
+                        className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-white/10 transition"
+                        title="Tutup panel port"
+                        aria-label="Tutup panel port"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
                     </span>
                   </div>
                   <div className="p-1 max-h-56 overflow-y-auto">
@@ -1785,17 +1878,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       {!isMobile && (
         <div className="absolute right-4 bottom-6 z-30 flex flex-col space-y-1.5 bg-slate-900/90 border border-slate-800 rounded-lg p-1.5 shadow-xl backdrop-blur-md">
           <button
-            onClick={() => onToggleViewPorts?.()}
-            title={viewPorts ? 'Sembunyikan panel port' : 'Lihat port & kabel terhubung'}
-            className={`p-2 rounded transition ${
-              viewPorts
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
-            }`}
-          >
-            {viewPorts ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-          </button>
-          <button
             onClick={() =>
               onViewportChange({
                 ...viewport,
@@ -1840,22 +1922,10 @@ export const Canvas: React.FC<CanvasProps> = ({
         </div>
       )}
 
-      {/* Mobile Floating Action Bar — tombol mata & kunci kanvas ringkas
+      {/* Mobile Floating Action Bar — kunci kanvas ringkas
           (zoom in/out/reset sudah ada di MobileToolbar bawah) */}
       {isMobile && (
         <div className="absolute right-3 top-3 z-30 flex flex-col space-y-1.5">
-          <button
-            onClick={() => onToggleViewPorts?.()}
-            aria-label={viewPorts ? 'Sembunyikan label kabel' : 'Lihat label kabel'}
-            title={viewPorts ? 'Sembunyikan label kabel' : 'Lihat port & kabel terhubung'}
-            className={`w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900/90 border shadow-xl backdrop-blur-md transition ${
-              viewPorts
-                ? 'border-cyan-500/50 text-cyan-300'
-                : 'border-slate-700/80 text-slate-200'
-            }`}
-          >
-            {viewPorts ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-          </button>
           <button
             onClick={onToggleLock}
             aria-label={locked ? 'Buka kunci kanvas' : 'Kunci kanvas'}
