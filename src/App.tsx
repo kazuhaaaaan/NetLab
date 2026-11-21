@@ -88,6 +88,7 @@ function loadUiState() {
       theme?: 'dark' | 'light';
       isSidebarOpen?: boolean;
       activeTool?: ActiveTool;
+      viewPorts?: boolean;
     };
   } catch {
     return null;
@@ -200,8 +201,10 @@ export default function App() {
   });
   const [cableStart, setCableStart] = useState<{ nodeId: string; portId: string } | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [viewPorts, setViewPorts] = useState(() => loadUiState()?.viewPorts ?? false);
 
   // Real network simulation engine (per-device routing, TTL, hop trace)
+
   const simEngineRef = useRef<SimulationEngine>(new SimulationEngine());
 
   // Bridge facade → engine nyata (VendorDispatcher + NetworkSimulator).
@@ -613,11 +616,11 @@ export default function App() {
       // (mis. di desktop) kanvas akan terkunci di mode kabel dan tombol node hilang.
       const persistedTool: ActiveTool =
         activeTool === 'select' || activeTool === 'pan' ? activeTool : 'select';
-      localStorage.setItem(UI_STATE_KEY, JSON.stringify({ theme, isSidebarOpen, activeTool: persistedTool }));
+      localStorage.setItem(UI_STATE_KEY, JSON.stringify({ theme, isSidebarOpen, activeTool: persistedTool, viewPorts }));
     } catch {
       // storage penuh / tidak tersedia — abaikan
     }
-  }, [theme, isSidebarOpen, activeTool]);
+  }, [theme, isSidebarOpen, activeTool, viewPorts]);
 
   // Keep the simulation engine in sync with the topology
   useEffect(() => {
@@ -626,7 +629,7 @@ export default function App() {
       simEngineRef.current.setNodePowered(n.id, n.powered !== false);
     }
     refreshLinkReadiness();
-  }, [project, refreshLinkReadiness]);
+  }, [project.nodes, project.edges, refreshLinkReadiness]);
 
   // setProject wrapper that pushes to undo history
   const setProjectWithHistory = useCallback((updater: ((prev: LabProject) => LabProject) | LabProject) => {
@@ -1786,6 +1789,8 @@ export default function App() {
             }}
             selectionBox={null}
             theme={theme}
+            viewPorts={viewPorts}
+            onToggleViewPorts={() => setViewPorts((v) => !v)}
             packetAnimations={packetAnimations}
             trunkPortsByNode={trunkPortsByNode}
             linkReadinessByEdge={linkReadinessByEdge}

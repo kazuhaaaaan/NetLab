@@ -9,6 +9,8 @@ import {
   Wifi,
   Trash2,
   TerminalSquare,
+  Eye,
+  EyeOff,
   Lock,
   Unlock,
   ListChecks,
@@ -178,6 +180,8 @@ interface CanvasProps {
   onDeleteEdge?: (edgeId: string) => void;
   /** Hapus semua kabel yang terhubung ke sebuah node (dipakai tombol hapus kabel di overlay node). */
   onDeleteNodeCables?: (nodeId: string) => void;
+  viewPorts?: boolean;
+  onToggleViewPorts?: () => void;
   /** Animasi paket ping yang melintasi kabel (dari hasil simulasi). */
   packetAnimations?: PacketAnimation[];
   /** Id perangkat yang terpilih sekaligus (multi-select). */
@@ -256,6 +260,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   onSelectEdge,
   onDeleteEdge,
   onDeleteNodeCables,
+  viewPorts = false,
+  onToggleViewPorts,
   packetAnimations = [],
   selectedNodeIds = [],
   onSelectNodes,
@@ -279,9 +285,22 @@ export const Canvas: React.FC<CanvasProps> = ({
   /** Mirror viewport untuk gesture math — ter-update sinkron agar PAN/PINCH
    *  berantai lancar tanpa menunggu re-render antar event pointer. */
   const viewportRef = useRef(viewport);
+  const onViewportChangeRef = useRef(onViewportChange);
+  const viewportFrameRef = useRef<number | null>(null);
   useEffect(() => {
     viewportRef.current = viewport;
-  }, [viewport]);
+    onViewportChangeRef.current = onViewportChange;
+  }, [viewport, onViewportChange]);
+  useEffect(() => () => {
+    if (viewportFrameRef.current !== null) cancelAnimationFrame(viewportFrameRef.current);
+  }, []);
+  const queueViewportCommit = () => {
+    if (viewportFrameRef.current !== null) return;
+    viewportFrameRef.current = requestAnimationFrame(() => {
+      viewportFrameRef.current = null;
+      onViewportChangeRef.current(viewportRef.current);
+    });
+  };
 
   /** Mirror prop terbaru untuk gesture/RAF — hindari closure basi antar pointermove. */
   const nodesRef = useRef(nodes);
@@ -504,7 +523,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         x: viewportRef.current.x + gesture.panDelta.x,
         y: viewportRef.current.y + gesture.panDelta.y,
       };
-      onViewportChange(viewportRef.current);
+      queueViewportCommit();
     } else if (gesture.type === "PINCH" && gesture.scaleDelta) {
       // Zoom mengikuti TITIK cubitan (tengah dua jari) — dunia di bawah jari
       // tetap diam, bukan melompat ke sudut kiri-atas (transformOrigin 0,0).
@@ -521,7 +540,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         y: focal.y - worldY * newZoom,
         zoom: newZoom,
       };
-      onViewportChange(viewportRef.current);
+      queueViewportCommit();
     } else if (
       gesture.type === "NODE_DRAG" &&
       gesture.dragDelta &&
@@ -543,7 +562,6 @@ export const Canvas: React.FC<CanvasProps> = ({
           targetNode.selected ||
           targetNode.id === currentSelectedId);
 
-      setOpenPortsNodeId(null);
       if (isTargetSelected && selectedNodes.length > 1) {
         queueNodeDrag(
           selectedNodes.map((node) => node.id),
@@ -783,6 +801,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         style={{
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
           transformOrigin: "0 0",
+          willChange: "transform",
         }}
       >
         {edges.map((edge) => {
@@ -945,8 +964,8 @@ export const Canvas: React.FC<CanvasProps> = ({
               <circle cx={x1} cy={y1} r="4" fill={edgeStrokeColor} />
               <circle cx={x2} cy={y2} r="4" fill={edgeStrokeColor} />
 
-              {/* Label interface di ujung kabel hanya saat kabel dipilih */}
-              {isSelected && (
+              {/* Label interface di ujung kabel — saat kabel dipilih atau mode viewPorts aktif */}
+              {(isSelected || viewPorts) && (
                 <>
                   <text
                     x={x1}
@@ -1002,7 +1021,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 if (!r) return null;
                 const color = readinessColor(r.status);
                 const by = edgeMy - 20;
-                const showLabel = isHoveredEdge || isSelected || r.status !== "connected";
+                const showLabel = isHoveredEdge || isSelected || viewPorts || r.status !== "connected";
                 const label = r.label.length > 40 ? `${r.label.slice(0, 39)}…` : r.label;
                 return (
                   <g pointerEvents="none">
@@ -1312,6 +1331,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         style={{
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
           transformOrigin: "0 0",
+          willChange: "transform",
         }}
       >
         {nodes.map((node) => {
@@ -1878,31 +1898,48 @@ export const Canvas: React.FC<CanvasProps> = ({
       {!isMobile && (
         <div className="absolute right-4 bottom-6 z-30 flex flex-col space-y-1.5 bg-slate-900/90 border border-slate-800 rounded-lg p-1.5 shadow-xl backdrop-blur-md">
           <button
-            onClick={() =>
-              onViewportChange({
-                ...viewport,
-                zoom: Math.min(viewport.zoom + 0.15, 3.0),
-              })
-            }
+            onClick={() => onToggleViewPorts?.()}
+            title={viewPorts ? 'Sembunyikan nama interface di kabel' : 'Lihat nama interface di kabel'}
+            aria-label={viewPorts ? 'Sembunyikan nama interface di kabel' : 'Lihat nama interface di kabel'}
+            className={`p-2 rounded transition ${
+              viewPorts
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            {viewPorts ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => {
+              viewportRef.current = {
+                ...viewportRef.current,
+                zoom: Math.min(viewportRef.current.zoom + 0.15, 3.0),
+              };
+              queueViewportCommit();
+            }}
             title="Zoom In"
             className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
           >
             <ZoomIn className="w-4 h-4" />
           </button>
           <button
-            onClick={() =>
-              onViewportChange({
-                ...viewport,
-                zoom: Math.max(viewport.zoom - 0.15, 0.25),
-              })
-            }
+            onClick={() => {
+              viewportRef.current = {
+                ...viewportRef.current,
+                zoom: Math.max(viewportRef.current.zoom - 0.15, 0.25),
+              };
+              queueViewportCommit();
+            }}
             title="Zoom Out"
             className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
           >
             <ZoomOut className="w-4 h-4" />
           </button>
           <button
-            onClick={() => onViewportChange({ x: 0, y: 0, zoom: 1.0 })}
+            onClick={() => {
+              viewportRef.current = { x: 0, y: 0, zoom: 1.0 };
+              queueViewportCommit();
+            }}
             title="Reset Zoom & Pan"
             className="p-2 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition"
           >
@@ -1922,10 +1959,22 @@ export const Canvas: React.FC<CanvasProps> = ({
         </div>
       )}
 
-      {/* Mobile Floating Action Bar — kunci kanvas ringkas
+      {/* Mobile Floating Action Bar — mata label kabel & kunci kanvas
           (zoom in/out/reset sudah ada di MobileToolbar bawah) */}
       {isMobile && (
         <div className="absolute right-3 top-3 z-30 flex flex-col space-y-1.5">
+          <button
+            onClick={() => onToggleViewPorts?.()}
+            aria-label={viewPorts ? 'Sembunyikan nama interface di kabel' : 'Lihat nama interface di kabel'}
+            title={viewPorts ? 'Sembunyikan nama interface di kabel' : 'Lihat nama interface di kabel'}
+            className={`w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900/90 border shadow-xl backdrop-blur-md transition ${
+              viewPorts
+                ? 'border-cyan-500/50 text-cyan-300'
+                : 'border-slate-700/80 text-slate-200'
+            }`}
+          >
+            {viewPorts ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
           <button
             onClick={onToggleLock}
             aria-label={locked ? 'Buka kunci kanvas' : 'Kunci kanvas'}
